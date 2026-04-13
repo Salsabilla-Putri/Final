@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — Engine Status</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <!-- PENTING: Urutan CSS harus konsisten - sidebar PERTAMA -->
+  <link rel="stylesheet" href="sidebar.css">
+  <link rel="stylesheet" href="css/topbar.css">
+  <link rel="stylesheet" href="css/engine.css">
+  <link rel="stylesheet" href="css/typography.css">
+</head>
+<body>
+
+  <div id="sidebar-container"></div>
+
+  <div class="main-content">
+
+    <div class="topbar">
+      <div class="topbar-title">Engine Real-Time Status</div>
+      <div style="display:flex; align-items:center; gap:15px;">
+        <div id="espConnection" class="esp-connection status-connecting">
+          <i class="fas fa-microchip"></i>
+          <span>Menghubungkan...</span>
+        </div>
+      <div class="user-info" id="userarea">
+        <i class="fas fa-user"></i> <span>Pengguna</span>
+      </div>
+      </div>
+    </div>
+
+    <div class="engine-page-container" style="padding: 20px;">
+
+      <div class="card" style="margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0; color:var(--accent)">Engine Parameters</h3>
+            <div style="display:flex; gap:12px; align-items:center;">
+                <div style="font-weight:700; color:var(--accent)">Sync Status:</div>
+                <div id="syncIndicator" class="indicator ind-neutral">--</div>
+                <div style="font-weight:700; color:var(--accent)">Last Update:</div>
+                <div id="lastUpdate" class="indicator ind-neutral">--:--:--</div>
+            </div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="param-box box-ok" id="box_volt">
+          <h4>Voltage (V)</h4>
+          <div id="voltVal" class="param-val numeric normal">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('volt')">Set Threshold</button>
+          <div class="thr-badge" id="thr_volt"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_amp">
+          <h4>Current (A)</h4>
+          <div id="ampVal" class="param-val numeric normal">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('amp')">Set Threshold</button>
+          <div class="thr-badge" id="thr_amp"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_freq">
+          <h4>Frequency (Hz)</h4>
+          <div id="freqVal" class="param-val numeric normal">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('freq')">Set Threshold</button>
+          <div class="thr-badge" id="thr_freq"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_power">
+          <h4>Power (W)</h4>
+          <div id="powerVal" class="param-val numeric normal">--</div>
+        </div>
+
+        <div class="param-box box-ok" id="box_oil">
+          <h4>Oil Pressure (PSI)</h4>
+          <div class="bar-wrap"><div id="oilBar" class="bar-fill" style="width: 0%"></div></div>
+          <div id="oilVal" class="param-val">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('oil')">Set Threshold</button>
+          <div class="thr-badge" id="thr_oil"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_coolant">
+          <h4>Coolant Temp (°C)</h4>
+          <div class="bar-wrap"><div id="coolantBar" class="bar-fill" style="width: 0%"></div></div>
+          <div id="coolantVal" class="param-val">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('coolant')">Set Threshold</button>
+          <div class="thr-badge" id="thr_coolant"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_iat">
+          <h4>Intake Air Temp (°C)</h4>
+          <div class="bar-wrap"><div id="iatBar" class="bar-fill" style="width: 0%"></div></div>
+          <div id="iatVal" class="param-val">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('iat')">Set Threshold</button>
+          <div class="thr-badge" id="thr_iat"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_map">
+          <h4>Manifold Air Pressure (kPa)</h4>
+          <div class="bar-wrap"><div id="mapBar" class="bar-fill" style="width: 0%"></div></div>
+          <div id="mapVal" class="param-val">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('map')">Set Threshold</button>
+          <div class="thr-badge" id="thr_map"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_fuel">
+          <h4>Fuel Level (%)</h4>
+          <div class="bar-wrap"><div id="fuelBar" class="bar-fill" style="width: 0%"></div></div>
+          <div id="fuelVal" class="param-val">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('fuel')">Set Threshold</button>
+          <div class="thr-badge" id="thr_fuel"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_rpm">
+          <h4>RPM</h4>
+          <div class="gauge">
+             <div id="gauge-rpm" class="gauge-fill"></div>
+             <div class="gauge-cover"></div>
+          </div>
+          <div id="rpmVal" class="param-val">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('rpm')">Set Threshold</button>
+          <div class="thr-badge" id="thr_rpm"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_afr">
+          <h4>Air Fuel Ratio (AFR)</h4>
+          <div id="afrVal" class="param-val">--</div>
+          <div class="gauge">
+             <div id="gauge-afr" class="gauge-fill"></div>
+             <div class="gauge-cover"></div>
+          </div>
+          <button class="thr-btn" onclick="openThresholdModal('afr')">Set Threshold</button>
+          <div class="thr-badge" id="thr_afr"></div>
+        </div>
+
+        <div class="param-box box-ok" id="box_tps">
+          <h4>Throttle Position (%)</h4>
+          <div id="tpsVal" class="param-val">--</div>
+          <div class="gauge">
+             <div id="gauge-tps" class="gauge-fill"></div>
+             <div class="gauge-cover"></div>
+          </div>
+          <button class="thr-btn" onclick="openThresholdModal('tps')">Set Threshold</button>
+          <div class="thr-badge" id="thr_tps"></div>
+        </div>
+      </div>
+
+      <div class="alerts-card">
+        <h3 style="margin:0 0 8px 0; color:var(--accent)">Recent Alerts (Database)</h3>
+        <table class="alert-table">
+          <thead><tr><th style="width:180px">Time</th><th>Parameter</th><th>Value</th><th>Message</th></tr></thead>
+          <tbody id="alertTable">
+            <tr><td colspan="4" style="text-align:center; color:#999">Loading alerts...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="thresholdModal" class="modal-bg">
+    <div class="modal-card">
+      <h3 id="modalParamTitle" style="margin-top:0">Set Threshold</h3>
+      <div class="modal-row">
+        <label>Parameter: <b id="modalParamName"></b></label>
+      </div>
+      <div class="modal-row">
+        <label>Minimum (optional)</label>
+        <input id="thrMin" type="number" placeholder="e.g. 10" />
+      </div>
+      <div class="modal-row">
+        <label>Maximum (optional)</label>
+        <input id="thrMax" type="number" placeholder="e.g. 100" />
+      </div>
+      <div class="modal-footer">
+        <button onclick="saveThreshold()" class="thr-btn" style="background:#10b981; flex:1">Save</button>
+        <button onclick="removeThreshold()" class="thr-btn" style="background:#ef4444; flex:1">Clear</button>
+        <button onclick="closeModal()" class="thr-btn" style="background:#64748b; flex:1">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/sidebar.js"></script>
+  <script src="js/engine.js"></script>
+</body>
+</html>

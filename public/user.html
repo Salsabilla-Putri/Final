@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — User Profile</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="sidebar.css">
+  <link rel="stylesheet" href="css/topbar.css">
+  <link rel="stylesheet" href="css/alarm.css">
+  <link rel="stylesheet" href="css/typography.css">
+
+  <style>
+    /* Styling Khusus Halaman User */
+    .profile-header {
+        text-align: center;
+        margin-bottom: 30px;
+    }
+    .profile-img-container {
+        width: 120px;
+        height: 120px;
+        margin: 0 auto 15px;
+        position: relative;
+    }
+    .profile-img {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 4px solid #fff;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    .role-badge {
+        background: var(--primary);
+        color: white;
+        padding: 5px 15px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+        display: inline-block;
+        margin-top: 5px;
+    }
+    .info-list {
+        margin-top: 20px;
+    }
+    .info-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 15px 0;
+        border-bottom: 1px solid #f1f5f9;
+        font-size: 14px;
+    }
+    .info-item:last-child { border-bottom: none; }
+    .info-label { color: #64748b; font-weight: 500; }
+    .info-val { color: #1e293b; font-weight: 600; }
+    
+    .logout-area {
+        margin-top: 30px;
+        text-align: center;
+        padding-top: 20px;
+        border-top: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div id="sidebar-container"></div>
+
+    <div class="main-content">
+      
+      <div class="topbar">
+        <div class="topbar-title">User Profile</div>
+        <div class="user-info" style="cursor: default;">
+           <i class="fas fa-user"></i> <span>Pengguna</span>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: center; margin-top: 20px;">
+        <div class="card" style="width: 100%; max-width: 450px; padding: 30px;">
+            
+            <div class="profile-header">
+                <div class="profile-img-container">
+                    <img src="https://ui-avatars.com/api/?name=Operator+Admin&background=1745a5&color=fff&size=128" alt="Profile" class="profile-img">
+                </div>
+                <h2 style="margin: 0; color: #1e293b;">Operator Name</h2>
+                <div class="role-badge">Operator</div>
+            </div>
+
+            <div class="info-list">
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-envelope margin-right-5"></i> Email</span>
+                    <span class="info-val">admin@monitoring.com</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-id-badge"></i> Employee ID</span>
+                    <span class="info-val">EMP-2025-001</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-clock"></i> Current Shift</span>
+                    <span class="info-val">Morning (07:00 - 15:00)</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-map-marker-alt"></i> Location</span>
+                    <span class="info-val">Control Room A</span>
+                </div>
+            </div>
+
+            <div class="logout-area">
+                <button id="logout-btn" class="btn btn-del" style="width: 100%; padding: 12px; font-size: 14px;">
+                    <i class="fas fa-sign-out-alt"></i> Sign Out
+                </button>
+            </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="js/sidebar.js"></script>
+  <script>
+      // Opsional: Untuk memastikan sidebar tahu kita ada di halaman user (jika ikon user di sidebar mau di-highlight)
+      document.addEventListener("DOMContentLoaded", () => {
+          // Tidak ada navigasi sidebar khusus untuk 'User', jadi biarkan default atau highlight dashboard
+      });
+  </script>
+</body>
+</html>

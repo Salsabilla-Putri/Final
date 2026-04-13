@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — Alarm Management</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <link rel="stylesheet" href="sidebar.css">
+  <link rel="stylesheet" href="css/topbar.css">
+  <link rel="stylesheet" href="css/alarm.css">
+  <link rel="stylesheet" href="css/typography.css">
+</head>
+<body>
+
+  <div class="container">
+    <div id="sidebar-container"></div>
+
+    <div class="topbar">
+      <div class="topbar-title">Alarms & Notifications</div>
+      <div class="user-info">
+        <i class="fas fa-user"></i> <span>Pengguna</span>
+      </div>
+    </div>
+
+    <div class="main-content">
+
+      <div class="alarm-stats">
+        <div class="stat-card stat-critical">
+          <div class="stat-number" id="criticalCount">0</div>
+          <div class="stat-label">Critical Alarms</div>
+        </div>
+
+        <div class="stat-card stat-warning">
+          <div class="stat-number" id="warningCount">0</div>
+          <div class="stat-label">Warning Alarms</div>
+        </div>
+
+        <div class="stat-card stat-active">
+          <div class="stat-number" id="activeCount">0</div>
+          <div class="stat-label">Active Alarms</div>
+        </div>
+
+        <div class="stat-card stat-total">
+          <div class="stat-number" id="totalCount">0</div>
+          <div class="stat-label">Total Alarms</div>
+        </div>
+      </div>
+
+      <div class="filter-tabs">
+        <button class="filter-tab active" onclick="filterAlarms('all')">All Alarms</button>
+        <button class="filter-tab" onclick="filterAlarms('active')">Active Only</button>
+        <button class="filter-tab" onclick="filterAlarms('critical')">Critical</button>
+        <button class="filter-tab" onclick="filterAlarms('warning')">Warning</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3><i class="fas fa-history"></i> Alarm History</h3>
+          <button onclick="fetchAlarms()" class="btn btn-refresh">
+            <i class="fas fa-sync-alt"></i> Refresh Data
+          </button>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table id="alarmTable">
+            <thead>
+              <tr>
+                <th style="width:200px">Time</th>
+                <th>Parameter</th>
+                <th>Value</th>
+                <th>Severity</th>
+                <th>Status</th>
+                <th style="width:160px; text-align:center;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="alarmTableBody">
+              <tr><td colspan="6" style="text-align:center; padding:40px; color:#94a3b8;">Loading data...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/sidebar.js"></script>
+  <script src="js/alarm.js"></script>
+</body>
+</html>

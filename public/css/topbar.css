@@ -1,0 +1,94 @@
+/* === TOPBAR STYLES (FIXED + RESPONSIVE) === */
+.topbar {
+    position: fixed;
+    top: 12px;
+    left: 92px;
+    right: 12px;
+    min-height: 64px;
+    background: rgba(255,255,255,0.9);
+    background: color-mix(in srgb, var(--card-bg, #fff) 90%, transparent);
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 20px;
+    z-index: 20;
+    transition: left 0.3s, right 0.3s;
+    box-shadow: 0 18px 40px rgba(15,23,42,0.08);
+    border-radius: 20px;
+    backdrop-filter: blur(18px);
+}
+
+#sidebar-container:hover ~ .topbar,
+body.sidebar-expanded .topbar {
+    left: 232px;
+}
+
+.topbar-title {
+    font-size: var(--heading-page-size);
+    font-weight: 700;
+    color: var(--primary, #1745a5);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.user-info {
+    background: var(--primary, #1745a5);
+    color: white;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: var(--text-base-size);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+}
+
+.user-info span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+    .topbar,
+    #sidebar-container:hover ~ .topbar,
+    body.sidebar-expanded .topbar {
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        padding: 12px 14px 12px 64px;
+        min-height: 72px;
+        align-items: center;
+        flex-wrap: wrap;
+        border-radius: 18px;
+    }
+
+    .topbar-title {
+        flex: 1 1 180px;
+    }
+
+    .user-info {
+        max-width: 100%;
+        padding-inline: 12px;
+    }
+}
+
+@media (max-width: 520px) {
+    .topbar {
+        align-items: flex-start;
+    }
+
+    .topbar-title,
+    .user-info {
+        width: 100%;
+    }
+
+    .user-info {
+        justify-content: center;
+    }
+}

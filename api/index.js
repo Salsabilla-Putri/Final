@@ -1,0 +1,380 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const mqtt = require('mqtt');
+const cors = require('cors');
+
+const app = express();
+
+// ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+    res.setHeader("Content-Security-Policy", "default-src 'self' * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'self' * ws: wss:;");
+    next();
+});
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+// ─── DATABASE (cached connection untuk serverless) ────────────────────────────
+let connectionPromise = null;
+
+async function connectDB() {
+    // readyState: 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
+    if (mongoose.connection.readyState === 1) return; // sudah konek
+
+    // Kalau sedang dalam proses connecting, tunggu promise yang sama
+    // jangan buat koneksi baru (ini fix untuk race condition di serverless)
+    if (connectionPromise) return await connectionPromise;
+
+    if (!process.env.MONGODB_URI) {
+        throw new Error('MONGODB_URI environment variable is not set');
+    }
+
+    connectionPromise = mongoose.connect(process.env.MONGODB_URI, {
+        serverSelectionTimeoutMS: 10000, // naikkan timeout jadi 10s
+        socketTimeoutMS: 20000,
+        // bufferCommands default true — jangan set false agar tidak error sebelum connect selesai
+    }).then(async () => {
+        console.log('✅ MongoDB Connected');
+        connectionPromise = null;
+        await loadThresholdsFromDB();
+    }).catch((err) => {
+        connectionPromise = null; // reset agar bisa retry di request berikutnya
+        throw err;
+    });
+
+    await connectionPromise;
+}
+
+// ─── SCHEMAS ──────────────────────────────────────────────────────────────────
+const generatorDataSchema = new mongoose.Schema({
+    timestamp: { type: Date, default: Date.now },
+    deviceId: { type: String, required: true },
+    rpm: Number, volt: Number, amp: Number, power: Number,
+    freq: Number, temp: Number, coolant: Number, fuel: Number,
+    sync: String, status: String, oil: Number, iat: Number,
+    map: Number, afr: Number, tps: Number
+});
+const GeneratorData = mongoose.models.GeneratorData || mongoose.model('GeneratorData', generatorDataSchema, 'generatordatas');
+
+const alertSchema = new mongoose.Schema({
+    timestamp: { type: Date, default: Date.now },
+    deviceId: String, parameter: String, value: Number,
+    message: String,
+    severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+    resolved: { type: Boolean, default: false }
+});
+const Alert = mongoose.models.Alert || mongoose.model('Alert', alertSchema, 'alert');
+
+const configSchema = new mongoose.Schema({
+    key: { type: String, unique: true },
+    value: Object
+});
+const Config = mongoose.models.Config || mongoose.model('Config', configSchema, 'configs');
+
+const maintenanceSchema = new mongoose.Schema({
+    task: { type: String, required: true },
+    type: String, priority: String,
+    status: { type: String, default: 'scheduled' },
+    dueDate: Date, assignedTo: String,
+    createdAt: { type: Date, default: Date.now },
+    completedAt: Date
+});
+const Maintenance = mongoose.models.Maintenance || mongoose.model('Maintenance', maintenanceSchema, 'maintenance');
+
+// ─── THRESHOLDS ───────────────────────────────────────────────────────────────
+let ACTIVE_THRESHOLDS = {
+    rpm: { max: 3800 }, temp: { max: 95 },
+    volt: { min: 180, max: 250 }, fuel: { min: 20 },
+    oil: { min: 20 }, amp: { max: 100 },
+    freq: { min: 48, max: 52 }
+};
+
+async function loadThresholdsFromDB() {
+    try {
+        const conf = await Config.findOne({ key: 'engine_thresholds' });
+        if (conf) {
+            ACTIVE_THRESHOLDS = { ...ACTIVE_THRESHOLDS, ...conf.value };
+        } else {
+            await new Config({ key: 'engine_thresholds', value: ACTIVE_THRESHOLDS }).save();
+        }
+    } catch (e) { console.error('Config Load Error:', e); }
+}
+
+// ─── MQTT (best-effort, non-blocking) ────────────────────────────────────────
+let latestData = {
+    deviceId: 'GENERATOR #1', timestamp: new Date(),
+    rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
+    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, afr: 0, tps: 0
+};
+
+function initMQTT() {
+    if (!process.env.MQTT_BROKER) return;
+    // FIX: Jangan init MQTT jika broker masih placeholder
+    if (process.env.MQTT_BROKER.includes('<host>')) {
+        console.warn('MQTT_BROKER masih placeholder, skip MQTT init');
+        return;
+    }
+    try {
+        const mqttClient = mqtt.connect(process.env.MQTT_BROKER, {
+            username: process.env.MQTT_USERNAME,
+            password: process.env.MQTT_PASSWORD,
+            connectTimeout: 5000,
+            reconnectPeriod: 0
+        });
+        mqttClient.on('connect', () => {
+            console.log('✅ MQTT Connected');
+            mqttClient.subscribe('gen/#');
+        });
+        mqttClient.on('message', async (topic, message) => {
+            const value = message.toString();
+            switch (topic) {
+                case 'gen/rpm': latestData.rpm = parseInt(value) || 0; break;
+                case 'gen/volt': latestData.volt = parseFloat(value) || 0; break;
+                case 'gen/amp': latestData.amp = parseFloat(value) || 0; break;
+                case 'gen/power': latestData.power = parseFloat(value) || 0; break;
+                case 'gen/freq': latestData.freq = parseFloat(value) || 0; break;
+                case 'gen/temp': latestData.temp = parseFloat(value) || 0; latestData.coolant = latestData.temp; break;
+                case 'gen/fuel': latestData.fuel = parseFloat(value) || 0; break;
+                case 'gen/sync': latestData.sync = value; break;
+                case 'gen/oil': latestData.oil = parseFloat(value) || 0; break;
+                case 'gen/iat': latestData.iat = parseFloat(value) || 0; break;
+                case 'gen/map': latestData.map = parseFloat(value) || 0; break;
+                case 'gen/afr': latestData.afr = parseFloat(value) || 0; break;
+                case 'gen/tps': latestData.tps = parseFloat(value) || 0; break;
+                case 'gen/status':
+                    latestData.status = value;
+                    latestData.timestamp = new Date();
+                    try {
+                        await new GeneratorData(latestData).save();
+                        await checkAndSaveAlerts(latestData);
+                    } catch (e) { console.error('DB Save Error:', e.message); }
+                    break;
+            }
+        });
+        mqttClient.on('error', (err) => console.warn('MQTT Error (non-fatal):', err.message));
+    } catch (e) {
+        console.warn('MQTT init failed (non-fatal):', e.message);
+    }
+}
+
+// ─── ALERT LOGIC ─────────────────────────────────────────────────────────────
+async function checkAndSaveAlerts(data) {
+    const alertsToSave = [];
+    const T = ACTIVE_THRESHOLDS;
+    const check = (param, val) => {
+        if (!T[param]) return;
+        if (T[param].max !== undefined && val > T[param].max)
+            alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too High (> ${T[param].max})`, severity: 'critical' });
+        if (T[param].min !== undefined && val < T[param].min)
+            alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too Low (< ${T[param].min})`, severity: 'medium' });
+    };
+    ['rpm','volt','amp','freq','power','coolant','temp','fuel','oil','iat','map','afr','tps']
+        .forEach(p => check(p, data[p]));
+
+    if (alertsToSave.length > 0) {
+        const lastAlert = await Alert.findOne().sort({ timestamp: -1 });
+        const timeDiff = lastAlert ? (new Date() - lastAlert.timestamp) : 999999;
+        if (timeDiff > 10000) {
+            for (const a of alertsToSave)
+                await new Alert({ ...a, deviceId: data.deviceId }).save();
+        }
+    }
+}
+
+// ─── CONNECT DB sebelum setiap request ───────────────────────────────────────
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (err) {
+        console.error('DB connection error:', err.message);
+        res.status(503).json({ success: false, error: 'Database connection failed', detail: err.message });
+    }
+});
+
+// ─── API ROUTES ───────────────────────────────────────────────────────────────
+
+app.get('/api/health', (req, res) => res.json({
+    status: 'healthy',
+    mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    mongoUri: process.env.MONGODB_URI ? '✅ set' : '❌ missing'
+}));
+
+app.get('/api/engine-data/latest', async (req, res) => {
+    try {
+        const dbData = await GeneratorData.findOne().sort({ timestamp: -1 });
+        const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
+        res.json({ success: true, data: isDbFresh ? dbData : latestData });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/engine-data/history', async (req, res) => {
+    try {
+        const { limit = 1000, hours, startDate, endDate } = req.query;
+        let query = {};
+        if (startDate && endDate) {
+            const start = new Date(startDate); start.setHours(0, 0, 0, 0);
+            const end = new Date(endDate); end.setHours(23, 59, 59, 999);
+            query.timestamp = { $gte: start, $lte: end };
+        } else {
+            const h = parseInt(hours) || 24;
+            query.timestamp = { $gte: new Date(Date.now() - h * 3600000) };
+        }
+        const data = await GeneratorData.find(query).sort({ timestamp: -1 }).limit(parseInt(limit));
+        res.json({ success: true, count: data.length, data });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/engine-data/stats', async (req, res) => {
+    try {
+        const last24Hours = new Date(Date.now() - 86400000);
+        const stats = await GeneratorData.aggregate([
+            { $match: { timestamp: { $gte: last24Hours } } },
+            { $group: { _id: null, avgRPM: { $avg: '$rpm' }, avgVoltage: { $avg: '$volt' }, avgPower: { $avg: '$power' }, avgTemp: { $avg: '$temp' }, maxTemp: { $max: '$temp' }, minFuel: { $min: '$fuel' }, totalRecords: { $sum: 1 } } },
+            { $project: { _id: 0, avgRPM: 1, avgVoltage: 1, avgPower: 1, avgTemp: 1, maxTemp: 1, minFuel: 1, totalHours: { $divide: [{ $multiply: ['$totalRecords', 5] }, 3600] } } }
+        ]);
+        res.json({ success: true, data: stats[0] || { avgPower: 0, totalHours: 0 } });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/alerts', async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const alerts = await Alert.find().sort({ timestamp: -1 }).limit(parseInt(limit));
+        res.json({ success: true, data: alerts });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/:id/ack', async (req, res) => {
+    try {
+        const updated = await Alert.findByIdAndUpdate(req.params.id, { resolved: true }, { new: true });
+        if (!updated) return res.status(404).json({ success: false, message: 'Alert not found' });
+        res.json({ success: true, data: updated });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/alerts/:id', async (req, res) => {
+    try {
+        await Alert.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Alert deleted' });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/thresholds', (req, res) => res.json({ success: true, data: ACTIVE_THRESHOLDS }));
+
+app.post('/api/thresholds', async (req, res) => {
+    try {
+        ACTIVE_THRESHOLDS = { ...ACTIVE_THRESHOLDS, ...req.body };
+        await Config.findOneAndUpdate({ key: 'engine_thresholds' }, { value: ACTIVE_THRESHOLDS }, { upsert: true, new: true });
+        res.json({ success: true, data: ACTIVE_THRESHOLDS });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/maintenance', async (req, res) => {
+    try {
+        const logs = await Maintenance.find().sort({ createdAt: -1 });
+        res.json({ success: true, data: logs });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/maintenance', async (req, res) => {
+    try {
+        const newTask = new Maintenance(req.body);
+        await newTask.save();
+        res.json({ success: true, data: newTask });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/maintenance/:id', async (req, res) => {
+    try {
+        const updated = await Maintenance.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        res.json({ success: true, data: updated });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/maintenance/:id', async (req, res) => {
+    try {
+        await Maintenance.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/reports/analysis', async (req, res) => {
+    try {
+        const { rows = [], sensor = 'rpm', maxPoints = 300 } = req.body || {};
+
+        if (!Array.isArray(rows) || rows.length === 0)
+            return res.json({ success: true, data: { ok: true, values: [], labels: [], avg: 0, min: 0, max: 0, trend: 'stable' } });
+
+        const values = rows.map(r => parseFloat(r[sensor])).filter(v => Number.isFinite(v));
+
+        if (values.length === 0)
+            return res.json({ success: true, data: { ok: true, values: [], labels: [], avg: 0, min: 0, max: 0, trend: 'stable' } });
+
+        const step = Math.max(1, Math.floor(values.length / maxPoints));
+        const sampled = values.filter((_, i) => i % step === 0).slice(0, maxPoints);
+        const labels = rows.filter((_, i) => i % step === 0).slice(0, maxPoints).map(r => r.timestamp || r.createdAt || '');
+
+        const avg = sampled.reduce((a, b) => a + b, 0) / sampled.length;
+        const min = Math.min(...sampled);
+        const max = Math.max(...sampled);
+
+        const half = Math.floor(sampled.length / 2);
+        const firstHalf = sampled.slice(0, half).reduce((a, b) => a + b, 0) / (half || 1);
+        const secondHalf = sampled.slice(half).reduce((a, b) => a + b, 0) / ((sampled.length - half) || 1);
+        const diff = secondHalf - firstHalf;
+        const trend = Math.abs(diff) < avg * 0.03 ? 'stable' : diff > 0 ? 'increasing' : 'decreasing';
+
+        res.json({ success: true, data: { ok: true, values: sampled, labels, avg: +avg.toFixed(2), min, max, trend, count: sampled.length } });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/reports', async (req, res) => {
+    try {
+        const parsedLimit = parseInt(req.query.limit, 10);
+        const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
+        const { hours, startDate, endDate } = req.query;
+
+        const normalizeNumeric = (v) => { const p = Number(v); return Number.isFinite(p) ? p : null; };
+        const normalizeRow = (row) => {
+            const timestamp = row.timestamp || row.createdAt || row.date || null;
+            if (!timestamp) return null;
+            return {
+                ...row, timestamp,
+                rpm: normalizeNumeric(row.rpm), volt: normalizeNumeric(row.volt ?? row.voltage),
+                amp: normalizeNumeric(row.amp ?? row.current), power: normalizeNumeric(row.power ?? row.kw),
+                freq: normalizeNumeric(row.freq ?? row.frequency), temp: normalizeNumeric(row.temp ?? row.temperature),
+                coolant: normalizeNumeric(row.coolant ?? row.temp), fuel: normalizeNumeric(row.fuel),
+                oil: normalizeNumeric(row.oil), iat: normalizeNumeric(row.iat),
+                map: normalizeNumeric(row.map), afr: normalizeNumeric(row.afr), tps: normalizeNumeric(row.tps)
+            };
+        };
+
+        const timeFilter = {};
+        if (startDate && endDate) {
+            const start = new Date(startDate), end = new Date(endDate);
+            if (!isNaN(start) && !isNaN(end)) { timeFilter.$gte = start; timeFilter.$lte = end; }
+        } else if (hours) {
+            const h = Number(hours);
+            if (!isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600000);
+        }
+
+        const reports = await GeneratorData
+            .find(Object.keys(timeFilter).length ? { timestamp: timeFilter } : {})
+            .sort({ timestamp: -1 }).limit(limit).lean();
+
+        const normalized = reports.map(normalizeRow).filter(Boolean);
+        res.json({ success: true, count: normalized.length, data: normalized });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+// ─── INIT MQTT (non-blocking) ─────────────────────────────────────────────────
+initMQTT();
+
+// ─── EXPORT untuk Vercel — JANGAN pakai app.listen() di sini ─────────────────
+module.exports = app;

@@ -1,0 +1,168 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+:root {
+  --app-font-family: 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --text-xs-size: 12px;
+  --text-sm-size: 13px;
+  --text-base-size: 14px;
+  --text-md-size: 15px;
+  --text-lg-size: 16px;
+  --heading-page-size: 24px;
+  --heading-section-size: 18px;
+  --heading-card-size: 16px;
+  --icon-size-sm: 14px;
+  --icon-size-md: 16px;
+  --icon-size-lg: 18px;
+}
+
+html {
+  font-size: var(--text-base-size);
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--app-font-family);
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+.topbar-title,
+.header h1,
+.hero-greeting {
+  font-size: var(--heading-page-size);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+h2,
+h3,
+.section-title,
+.card-header h3,
+.param-box h4 {
+  font-size: var(--heading-section-size);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.card h3,
+.card-title,
+.chart-title,
+.filter-title,
+.modal-title {
+  font-size: var(--heading-card-size);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+p,
+span,
+td,
+th,
+label,
+.nav-item,
+.user-info,
+.filter-tab,
+.btn,
+.time-btn,
+.form-control {
+  font-size: var(--text-base-size);
+}
+
+.overview-label,
+.form-label,
+.table-header,
+.thr-badge,
+.status-badge,
+.stat-label {
+  font-size: var(--text-sm-size);
+}
+
+.table-cell,
+.card-body,
+.list-row,
+.filter-actions,
+.modal-row label,
+.form-input,
+.form-select,
+.date-selector select {
+  font-size: var(--text-md-size);
+}
+
+small,
+.stat-label,
+.last-updated,
+.logo-subtext,
+.sensor-status {
+  font-size: var(--text-sm-size);
+}
+
+.overview-value,
+.stat-number,
+.param-val,
+.hero-time {
+  font-size: clamp(1.5rem, 2vw, 2rem);
+  font-weight: 700;
+}
+
+/* Icon rhythm and consistency */
+i[class*="fa-"] {
+  font-size: var(--icon-size-md);
+  line-height: 1;
+}
+
+.nav-icon i,
+.overview-icon i,
+.topbar-title i,
+.user-info i,
+.section-title i,
+.card h3 i,
+.btn i,
+.chart-action-btn i,
+.sensor-title i,
+.warning-indicator i {
+  width: 1.2em;
+  text-align: center;
+}
+
+.nav-icon i,
+.overview-icon i,
+.card h3 i,
+.section-title i {
+  font-size: var(--icon-size-lg);
+}
+
+.topbar-title i,
+.user-info i,
+.btn i,
+.chart-action-btn i {
+  font-size: var(--icon-size-md);
+}
+
+th,
+.table th {
+  font-weight: 700;
+}
+
+.topbar-title,
+.card-title,
+.section-title,
+.filter-title {
+  color: #0f2f70;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --heading-page-size: 20px;
+    --heading-section-size: 16px;
+    --heading-card-size: 15px;
+    --icon-size-lg: 17px;
+  }
+}

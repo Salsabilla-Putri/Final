@@ -1,0 +1,521 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+    <link rel="stylesheet" href="css/typography.css">
+<style>
+    :root {
+      --primary: #1745a5;
+      --primary-light: #3b6bdf;
+      --secondary: #10b981;
+      --secondary-dark: #047857;
+      --warning: #f97316;
+      --danger: #ef4444;
+      --muted: #6b7280;
+      --light: #f8fafc;
+      --dark: #0f172a;
+      --card-bg: #fff;
+      --accent: #1745a5;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--app-font-family);
+      background: radial-gradient(circle at 12% 10%, #e8f0ff 0%, #f4f7fb 35%, #eef3fa 100%);
+      color: #0f172a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(12px, 2vw, 24px);
+    }
+
+    
+    body::before,
+    body::after {
+      content: '';
+      position: fixed;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 0;
+      filter: blur(2px);
+    }
+
+    body::before {
+      width: 320px;
+      height: 320px;
+      left: -120px;
+      top: -80px;
+      background: rgba(59, 107, 223, 0.12);
+    }
+
+    body::after {
+      width: 280px;
+      height: 280px;
+      right: -110px;
+      bottom: -90px;
+      background: rgba(16, 185, 129, 0.12);
+    }
+
+    .login-container {
+      width: min(960px, 100%);
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 20px 54px rgba(15, 23, 42, 0.16);
+      background: #ffffff;
+      border: 1px solid #dce6f5;
+      position: relative;
+      z-index: 1;
+    }
+
+    .login-side {
+      background: linear-gradient(165deg, #0f2554 0%, #13387f 55%, #1a4aa8 100%);
+      color: #fff;
+      padding: 44px 36px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 18px;
+      border-right: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .side-title {
+      font-size: clamp(1.45rem, 3vw, 2rem);
+      line-height: 1.2;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .side-desc {
+      font-size: 15px;
+      line-height: 1.7;
+      opacity: 0.92;
+    }
+
+    .feature-list {
+      list-style: none;
+      display: grid;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .feature-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 14px;
+      opacity: 0.95;
+    }
+
+    .feature-list i {
+      margin-top: 2px;
+    }
+
+    .login-card {
+      background: white;
+      border-radius: 0;
+      padding: clamp(24px, 3vw, 40px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* .login-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 7px;
+      background: linear-gradient(90deg, var(--primary), var(--primary-light));
+    } */
+
+    .logo-section {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .logo {
+      width: 80px;
+      height: 80px;
+      background: var(--primary);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 15px;
+      color: white;
+      font-size: 32px;
+      box-shadow: 0 8px 20px rgba(23, 69, 165, 0.3);
+    }
+
+    .logo-text {
+      font-size: clamp(1.5rem, 2.7vw, 1.75rem);
+      font-weight: 800;
+      color: var(--primary);
+      margin-bottom: 5px;
+    }
+
+    .logo-subtext {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .login-title {
+      font-size: clamp(1.25rem, 2.2vw, 1.5rem);
+      font-weight: 700;
+      color: var(--dark);
+      margin-bottom: 25px;
+      text-align: center;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: var(--dark);
+      font-size: 14px;
+    }
+
+    .input-group {
+      position: relative;
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 14px 16px;
+      border: 1px solid #d0d7e1;
+      border-radius: 10px;
+      font-size: var(--text-lg-size);
+      transition: all 0.3s;
+      background: #f8fafc;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: white;
+      box-shadow: 0 0 0 3px rgba(23, 69, 165, 0.1);
+    }
+
+    .input-icon {
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px 16px;
+      border: none;
+      border-radius: 10px;
+      font-size: var(--text-lg-size);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(23, 69, 165, 0.3);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-light);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(23, 69, 165, 0.4);
+    }
+
+    .btn-primary:active {
+      transform: translateY(0);
+    }
+
+    .login-footer {
+      margin-top: 25px;
+      text-align: center;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .login-footer a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .login-footer a:hover {
+      text-decoration: underline;
+    }
+
+    .demo-accounts {
+      margin-top: 25px;
+      padding: 20px;
+      background: #f1f5f9;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+
+    .demo-title {
+      font-weight: 600;
+      margin-bottom: 10px;
+      color: var(--dark);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .demo-account {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .demo-account:last-child {
+      border-bottom: none;
+    }
+
+    .demo-role {
+      font-weight: 600;
+      color: var(--primary);
+    }
+
+    .demo-credentials {
+      color: var(--muted);
+    }
+
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .alert-error {
+      background: #fee2e2;
+      color: #b91c1c;
+      border-left: 4px solid #ef4444;
+    }
+
+    .alert-success {
+      background: #d1fae5;
+      color: #047857;
+      border-left: 4px solid #10b981;
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .login-card {
+      animation: fadeIn 0.5s ease-out;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .login-container {
+        grid-template-columns: 1fr;
+        max-width: 520px;
+      }
+
+      .login-side {
+        padding: 26px 22px;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+      }
+
+      .side-title {
+        font-size: 1.35rem;
+      }
+
+      .side-desc {
+        font-size: 14px;
+      }
+    }
+
+    @media (max-width: 520px) {
+      body {
+        padding: 10px;
+      }
+
+      .login-card {
+        padding: 22px 16px;
+      }
+
+      .login-side {
+        padding: 20px 16px;
+      }
+
+      .logo {
+        width: 64px;
+        height: 64px;
+        font-size: 24px;
+      }
+
+      .logo-subtext,
+      .login-footer {
+        font-size: 12px;
+      }
+
+      .btn {
+        padding: 12px 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-side">
+      <div class="side-title">Gen-Track Monitoring Platform</div>
+      <div class="side-desc">Pantau performa generator secara real-time dengan tampilan profesional, data alarm, histori, dan analisis yang konsisten untuk kebutuhan operasi harian.</div>
+      <ul class="feature-list">
+        <li><i class="fas fa-gauge-high"></i><span>Dashboard parameter penting dalam satu layar.</span></li>
+        <li><i class="fas fa-bell"></i><span>Notifikasi alarm untuk respon lebih cepat.</span></li>
+        <li><i class="fas fa-chart-line"></i><span>Tren data untuk evaluasi kondisi mesin.</span></li>
+      </ul>
+    </div>
+    <div class="login-card">
+      <!-- Logo Section -->
+      <div class="logo-section">
+        <div class="logo">
+          <i class="fas fa-bolt"></i>
+        </div>
+        <div class="logo-text">Gen-Track</div>
+        <div class="logo-subtext">Generator Monitoring System</div>
+      </div>
+
+      <!-- Alert Messages -->
+      <div id="alertMessage" class="alert alert-error">
+        Invalid username or password. Please try again.
+      </div>
+
+      <!-- Login Form -->
+      <h2 class="login-title">Sign In to Your Account</h2>
+      
+      <form id="loginForm">
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <div class="input-group">
+            <input type="text" id="username" class="form-control" placeholder="Enter your username" required>
+            <div class="input-icon">
+              <i class="fas fa-user"></i>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <div class="input-group">
+            <input type="password" id="password" class="form-control" placeholder="Enter your password" required>
+            <div class="input-icon">
+              <i class="fas fa-lock"></i>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+          <i class="fas fa-sign-in-alt"></i> Sign In
+        </button>
+      </form>
+
+
+      <!-- Footer -->
+      <div class="login-footer">
+        <p>© 2025 Gen-Track. Generator Monitoring System. TA252601020</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Demo user accounts
+    const users = {
+      'Admin': { password: 'admin123', role: 'Administrator' },
+      'Operator': { password: 'operator123', role: 'Operator' },
+      'Viewer': { password: 'viewer123', role: 'Viewer' },
+      'masyarakat': { password: 'masyarakat123', role: 'Masyarakat' }
+    };
+
+    // Form submission handler
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const alertMessage = document.getElementById('alertMessage');
+      
+      // Reset alert
+      alertMessage.style.display = 'none';
+      alertMessage.className = 'alert alert-error';
+      
+      // Validate credentials
+      if (users[username] && users[username].password === password) {
+        // Successful login
+        alertMessage.textContent = 'Login successful! Redirecting...';
+        alertMessage.className = 'alert alert-success';
+        alertMessage.style.display = 'block';
+        
+        // Store user info in localStorage
+        localStorage.setItem('userRole', users[username].role);
+        localStorage.setItem('username', username);
+        localStorage.setItem('isLoggedIn', 'true');
+        
+        // Redirect to dashboard after a short delay
+        setTimeout(() => {
+          const role = users[username].role;
+          window.location.href = role === 'Masyarakat' ? 'public.html' : 'index.html';
+        }, 1000);
+      } else {
+        // Failed login
+        alertMessage.textContent = 'Invalid username or password. Please try again.';
+        alertMessage.className = 'alert alert-error';
+        alertMessage.style.display = 'block';
+        
+        // Shake animation for error
+        document.getElementById('loginForm').style.animation = 'shake 0.5s';
+        setTimeout(() => {
+          document.getElementById('loginForm').style.animation = '';
+        }, 500);
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', function() {
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+          20%, 40%, 60%, 80% { transform: translateX(5px); }
+        }
+      `;
+      document.head.appendChild(style);
+      document.getElementById('username').focus();
+    });
+  </script>
+</body>
+</html>

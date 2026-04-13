@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — Maintenance</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;">
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <link rel="stylesheet" href="sidebar.css">
+  <link rel="stylesheet" href="css/topbar.css">
+  <link rel="stylesheet" href="css/maintenance.css">
+  <link rel="stylesheet" href="css/typography.css">
+</head>
+<body>
+
+  <div id="sidebar-container"></div>
+
+  <div class="main-content">
+
+    <div class="topbar">
+      <div class="topbar-title">Maintenance Management</div>
+      <div class="user-info" id="userarea">
+        <i class="fas fa-user"></i> <span style="margin-left:8px">Pengguna</span>
+      </div>
+    </div>
+
+    <div class="maintenance-page-container" style="padding: 20px;">
+
+      <div class="maintenance-summary">
+        <div class="summary-card overdue">
+          <div class="summary-value" id="overdueCount">0</div>
+          <div class="summary-label">Overdue</div>
+        </div>
+        <div class="summary-card upcoming">
+          <div class="summary-value" id="upcomingCount">0</div>
+          <div class="summary-label">Upcoming (7 days)</div>
+        </div>
+        <div class="summary-card scheduled">
+          <div class="summary-value" id="scheduledCount">0</div>
+          <div class="summary-label">Scheduled</div>
+        </div>
+        <div class="summary-card completed">
+          <div class="summary-value" id="completedCount">0</div>
+          <div class="summary-label">Completed</div>
+        </div>
+      </div>
+
+      <div class="maintenance-card">
+        <div class="card-header">
+          <div class="card-title">Maintenance Tasks</div>
+          <div class="action-buttons">
+            <button class="btn btn-primary" onclick="openAddModal()">
+              <i class="fas fa-plus"></i> Schedule
+            </button>
+            <button class="btn btn-secondary" onclick="exportCSV()">
+              <i class="fas fa-file-csv"></i> Export CSV
+            </button>
+          </div>
+        </div>
+
+        <div class="filter-controls">
+          <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
+          <button class="filter-btn" onclick="setFilter('overdue', this)">Overdue</button>
+          <button class="filter-btn" onclick="setFilter('upcoming', this)">Upcoming</button>
+          <button class="filter-btn" onclick="setFilter('in-progress', this)">In Progress</button>
+          <button class="filter-btn" onclick="setFilter('completed', this)">Completed</button>
+        </div>
+
+        <table id="maintenanceTable">
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Type</th>
+              <th>Priority</th>
+              <th>Due Date</th>
+              <th>Status</th>
+              <th>Assigned To</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="maintenanceTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="maintenance-card">
+        <div class="card-header"><div class="card-title">Recent Activity</div></div>
+        <div class="timeline" id="maintenanceTimeline"></div>
+      </div>
+
+      <div class="maintenance-card">
+        <div class="card-header"><div class="card-title">History (Last 30 Days)</div></div>
+        <table id="historyTable">
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Type</th>
+              <th>Completed</th>
+              <th>Technician</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody"></tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="addMaintenanceModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title">Schedule Task</div>
+        <button class="close-btn" onclick="closeAddModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="maintenanceForm">
+          <div class="form-group">
+            <label class="form-label">Task Name</label>
+            <input type="text" id="taskName" class="form-control" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Type</label>
+              <select id="taskType" class="form-control" required>
+                <option value="preventive">Preventive</option>
+                <option value="corrective">Corrective</option>
+                <option value="inspection">Inspection</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Priority</label>
+              <select id="priority" class="form-control" required>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Due Date</label>
+              <input type="date" id="dueDate" class="form-control" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Assigned To</label>
+              <select id="assignedTo" class="form-control">
+                <option value="Salsabilla">Salsabilla</option>
+                <option value="Stewart">Stewart</option>
+                <option value="Rifananda">Rifananda</option>
+              </select>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeAddModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveMaintenance()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="notification" class="notification"></div>
+
+  <script src="js/sidebar.js"></script>
+  <script src="js/maintenance.js"></script>
+</body>
+</html>

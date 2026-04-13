@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="js/auth-guard.js"></script>
+    <title>Gen-Track — Engine Activity Summary</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="css/topbar.css">
+    <link rel="stylesheet" href="css/reports.css">
+  <link rel="stylesheet" href="css/typography.css">
+</head>
+<body>
+
+    <div id="sidebar-container"></div>
+
+    <div class="main-content">
+
+        <div class="topbar">
+            <div class="topbar-title">Reports & Analysis</div>
+            <div id="userarea" class="user-info">
+                <i class="fas fa-user"></i> <span>Pengguna</span>
+            </div>
+        </div>
+
+        <div class="reports-page-container" style="padding: 20px;">
+            <section class="reports-hero">
+                <div>
+                    <p class="hero-kicker">Monitoring Summary</p>
+                    <h1 class="hero-heading">Laporan engine tetap terbaca dengan nyaman di HP maupun desktop.</h1>
+                    <p class="hero-text">Pantau ringkasan performa, status data, dan tren sensor dalam layout yang lebih ringkas, rapi, dan mudah dipindai.</p>
+                </div>
+                <div class="hero-badge-grid">
+                    <div class="hero-badge">
+                        <span>Mode</span>
+                        <strong>Responsive</strong>
+                    </div>
+                    <div class="hero-badge">
+                        <span>Fallback</span>
+                        <strong>Auto Recovery</strong>
+                    </div>
+                </div>
+            </section>
+
+            <div id="dataSourceNotice" class="data-source-notice" style="display:none;"></div>
+
+            <div class="overview-cards">
+                <div class="overview-card">
+                    <div class="overview-icon primary"><i class="fas fa-clock"></i></div>
+                    <div class="overview-content">
+                        <div class="overview-value" id="dailyAverage">-- hrs</div>
+                        <div class="overview-label">Daily Average</div>
+                    </div>
+                </div>
+                <div class="overview-card">
+                    <div class="overview-icon secondary"><i class="fas fa-hourglass-half"></i></div>
+                    <div class="overview-content">
+                        <div class="overview-value" id="totalHours">-- hrs</div>
+                        <div class="overview-label">Total Hours (7 days)</div>
+                    </div>
+                </div>
+                <div class="overview-card">
+                    <div class="overview-icon warning"><i class="fas fa-calendar-day"></i></div>
+                    <div class="overview-content">
+                        <div class="overview-value" id="daysActive">-- days</div>
+                        <div class="overview-label">Days Active (7 days)</div>
+                    </div>
+                </div>
+                <div class="overview-card">
+                    <div class="overview-icon danger"><i class="fas fa-hourglass-end"></i></div>
+                    <div class="overview-content">
+                        <div class="overview-value" id="longestSession">-- hrs</div>
+                        <div class="overview-label">Longest Session</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="executive-summary">
+                <h2 class="section-title">
+                    <i class="fas fa-cogs"></i> Engine Parameters
+                </h2>
+                
+                <div class="filter-section">
+                    <div class="time-filter">
+                        <button class="time-btn active" data-hours="24">Last 24h</button>
+                        <button class="time-btn" data-hours="168">Last 7d</button>
+                        <button class="time-btn" data-hours="720">Last 30d</button>
+                        <button class="time-btn" data-hours="8760">Year to Date</button>
+                    </div>
+                    <div class="date-range">
+                        <div class="date-selector">
+                            <!-- Date picker akan dibuat otomatis oleh JavaScript -->
+                        </div>
+                        <button class="apply-btn" id="applyDateRange">Apply</button>
+                    </div>
+                </div>
+                <div id="sensorsLoading" class="loading">
+                    <i class="fas fa-spinner fa-spin"></i> Loading sensor data...
+                </div>
+                
+                <div id="sensorsContainer" class="sensors-grid" style="display: none;"></div>
+                <!-- SENSOR CARD TEMPLATE -->
+<template id="sensorCardTemplate">
+    <div class="sensor-card">
+        <div class="sensor-header">
+            <h4 class="sensor-name">Sensor Name</h4>
+            <span class="sensor-unit">--</span>
+        </div>
+
+        <div class="sensor-value">--</div>
+
+        <!-- SENSOR FOOTER (WARNING & CRITICAL COUNT) -->
+        <div class="sensor-footer">
+            <span class="warn-count">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span class="warn-value">0</span> Warning
+            </span>
+            <span class="crit-count">
+                <i class="fas fa-skull-crossbones"></i>
+                <span class="crit-value">0</span> Critical
+            </span>
+        </div>
+    </div>
+</template>
+
+            </div>
+
+            <div class="executive-summary">
+                <h2 class="section-title">
+                    <i class="fas fa-chart-line"></i> Sensor Trends
+                </h2>
+
+
+                <div id="chartContainer" class="chart-container">
+                    <div class="chart-header">
+                        <div><h3 class="chart-title" id="chartTitle">Sensor Data</h3><div class="chart-description" id="chartDescription">Tren menampilkan nilai rata-rata sesuai rentang waktu.</div></div>
+                        <div class="chart-actions">
+                            <button class="chart-action-btn" id="toggleExport"><i class="fas fa-download"></i> Export</button>
+                            <button class="chart-action-btn" id="printChart"><i class="fas fa-print"></i> Print</button>
+                        </div>
+                    </div>
+                    <div style="height: 300px; width: 100%;">
+                        <canvas id="mainChart"></canvas>
+                    </div>
+                    
+                    <div id="exportOptions" class="export-options">
+                        <h4>Export Data</h4>
+                        <div class="export-buttons">
+                            <button class="export-btn" data-format="csv">CSV</button>
+                            <button class="export-btn" data-format="json">JSON</button>
+                            <button class="export-btn" data-format="png">PNG Image</button>
+                            <button class="export-btn" data-format="pdf">PDF</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="analysis-panel">
+                    <div class="analysis-header">
+                        <h3 class="analysis-title"><i class="fas fa-wave-square"></i> FFT Spectrum Analysis</h3>
+                        <button class="chart-action-btn" id="recalculateFft"><i class="fas fa-sync-alt"></i> Recalculate FFT</button>
+                    </div>
+                    <div class="analysis-subtitle" id="fftSummary">Select sensor and date range to analyze dominant frequencies.</div>
+                    <div class="fft-chart-wrap">
+                        <canvas id="fftChart"></canvas>
+                    </div>
+                    <div id="fftInsights" class="fft-insights"></div>
+                </div>
+            </div>
+
+        </div> </div> <script src="js/sidebar.js"></script>
+    <script src="js/reports.js"></script>
+</body>
+</html>

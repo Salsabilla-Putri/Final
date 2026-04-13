@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — History</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <link rel="stylesheet" href="sidebar.css">
+  <link rel="stylesheet" href="css/topbar.css">
+  <link rel="stylesheet" href="css/history.css">
+  <link rel="stylesheet" href="css/typography.css">
+</head>
+<body>
+  <div class="container">
+    <div id="sidebar-container"></div>
+
+    <div class="topbar">
+      <div class="topbar-title">Historical Data</div>
+      <div id="userarea" class="user-info">
+        <i class="fas fa-user"></i> <span>Pengguna</span>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="history-summary">
+        <div class="summary-card records">
+          <div class="summary-value" id="totalRecords">0</div>
+          <div class="summary-label">Total Data Points</div>
+        </div>
+        <div class="summary-card alerts">
+          <div class="summary-value" id="alertCount">0</div>
+          <div class="summary-label" style="color:var(--danger)">Alerts Detected</div>
+        </div>
+        <div class="summary-card parameters">
+          <div class="summary-value" id="parameterCount">12</div>
+          <div class="summary-label">Monitored Params</div>
+        </div>
+        <div class="summary-card period">
+          <div class="summary-value" id="dataPeriod">24h</div>
+          <div class="summary-label">Time Range</div>
+        </div>
+      </div>
+
+      <div class="filter-card">
+        <div class="filter-header">
+            <div class="filter-title">Data Filters</div>
+            <div class="filter-actions">
+                <button class="btn btn-outline" onclick="resetFilters()">
+                    <i class="fas fa-sync-alt"></i> Reset
+                </button>
+                <button class="btn btn-primary" onclick="applyFilters()">
+                    <i class="fas fa-filter"></i> Apply
+                </button>
+            </div>
+        </div>
+
+        <div class="filter-grid">
+            <div class="form-group">
+                <label class="form-label">From Date</label>
+                <input type="date" id="dateFrom" class="form-input">
+            </div>
+            <div class="form-group">
+                <label class="form-label">To Date</label>
+                <input type="date" id="dateTo" class="form-input">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Time Range</label>
+                <select id="timeRange" class="form-select" onchange="updateDateInputs(this.value)">
+                    <option value="custom">Custom Range</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="today">Today</option>
+                    <option value="7">Last 7 Days</option>
+                    <option value="30" selected>Last 30 Days</option> 
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Parameters</label>
+                <select id="paramFilter" class="form-select">
+                    <option value="all">All Parameters</option>
+                    <option value="rpm">RPM (Engine Speed)</option>
+                    <option value="volt">Voltage (V)</option>
+                    <option value="amp">Current (A)</option>
+                    <option value="power">Power (kW)</option>
+                    <option value="freq">Frequency (Hz)</option>
+                    <option value="fuel">Fuel Level (%)</option>
+                    <option value="coolant">Coolant Temp (°C)</option>
+                    <option value="iat">Intake Air Temp (°C)</option>
+                    <option value="map">Manifold Air Pressure (kPa)</option>
+                    <option value="afr">Air Fuel Ratio (AFR)</option>
+                    <option value="tps">Throttle Position (%)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Status</label>
+                <select id="statusFilter" class="form-select">
+                    <option value="all">All Status</option>
+                    <option value="normal">Normal</option>
+                    <option value="warning">Warning</option>
+                    <option value="critical">Critical</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Search</label>
+                <input type="text" id="searchQuery" class="form-input" placeholder="Search values...">
+            </div>
+        </div>
+      </div>
+
+      <div class="history-card">
+        <div class="card-header">
+          <div class="card-title">Historical Logs</div>
+          <div style="display:flex; gap:10px;">
+             <button class="btn btn-outline" onclick="exportCSV()"><i class="fas fa-download"></i> CSV</button>
+          </div>
+        </div>
+
+        <div id="loading" style="display:none; text-align:center; padding:20px; color:#666;">
+          <i class="fas fa-spinner fa-spin fa-2x"></i><br>Loading data...
+        </div>
+
+        <table id="historyTable">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Generator</th>
+              <th>Parameter</th>
+              <th>Value</th>
+              <th>Unit</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody"></tbody>
+        </table>
+
+        <div class="pagination">
+          <div style="font-size:14px; color:#666">
+            Showing <span id="pageStart">0</span> to <span id="pageEnd">0</span> of <span id="totalItems">0</span>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <button class="page-btn" onclick="changePage(-1)" id="btnPrev">Prev</button>
+            <span style="padding:8px; font-size:14px;">Page <span id="pageNum">1</span></span>
+            <button class="page-btn" onclick="changePage(1)" id="btnNext">Next</button>
+          </div>
+        </div>
+      </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="js/sidebar.js"></script>
+  <script src="js/history.js"></script>
+</body>
+</html>

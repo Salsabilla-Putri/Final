@@ -1,0 +1,245 @@
+/* === ALARM PAGE STYLES (MATCH HISTORY STYLE) === */
+
+:root {
+  --primary: #1745a5;
+  --secondary: #10b981;
+  --warning: #f97316;
+  --danger: #ef4444;
+  --muted: #6b7280;
+  --light: #f8fafc;
+  --dark: #0f172a;
+  --card-bg: #fff;
+  --border: #e2e8f0;
+
+  /* Severity */
+  --critical: #dc2626;
+  --active: #ef4444;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--app-font-family);
+  background: #f1f5f9;
+  color: var(--dark);
+  font-size: var(--text-base-size);
+}
+
+.container { display: flex; min-height: 100vh; }
+
+/* LAYOUT (SAMA DENGAN HISTORY) */
+.main-content {
+  flex: 1;
+  margin-left: 80px;
+  padding: 20px;
+  padding-top: 80px;
+  transition: margin-left 0.3s ease;
+}
+#sidebar-container:hover ~ .main-content { margin-left: 220px; }
+
+/* ===============================
+   SUMMARY / STATS (MATCH HISTORY)
+================================ */
+.alarm-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  margin-bottom: 25px;
+}
+
+.stat-card {
+  background: white;
+  border-radius: 15px;
+  padding: 20px;
+  min-height: 112px;
+  border: 1px solid var(--border);
+  text-align: center;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  transition: transform 0.2s;
+}
+
+.stat-card:hover {
+  transform: translateY(-5px);
+}
+
+.stat-number {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.stat-label {
+  font-size: var(--text-base-size);
+  color: var(--muted);
+}
+
+.stat-critical { border-left: 4px solid var(--critical); }
+.stat-warning  { border-left: 4px solid var(--warning); }
+.stat-active   { border-left: 4px solid var(--danger); }
+.stat-total    { border-left: 4px solid var(--primary); }
+
+/* ===============================
+   FILTER TABS (SIMPLE & CLEAN)
+================================ */
+.filter-tabs {
+  display: flex;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.filter-tab {
+  background: none;
+  border: none;
+  padding: 10px 18px;
+  font-size: var(--text-base-size);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+}
+
+.filter-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+/* ===============================
+   TABLE CARD (MATCH HISTORY)
+================================ */
+.card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.card-header h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--primary);
+  display: flex;
+  gap: 8px;
+}
+
+/* ===============================
+   TABLE (MATCH HISTORY)
+================================ */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: var(--text-base-size);
+}
+
+th {
+  background: #f7fbff;
+  font-weight: 700;
+  color: var(--primary);
+  text-transform: uppercase;
+  font-size: var(--text-xs-size);
+}
+
+tr:hover { background: #f8fafc; }
+
+/* LOCK ACTION COLUMN */
+th:last-child,
+td:last-child {
+  width: 160px;
+  text-align: center;
+}
+
+/* ===============================
+   BADGES (CONSISTENT STYLE)
+================================ */
+.badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: var(--text-xs-size);
+  font-weight: 600;
+}
+
+.sev-critical { background: #fee2e2; color: #991b1b; }
+.sev-warning  { background: #ffedd5; color: #9a3412; }
+.sev-medium   { background: #fef3c7; color: #92400e; }
+.sev-low      { background: #e0f2fe; color: #075985; }
+
+/* STATUS */
+.st-active {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: var(--text-xs-size);
+  font-weight: 600;
+}
+
+.st-confirmed {
+  background: #dcfce7;
+  color: #166534;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: var(--text-xs-size);
+  font-weight: 600;
+}
+
+/* ===============================
+   BUTTONS (MATCH HISTORY)
+================================ */
+.btn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: var(--text-sm-size);
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: 0.2s;
+}
+
+.btn-ack {
+  background: white;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+}
+.btn-ack:hover { background: #eff6ff; }
+
+.btn-del {
+  background: white;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.btn-del:hover { background: #fef2f2; }
+
+.btn-refresh {
+  background: white;
+  border: 1px solid #cbd5e1;
+  color: var(--muted);
+}
+.btn-refresh:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ===============================
+   RESPONSIVE (SAMA DENGAN HISTORY)
+================================ */
+@media (max-width: 768px) {
+  .main-content { margin-left: 0; padding: 16px; padding-top: 104px; }
+  table { display: block; overflow-x: auto; }
+}
