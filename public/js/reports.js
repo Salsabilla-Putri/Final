@@ -2,6 +2,7 @@
 
 // === CONFIGURATION ===
 const API_URL = '/api/reports';
+const API_STATS_URL = '/api/reports/stats'; // dedicated MongoDB aggregation stats endpoint
 
 // Konfigurasi Parameter
 const SENSORS = {
@@ -398,6 +399,63 @@ function buildReportUrls({ startDate, endDate, requestLimit, deviceId }) {
 
 
 
+// --- 6b. DEDICATED STATS FETCH FROM MONGODB AGGREGATION ---
+/**
+ * Fetch per-sensor stats (min, max, avg, count) from a dedicated MongoDB aggregation endpoint.
+ * Expected API response shape:
+ * {
+ *   stats: {
+ *     totalMatched: 34641,
+ *     bySensor: {
+ *       rpm:  { min: 0, max: 3099, avg: 2898.7, count: 34641 },
+ *       volt: { min: 0, max: 229.9, avg: 219.9, count: 34641 },
+ *       ...
+ *     }
+ *   }
+ * }
+ *
+ * If the endpoint doesn't exist (404), the function returns null gracefully
+ * so the caller can fall back to stats bundled in the main data response.
+ */
+async function fetchDbStats(startDate, endDate, deviceId) {
+    try {
+        const baseParams = {};
+        if (deviceId) baseParams.deviceId = deviceId;
+
+        if (startDate && endDate) {
+            baseParams.startDate = startDate.toISOString();
+            baseParams.endDate   = endDate.toISOString();
+        } else {
+            baseParams.hours = '24';
+        }
+
+        const params = new URLSearchParams(baseParams).toString();
+        const urls   = buildApiCandidates(API_STATS_URL, params);
+        const response = await fetchFirstAvailable(urls);
+
+        if (response.status === 404) {
+            console.info('fetchDbStats: /api/reports/stats not found – will use stats from main response.');
+            return null;
+        }
+
+        if (!response.ok) {
+            console.warn(`fetchDbStats: HTTP ${response.status}`);
+            return null;
+        }
+
+        const result = await response.json();
+        // Accept { stats: { bySensor, totalMatched } } OR { bySensor, totalMatched } directly
+        const stats = result?.stats ?? result ?? null;
+        if (stats?.bySensor) {
+            console.info('fetchDbStats: received MongoDB aggregation stats', stats);
+        }
+        return stats;
+    } catch (err) {
+        console.warn('fetchDbStats failed:', err);
+        return null;
+    }
+}
+
 function createDemoRows() {
     const now = Date.now();
     const offsets = [5, 4, 3, 2, 1, 0];
@@ -523,41 +581,47 @@ async function loadReportData() {
         
         let requestLimit = 5000;
         let urls;
+        let fetchStartDate = null;
+        let fetchEndDate   = null;
 
         // Build URL with date parameters
         if (dateFrom && dateTo && dateFrom.value && dateTo.value) {
-            const startDate = new Date(dateFrom.value);
-            startDate.setHours(0, 0, 0, 0);
-
-            const endDate = new Date(dateTo.value);
-            endDate.setHours(23, 59, 59, 999);
+            // ── FIX: parse date string as UTC so the query matches MongoDB's UTC timestamps ──
+            // "YYYY-MM-DD" → split and construct with Date.UTC to avoid local-timezone offset
+            const [sy, sm, sd] = dateFrom.value.split('-').map(Number);
+            const [ey, em, ed] = dateTo.value.split('-').map(Number);
+            fetchStartDate = new Date(Date.UTC(sy, sm - 1, sd, 0, 0, 0, 0));
+            fetchEndDate   = new Date(Date.UTC(ey, em - 1, ed, 23, 59, 59, 999));
 
             // Validate date range
-            if (endDate < startDate) {
+            if (fetchEndDate < fetchStartDate) {
                 showError('End date must be after start date');
                 return;
             }
 
-            activeRange.start = startDate.getTime();
-            activeRange.end = endDate.getTime();
+            activeRange.start = fetchStartDate.getTime();
+            activeRange.end   = fetchEndDate.getTime();
 
-            const rangeDays = Math.max(1, Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)));
+            const rangeDays = Math.max(1, Math.ceil((fetchEndDate - fetchStartDate) / (24 * 60 * 60 * 1000)));
             requestLimit = Math.min(100000, Math.max(5000, rangeDays * 2880));
 
-            urls = buildReportUrls({ startDate, endDate, requestLimit, deviceId });
-            console.log('Fetching with dates:', startDate.toISOString(), 'to', endDate.toISOString(), 'limit:', requestLimit);
+            urls = buildReportUrls({ startDate: fetchStartDate, endDate: fetchEndDate, requestLimit, deviceId });
+            console.log('Fetching with UTC dates:', fetchStartDate.toISOString(), 'to', fetchEndDate.toISOString(), 'limit:', requestLimit);
         } else {
             // Default to last 24 hours
             requestLimit = 10000;
             urls = buildReportUrls({ requestLimit, deviceId });
             activeRange.start = null;
-            activeRange.end = null;
+            activeRange.end   = null;
             console.log('Fetching last 24 hours with limit:', requestLimit);
         }
         
-        // Fetch data
+        // ── FIX: Fetch row data AND MongoDB aggregation stats in parallel ──
         console.log('Fetching from:', urls.primaryUrls[0], 'fallback:', urls.fallbackUrls[0]);
-        const response = await fetchWithFallback(urls.primaryUrls, urls.fallbackUrls);
+        const [response, separateDbStats] = await Promise.all([
+            fetchWithFallback(urls.primaryUrls, urls.fallbackUrls),
+            fetchDbStats(fetchStartDate, fetchEndDate, deviceId)
+        ]);
         
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
@@ -565,6 +629,21 @@ async function loadReportData() {
         
         const result = await response.json();
         const rows = Array.isArray(result) ? result : (result.data || []);
+
+        // Merge stats: prefer dedicated aggregation endpoint, fall back to stats bundled
+        // inside the main response (result.stats), never fall back to JS-computed values.
+        if (separateDbStats?.bySensor) {
+            // Dedicated stats endpoint returned authoritative MongoDB aggregation → use it
+            result.stats = separateDbStats;
+        } else if (!result.stats?.bySensor) {
+            // Neither source has per-sensor stats – log a warning so the developer knows
+            console.warn(
+                'No MongoDB aggregation stats available (neither /api/reports/stats nor ' +
+                'result.stats.bySensor). Sensor card values will be computed from fetched ' +
+                'rows only, which may differ from MongoDB totals. ' +
+                'Add a /api/reports/stats endpoint to fix this.'
+            );
+        }
         
         if ((result.success !== false) && rows) {
             if (!applyRowsToReports(rows, result)) {
@@ -1415,26 +1494,40 @@ function renderSensorCards(data) {
         return;
     }
     
+    // latest reading (for "CURRENT" value only — not used for stats)
     const latest = data[data.length - 1] || {};
     
     Object.entries(SENSORS).forEach(([key, config]) => {
+        // values from fetched rows are used ONLY for the chart and for "current" reading.
+        // They must NOT be used for min/max/avg/count stats on the card because:
+        //   • the fetch may be limited (< total documents)
+        //   • cleanSensorValue / deduplication / spike removal alter the dataset
         const values = data.map(d => d[key]).filter(v => v != null && !isNaN(v));
-        
         if (values.length === 0) return;
-        
+
+        // ── FIX: stats ALWAYS come from MongoDB aggregation ──
+        const sensorStats   = reportStatsBySensor?.[key];
+        const hasDbStats    = sensorStats != null;
+
+        const dbMin   = hasDbStats ? Number(sensorStats.min)   : NaN;
+        const dbMax   = hasDbStats ? Number(sensorStats.max)   : NaN;
+        const dbAvg   = hasDbStats ? Number(sensorStats.avg)   : NaN;
+        const dbCount = hasDbStats ? Number(sensorStats.count) : NaN;
+
+        // When no DB stats, compute from local rows as last resort (with visual warning)
         const computedMin = Math.min(...values);
         const computedMax = Math.max(...values);
         const computedAvg = values.reduce((a, b) => a + b, 0) / values.length;
-        const dbMin = reportStatsBySensor?.[key]?.min;
-        const dbMax = reportStatsBySensor?.[key]?.max;
-        const dbAvg = reportStatsBySensor?.[key]?.avg;
-        const dbCount = reportStatsBySensor?.[key]?.count;
-        const min = Number.isFinite(Number(dbMin)) ? Number(dbMin) : computedMin;
-        const max = Number.isFinite(Number(dbMax)) ? Number(dbMax) : computedMax;
-        const avg = Number.isFinite(Number(dbAvg)) ? Number(dbAvg) : computedAvg;
-        const readingCount = Number.isFinite(Number(dbCount)) && Number(dbCount) > 0
-            ? Number(dbCount)
-            : (reportTotalMatched > 0 ? reportTotalMatched : values.length);
+
+        const min          = Number.isFinite(dbMin)   ? dbMin   : computedMin;
+        const max          = Number.isFinite(dbMax)   ? dbMax   : computedMax;
+        const avg          = Number.isFinite(dbAvg)   ? dbAvg   : computedAvg;
+        // readingCount: use per-sensor DB count; do NOT use reportTotalMatched as it may
+        // represent a different scope than per-sensor aggregation.
+        const readingCount = Number.isFinite(dbCount) && dbCount > 0
+            ? dbCount
+            : values.length;
+
         const current = latest[key] != null ? latest[key] : avg;
         
         // Determine status
@@ -1457,6 +1550,13 @@ function renderSensorCards(data) {
             : statusClass === 'status-warning'
                 ? '#f97316'
                 : config.color;
+
+        // Footer indicator: green check when stats come from DB, orange triangle when estimated
+        const footerIcon  = hasDbStats ? 'check-circle'       : 'exclamation-triangle';
+        const footerColor = hasDbStats ? 'color:#22c55e'      : 'color:#f97316';
+        const footerLabel = hasDbStats
+            ? `${readingCount.toLocaleString()} readings`
+            : `${readingCount.toLocaleString()} readings <span style="font-size:11px;opacity:0.8">(est.)</span>`;
 
         const card = document.createElement('div');
         card.className = 'sensor-card';
@@ -1500,9 +1600,9 @@ function renderSensorCards(data) {
             </div>
             
             <div class="sensor-footer">
-                <div class="warning-indicator ${min === 0 ? 'warning-nonzero' : 'warning-zero'}">
-                    <i class="fas fa-${min === 0 ? 'exclamation-triangle' : 'check-circle'}"></i>
-                    ${readingCount} readings
+                <div class="warning-indicator" style="${footerColor}">
+                    <i class="fas fa-${footerIcon}"></i>
+                    ${footerLabel}
                 </div>
             </div>
         `;
