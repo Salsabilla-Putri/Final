@@ -269,6 +269,10 @@ body {
 }
 .chart-title { color: var(--accent); font-size: 18px; }
 .chart-description { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.chart-description:empty,
+.analysis-subtitle:empty {
+    display: none;
+}
 .chart-actions { display: flex; gap: 10px; }
 .chart-action-btn {
     padding: 6px 12px; background: #f1f5f9; border: 1px solid #d0d7e1;
@@ -495,14 +499,12 @@ body {
 }
 
 .reports-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.8fr);
-    gap: 18px;
-    padding: 24px;
-    border-radius: 24px;
-    background: linear-gradient(135deg, #12357f 0%, #1948a5 58%, #3b6bdf 100%);
+    display: block;
+    padding: 20px 24px;
+    border-radius: 14px;
+    background: #1e3a8a;
     color: #fff;
-    box-shadow: 0 20px 45px rgba(23, 69, 165, 0.22);
+    box-shadow: 0 10px 24px rgba(23, 69, 165, 0.16);
 }
 
 .hero-kicker {
@@ -514,9 +516,9 @@ body {
 }
 
 .hero-heading {
-    font-size: clamp(1.5rem, 3vw, 2.4rem);
-    line-height: 1.15;
-    margin-bottom: 10px;
+    font-size: clamp(1.25rem, 2.2vw, 1.8rem);
+    line-height: 1.25;
+    margin-bottom: 0;
 }
 
 .hero-text {
