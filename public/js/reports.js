@@ -39,6 +39,7 @@ let fftChart = null;
 let currentData = [];
 let selectedSensors = ['rpm']; // Default sensor to show
 let activeRange = { start: null, end: null };
+let reportStatsBySensor = null;
 
 // --- 1. CHART MANAGEMENT ---
 function destroyChart() {
@@ -449,6 +450,7 @@ function renderDataSourceNotice({ source, mode = 'info', message }) {
 
 function applyRowsToReports(rows, meta = {}) {
     currentData = normalizeReportRows(rows);
+    reportStatsBySensor = meta?.stats?.bySensor || null;
 
     if (currentData.length > 0) {
         updateOverview(currentData);
@@ -485,6 +487,7 @@ function applyRowsToReports(rows, meta = {}) {
 
 async function loadReportData() {
     console.log('Loading report data...');
+    reportStatsBySensor = null;
     
     // Show loading state
     const loadingEl = document.getElementById('sensorsLoading');
@@ -1407,7 +1410,9 @@ function renderSensorCards(data) {
         
         const min = Math.min(...values);
         const max = Math.max(...values);
-        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+        const computedAvg = values.reduce((a, b) => a + b, 0) / values.length;
+        const dbAvg = reportStatsBySensor?.[key]?.avg;
+        const avg = Number.isFinite(Number(dbAvg)) ? Number(dbAvg) : computedAvg;
         const current = latest[key] != null ? latest[key] : avg;
         
         // Determine status

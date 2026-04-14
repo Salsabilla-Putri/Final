@@ -452,12 +452,62 @@ app.get('/api/reports', async (req, res) => {
             if (!isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600000);
         }
 
+        const dbQuery = Object.keys(timeFilter).length ? { timestamp: timeFilter } : {};
+
         const reports = await GeneratorData
-            .find(Object.keys(timeFilter).length ? { timestamp: timeFilter } : {})
+            .find(dbQuery)
             .sort({ timestamp: -1 }).limit(limit).lean();
 
         const normalized = reports.map(normalizeRow).filter(Boolean);
-        res.json({ success: true, count: normalized.length, data: normalized });
+
+        const summaryPipeline = [
+            { $match: dbQuery },
+            {
+                $group: {
+                    _id: null,
+                    count: { $sum: 1 },
+                    rpmAvg: { $avg: '$rpm' }, rpmMin: { $min: '$rpm' }, rpmMax: { $max: '$rpm' },
+                    voltAvg: { $avg: '$volt' }, voltMin: { $min: '$volt' }, voltMax: { $max: '$volt' },
+                    ampAvg: { $avg: '$amp' }, ampMin: { $min: '$amp' }, ampMax: { $max: '$amp' },
+                    powerAvg: { $avg: '$power' }, powerMin: { $min: '$power' }, powerMax: { $max: '$power' },
+                    freqAvg: { $avg: '$freq' }, freqMin: { $min: '$freq' }, freqMax: { $max: '$freq' },
+                    tempAvg: { $avg: '$temp' }, tempMin: { $min: '$temp' }, tempMax: { $max: '$temp' },
+                    coolantAvg: { $avg: '$coolant' }, coolantMin: { $min: '$coolant' }, coolantMax: { $max: '$coolant' },
+                    fuelAvg: { $avg: '$fuel' }, fuelMin: { $min: '$fuel' }, fuelMax: { $max: '$fuel' },
+                    oilAvg: { $avg: '$oil' }, oilMin: { $min: '$oil' }, oilMax: { $max: '$oil' },
+                    iatAvg: { $avg: '$iat' }, iatMin: { $min: '$iat' }, iatMax: { $max: '$iat' },
+                    mapAvg: { $avg: '$map' }, mapMin: { $min: '$map' }, mapMax: { $max: '$map' },
+                    afrAvg: { $avg: '$afr' }, afrMin: { $min: '$afr' }, afrMax: { $max: '$afr' }
+                }
+            }
+        ];
+
+        const summary = (await GeneratorData.aggregate(summaryPipeline))[0] || {};
+        const sensorKeys = ['rpm','volt','amp','power','freq','temp','coolant','fuel','oil','iat','map','afr'];
+        const bySensor = {};
+
+        sensorKeys.forEach((key) => {
+            const avg = summary[`${key}Avg`];
+            const min = summary[`${key}Min`];
+            const max = summary[`${key}Max`];
+            if ([avg, min, max].some((v) => Number.isFinite(Number(v)))) {
+                bySensor[key] = {
+                    avg: Number.isFinite(Number(avg)) ? Number(avg) : null,
+                    min: Number.isFinite(Number(min)) ? Number(min) : null,
+                    max: Number.isFinite(Number(max)) ? Number(max) : null
+                };
+            }
+        });
+
+        res.json({
+            success: true,
+            count: normalized.length,
+            data: normalized,
+            stats: {
+                totalMatched: Number(summary.count) || 0,
+                bySensor
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
