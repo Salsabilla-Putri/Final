@@ -586,12 +586,18 @@ async function loadReportData() {
 
         // Build URL with date parameters
         if (dateFrom && dateTo && dateFrom.value && dateTo.value) {
-            // ── FIX: parse date string as UTC so the query matches MongoDB's UTC timestamps ──
-            // "YYYY-MM-DD" → split and construct with Date.UTC to avoid local-timezone offset
-            const [sy, sm, sd] = dateFrom.value.split('-').map(Number);
-            const [ey, em, ed] = dateTo.value.split('-').map(Number);
-            fetchStartDate = new Date(Date.UTC(sy, sm - 1, sd, 0, 0, 0, 0));
-            fetchEndDate   = new Date(Date.UTC(ey, em - 1, ed, 23, 59, 59, 999));
+            // Input type="date" menghasilkan string "YYYY-MM-DD".
+            // new Date("YYYY-MM-DD") diparsing browser sebagai UTC midnight.
+            // setHours(0,0,0,0) lalu mengubahnya ke LOCAL midnight (WIB = UTC+7),
+            // sehingga "2025-12-01" → 2025-11-30T17:00:00Z — persis sama dengan
+            // query MongoDB Compass saat user memilih tanggal dalam WIB.
+            // JANGAN ganti ke Date.UTC: itu akan mengunci ke UTC midnight dan
+            // menggeser range 7 jam untuk user WIB.
+            fetchStartDate = new Date(dateFrom.value);
+            fetchStartDate.setHours(0, 0, 0, 0);      // → local (WIB) midnight
+
+            fetchEndDate = new Date(dateTo.value);
+            fetchEndDate.setHours(23, 59, 59, 999);    // → local (WIB) end-of-day
 
             // Validate date range
             if (fetchEndDate < fetchStartDate) {
@@ -606,7 +612,7 @@ async function loadReportData() {
             requestLimit = Math.min(100000, Math.max(5000, rangeDays * 2880));
 
             urls = buildReportUrls({ startDate: fetchStartDate, endDate: fetchEndDate, requestLimit, deviceId });
-            console.log('Fetching with UTC dates:', fetchStartDate.toISOString(), 'to', fetchEndDate.toISOString(), 'limit:', requestLimit);
+            console.log('Fetching with WIB dates:', fetchStartDate.toISOString(), 'to', fetchEndDate.toISOString(), 'limit:', requestLimit);
         } else {
             // Default to last 24 hours
             requestLimit = 10000;
