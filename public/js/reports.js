@@ -42,10 +42,13 @@ let selectedSensors = ['rpm']; // Default sensor to show
 let activeRange = { start: null, end: null };
 let reportStatsBySensor = null;
 let reportTotalMatched = 0;
+let periodAlertCount = 0;
 
 function getReportDeviceId() {
     const params = new URLSearchParams(window.location.search);
-    return params.get('deviceId') || localStorage.getItem('reportDeviceId') || '';
+    return params.get('deviceId')
+        || localStorage.getItem('reportDeviceId')
+        || 'ESP32_GENERATOR_01';
 }
 
 // --- 1. CHART MANAGEMENT ---
@@ -495,6 +498,18 @@ async function fetchLatestSnapshotRows() {
     };
 }
 
+async function fetchPeriodAlertCount({ startDate, endDate, deviceId }) {
+    const params = new URLSearchParams();
+    if (startDate) params.set('startDate', startDate.toISOString());
+    if (endDate) params.set('endDate', endDate.toISOString());
+    if (deviceId) params.set('deviceId', deviceId);
+
+    const response = await fetchFirstAvailable(buildApiCandidates('/api/alerts/count', params.toString()));
+    if (!response || !response.ok) return 0;
+    const result = await response.json();
+    return Number(result?.count) || 0;
+}
+
 function renderDataSourceNotice({ source, mode = 'info', message }) {
     const noticeEl = document.getElementById('dataSourceNotice');
     if (!noticeEl) return;
@@ -521,6 +536,7 @@ function applyRowsToReports(rows, meta = {}) {
     currentData = normalizeReportRows(rows);
     reportStatsBySensor = meta?.stats?.bySensor || null;
     reportTotalMatched = Number(meta?.stats?.totalMatched) || 0;
+    const deviceInfo = meta?.deviceIdUsed ? `device ${meta.deviceIdUsed}` : '';
 
     if (currentData.length > 0) {
         updateOverview(currentData);
@@ -537,13 +553,13 @@ function applyRowsToReports(rows, meta = {}) {
             });
         } else if (meta.source === 'memory') {
             renderDataSourceNotice({
-                source: 'snapshot',
+                source: ['snapshot', deviceInfo].filter(Boolean).join(' • '),
                 mode: 'warning',
                 message: 'Data historis belum tersedia. Halaman menampilkan snapshot terakhir yang masih bisa dibaca.'
             });
         } else {
             renderDataSourceNotice({
-                source: meta.source || 'live data',
+                source: [meta.source || 'live data', deviceInfo].filter(Boolean).join(' • '),
                 mode: 'success',
                 message: 'Data berhasil dimuat.'
             });
@@ -559,6 +575,7 @@ async function loadReportData() {
     console.log('Loading report data...');
     reportStatsBySensor = null;
     reportTotalMatched = 0;
+    periodAlertCount = 0;
     const deviceId = getReportDeviceId();
     
     // Show loading state
@@ -581,8 +598,8 @@ async function loadReportData() {
         
         let requestLimit = 5000;
         let urls;
-        let fetchStartDate = null;
-        let fetchEndDate   = null;
+        let rangeStart = null;
+        let rangeEnd = null;
 
         // Build URL with date parameters
         if (dateFrom && dateTo && dateFrom.value && dateTo.value) {
@@ -605,20 +622,24 @@ async function loadReportData() {
                 return;
             }
 
-            activeRange.start = fetchStartDate.getTime();
-            activeRange.end   = fetchEndDate.getTime();
+            activeRange.start = startDate.getTime();
+            activeRange.end = endDate.getTime();
+            rangeStart = startDate;
+            rangeEnd = endDate;
 
             const rangeDays = Math.max(1, Math.ceil((fetchEndDate - fetchStartDate) / (24 * 60 * 60 * 1000)));
             requestLimit = Math.min(100000, Math.max(5000, rangeDays * 2880));
 
-            urls = buildReportUrls({ startDate: fetchStartDate, endDate: fetchEndDate, requestLimit, deviceId });
-            console.log('Fetching with WIB dates:', fetchStartDate.toISOString(), 'to', fetchEndDate.toISOString(), 'limit:', requestLimit);
+            urls = buildReportUrls({ startDate, endDate, requestLimit, deviceId });
+            console.log('Fetching with dates:', startDate.toISOString(), 'to', endDate.toISOString(), 'limit:', requestLimit);
         } else {
             // Default to last 24 hours
             requestLimit = 10000;
             urls = buildReportUrls({ requestLimit, deviceId });
             activeRange.start = null;
-            activeRange.end   = null;
+            activeRange.end = null;
+            rangeStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            rangeEnd = new Date();
             console.log('Fetching last 24 hours with limit:', requestLimit);
         }
         
@@ -635,21 +656,7 @@ async function loadReportData() {
         
         const result = await response.json();
         const rows = Array.isArray(result) ? result : (result.data || []);
-
-        // Merge stats: prefer dedicated aggregation endpoint, fall back to stats bundled
-        // inside the main response (result.stats), never fall back to JS-computed values.
-        if (separateDbStats?.bySensor) {
-            // Dedicated stats endpoint returned authoritative MongoDB aggregation → use it
-            result.stats = separateDbStats;
-        } else if (!result.stats?.bySensor) {
-            // Neither source has per-sensor stats – log a warning so the developer knows
-            console.warn(
-                'No MongoDB aggregation stats available (neither /api/reports/stats nor ' +
-                'result.stats.bySensor). Sensor card values will be computed from fetched ' +
-                'rows only, which may differ from MongoDB totals. ' +
-                'Add a /api/reports/stats endpoint to fix this.'
-            );
-        }
+        periodAlertCount = await fetchPeriodAlertCount({ startDate: rangeStart, endDate: rangeEnd, deviceId });
         
         if ((result.success !== false) && rows) {
             if (!applyRowsToReports(rows, result)) {
@@ -1500,7 +1507,6 @@ function renderSensorCards(data) {
         return;
     }
     
-    // latest reading (for "CURRENT" value only — not used for stats)
     const latest = data[data.length - 1] || {};
     
     Object.entries(SENSORS).forEach(([key, config]) => {
@@ -1510,30 +1516,20 @@ function renderSensorCards(data) {
         //   • cleanSensorValue / deduplication / spike removal alter the dataset
         const values = data.map(d => d[key]).filter(v => v != null && !isNaN(v));
         if (values.length === 0) return;
-
-        // ── FIX: stats ALWAYS come from MongoDB aggregation ──
-        const sensorStats   = reportStatsBySensor?.[key];
-        const hasDbStats    = sensorStats != null;
-
-        const dbMin   = hasDbStats ? Number(sensorStats.min)   : NaN;
-        const dbMax   = hasDbStats ? Number(sensorStats.max)   : NaN;
-        const dbAvg   = hasDbStats ? Number(sensorStats.avg)   : NaN;
-        const dbCount = hasDbStats ? Number(sensorStats.count) : NaN;
-
-        // When no DB stats, compute from local rows as last resort (with visual warning)
+        
         const computedMin = Math.min(...values);
         const computedMax = Math.max(...values);
         const computedAvg = values.reduce((a, b) => a + b, 0) / values.length;
-
-        const min          = Number.isFinite(dbMin)   ? dbMin   : computedMin;
-        const max          = Number.isFinite(dbMax)   ? dbMax   : computedMax;
-        const avg          = Number.isFinite(dbAvg)   ? dbAvg   : computedAvg;
-        // readingCount: use per-sensor DB count; do NOT use reportTotalMatched as it may
-        // represent a different scope than per-sensor aggregation.
-        const readingCount = Number.isFinite(dbCount) && dbCount > 0
-            ? dbCount
-            : values.length;
-
+        const dbMin = reportStatsBySensor?.[key]?.min;
+        const dbMax = reportStatsBySensor?.[key]?.max;
+        const dbAvg = reportStatsBySensor?.[key]?.avg;
+        const dbCount = reportStatsBySensor?.[key]?.count;
+        const min = Number.isFinite(Number(dbMin)) ? Number(dbMin) : computedMin;
+        const max = Number.isFinite(Number(dbMax)) ? Number(dbMax) : computedMax;
+        const avg = Number.isFinite(Number(dbAvg)) ? Number(dbAvg) : computedAvg;
+        const readingCount = Number.isFinite(Number(dbCount)) && Number(dbCount) > 0
+            ? Number(dbCount)
+            : (reportTotalMatched > 0 ? reportTotalMatched : values.length);
         const current = latest[key] != null ? latest[key] : avg;
         
         // Determine status
@@ -1551,11 +1547,7 @@ function renderSensorCards(data) {
             statusClass = 'status-warning';
         }
         
-        const accentColor = statusClass === 'status-critical'
-            ? '#dc2626'
-            : statusClass === 'status-warning'
-                ? '#f97316'
-                : config.color;
+        const accentColor = '#1d4ed8';
 
         // Footer indicator: green check when stats come from DB, orange triangle when estimated
         const footerIcon  = hasDbStats ? 'check-circle'       : 'exclamation-triangle';
@@ -1573,7 +1565,7 @@ function renderSensorCards(data) {
         card.innerHTML = `
             <div class="sensor-header">
                 <div class="sensor-name">
-                    <div class="sensor-icon" style="background: ${config.color}20; color: ${config.color}">
+                    <div class="sensor-icon" style="background: ${accentColor}20; color: ${accentColor}">
                         <i class="${config.icon}"></i>
                     </div>
                     <span class="sensor-title-text">${config.name}</span>
@@ -1606,9 +1598,13 @@ function renderSensorCards(data) {
             </div>
             
             <div class="sensor-footer">
-                <div class="warning-indicator" style="${footerColor}">
-                    <i class="fas fa-${footerIcon}"></i>
-                    ${footerLabel}
+                <div class="warning-indicator warning-zero">
+                    <i class="fas fa-check-circle"></i>
+                    ${readingCount.toLocaleString('en-US')} readings
+                </div>
+                <div class="alert-indicator">
+                    <i class="fas fa-bell"></i>
+                    ${periodAlertCount.toLocaleString('en-US')} alerts
                 </div>
             </div>
         `;

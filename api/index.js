@@ -201,8 +201,9 @@ app.get('/api/health', (req, res) => res.json({
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        const { deviceId } = req.query;
-        const filter = deviceId ? { deviceId } : {};
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
         const dbData = await GeneratorData.findOne(filter).sort({ timestamp: -1 });
         const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
         res.json({ success: true, data: isDbFresh ? dbData : latestData });
@@ -211,7 +212,9 @@ app.get('/api/engine-data/latest', async (req, res) => {
 
 app.get('/api/engine-data/history', async (req, res) => {
     try {
-        const { limit = 1000, hours, startDate, endDate, deviceId } = req.query;
+        const { limit = 1000, hours, startDate, endDate } = req.query;
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
         let query = {};
         if (startDate && endDate) {
             const start = new Date(startDate); start.setHours(0, 0, 0, 0);
@@ -221,7 +224,7 @@ app.get('/api/engine-data/history', async (req, res) => {
             const h = parseInt(hours) || 24;
             query.timestamp = { $gte: new Date(Date.now() - h * 3600000) };
         }
-        if (deviceId) query.deviceId = deviceId;
+        if (effectiveDeviceId) query.deviceId = effectiveDeviceId;
         const data = await GeneratorData.find(query).sort({ timestamp: -1 }).limit(parseInt(limit));
         res.json({ success: true, count: data.length, data });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -241,9 +244,31 @@ app.get('/api/engine-data/stats', async (req, res) => {
 
 app.get('/api/alerts', async (req, res) => {
     try {
-        const { limit = 50 } = req.query;
-        const alerts = await Alert.find().sort({ timestamp: -1 }).limit(parseInt(limit));
+        const { limit = 50, startDate, endDate, deviceId } = req.query;
+        const query = {};
+        if (startDate || endDate) {
+            query.timestamp = {};
+            if (startDate) query.timestamp.$gte = new Date(startDate);
+            if (endDate) query.timestamp.$lte = new Date(endDate);
+        }
+        if (deviceId) query.deviceId = deviceId;
+        const alerts = await Alert.find(query).sort({ timestamp: -1 }).limit(parseInt(limit));
         res.json({ success: true, data: alerts });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/alerts/count', async (req, res) => {
+    try {
+        const { startDate, endDate, deviceId } = req.query;
+        const query = {};
+        if (startDate || endDate) {
+            query.timestamp = {};
+            if (startDate) query.timestamp.$gte = new Date(startDate);
+            if (endDate) query.timestamp.$lte = new Date(endDate);
+        }
+        if (deviceId) query.deviceId = deviceId;
+        const count = await Alert.countDocuments(query);
+        res.json({ success: true, count });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
@@ -429,7 +454,9 @@ app.get('/api/reports', async (req, res) => {
     try {
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
-        const { hours, startDate, endDate, deviceId } = req.query;
+        const { hours, startDate, endDate } = req.query;
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
 
         const normalizeNumeric = (v) => { const p = Number(v); return Number.isFinite(p) ? p : null; };
         const normalizeRow = (row) => {
@@ -455,11 +482,9 @@ app.get('/api/reports', async (req, res) => {
             if (!isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600000);
         }
 
-        // ── FIX: include deviceId in every query so both find() and the
-        //    aggregation pipeline are scoped to a single device — this makes
-        //    the stats match what MongoDB Compass shows when filtering by deviceId.
-        const dbQuery = Object.keys(timeFilter).length ? { timestamp: timeFilter } : {};
-        if (deviceId) dbQuery.deviceId = deviceId;
+        const dbQuery = {};
+        if (Object.keys(timeFilter).length) dbQuery.timestamp = timeFilter;
+        if (effectiveDeviceId) dbQuery.deviceId = effectiveDeviceId;
 
         const reports = await GeneratorData
             .find(dbQuery)
@@ -526,7 +551,8 @@ app.get('/api/reports', async (req, res) => {
             stats: {
                 totalMatched: Number(summary.count) || 0,
                 bySensor
-            }
+            },
+            deviceIdUsed: effectiveDeviceId || null
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
