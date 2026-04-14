@@ -40,6 +40,12 @@ let currentData = [];
 let selectedSensors = ['rpm']; // Default sensor to show
 let activeRange = { start: null, end: null };
 let reportStatsBySensor = null;
+let reportTotalMatched = 0;
+
+function getReportDeviceId() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('deviceId') || localStorage.getItem('reportDeviceId') || '';
+}
 
 // --- 1. CHART MANAGEMENT ---
 function destroyChart() {
@@ -366,10 +372,13 @@ async function fetchWithFallback(primaryUrls, fallbackUrls = []) {
     return fetchFirstAvailable(fallbackUrls);
 }
 
-function buildReportUrls({ startDate, endDate, requestLimit }) {
+function buildReportUrls({ startDate, endDate, requestLimit, deviceId }) {
+    const baseParams = { limit: String(requestLimit) };
+    if (deviceId) baseParams.deviceId = deviceId;
+
     if (startDate && endDate) {
         const params = new URLSearchParams({
-            limit: String(requestLimit),
+            ...baseParams,
             startDate: startDate.toISOString(),
             endDate: endDate.toISOString()
         }).toString();
@@ -380,7 +389,7 @@ function buildReportUrls({ startDate, endDate, requestLimit }) {
         };
     }
 
-    const params = new URLSearchParams({ limit: String(requestLimit), hours: '24' }).toString();
+    const params = new URLSearchParams({ ...baseParams, hours: '24' }).toString();
     return {
         primaryUrls: buildApiCandidates(API_URL, params),
         fallbackUrls: buildApiCandidates('/api/engine-data/history', params)
@@ -413,7 +422,9 @@ function createDemoRows() {
 }
 
 async function fetchLatestSnapshotRows() {
-    const response = await fetchFirstAvailable(buildApiCandidates('/api/engine-data/latest'));
+    const deviceId = getReportDeviceId();
+    const query = deviceId ? new URLSearchParams({ deviceId }).toString() : '';
+    const response = await fetchFirstAvailable(buildApiCandidates('/api/engine-data/latest', query));
     if (!response.ok) {
         throw new Error(`Latest snapshot error: ${response.status}`);
     }
@@ -451,6 +462,7 @@ function renderDataSourceNotice({ source, mode = 'info', message }) {
 function applyRowsToReports(rows, meta = {}) {
     currentData = normalizeReportRows(rows);
     reportStatsBySensor = meta?.stats?.bySensor || null;
+    reportTotalMatched = Number(meta?.stats?.totalMatched) || 0;
 
     if (currentData.length > 0) {
         updateOverview(currentData);
@@ -488,6 +500,8 @@ function applyRowsToReports(rows, meta = {}) {
 async function loadReportData() {
     console.log('Loading report data...');
     reportStatsBySensor = null;
+    reportTotalMatched = 0;
+    const deviceId = getReportDeviceId();
     
     // Show loading state
     const loadingEl = document.getElementById('sensorsLoading');
@@ -530,12 +544,12 @@ async function loadReportData() {
             const rangeDays = Math.max(1, Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)));
             requestLimit = Math.min(100000, Math.max(5000, rangeDays * 2880));
 
-            urls = buildReportUrls({ startDate, endDate, requestLimit });
+            urls = buildReportUrls({ startDate, endDate, requestLimit, deviceId });
             console.log('Fetching with dates:', startDate.toISOString(), 'to', endDate.toISOString(), 'limit:', requestLimit);
         } else {
             // Default to last 24 hours
             requestLimit = 10000;
-            urls = buildReportUrls({ requestLimit });
+            urls = buildReportUrls({ requestLimit, deviceId });
             activeRange.start = null;
             activeRange.end = null;
             console.log('Fetching last 24 hours with limit:', requestLimit);
@@ -1401,18 +1415,26 @@ function renderSensorCards(data) {
         return;
     }
     
-    const latest = data[0] || {};
+    const latest = data[data.length - 1] || {};
     
     Object.entries(SENSORS).forEach(([key, config]) => {
         const values = data.map(d => d[key]).filter(v => v != null && !isNaN(v));
         
         if (values.length === 0) return;
         
-        const min = Math.min(...values);
-        const max = Math.max(...values);
+        const computedMin = Math.min(...values);
+        const computedMax = Math.max(...values);
         const computedAvg = values.reduce((a, b) => a + b, 0) / values.length;
+        const dbMin = reportStatsBySensor?.[key]?.min;
+        const dbMax = reportStatsBySensor?.[key]?.max;
         const dbAvg = reportStatsBySensor?.[key]?.avg;
+        const dbCount = reportStatsBySensor?.[key]?.count;
+        const min = Number.isFinite(Number(dbMin)) ? Number(dbMin) : computedMin;
+        const max = Number.isFinite(Number(dbMax)) ? Number(dbMax) : computedMax;
         const avg = Number.isFinite(Number(dbAvg)) ? Number(dbAvg) : computedAvg;
+        const readingCount = Number.isFinite(Number(dbCount)) && Number(dbCount) > 0
+            ? Number(dbCount)
+            : (reportTotalMatched > 0 ? reportTotalMatched : values.length);
         const current = latest[key] != null ? latest[key] : avg;
         
         // Determine status
@@ -1480,7 +1502,7 @@ function renderSensorCards(data) {
             <div class="sensor-footer">
                 <div class="warning-indicator ${min === 0 ? 'warning-nonzero' : 'warning-zero'}">
                     <i class="fas fa-${min === 0 ? 'exclamation-triangle' : 'check-circle'}"></i>
-                    ${values.length} readings
+                    ${readingCount} readings
                 </div>
             </div>
         `;

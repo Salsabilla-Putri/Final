@@ -201,7 +201,9 @@ app.get('/api/health', (req, res) => res.json({
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        const dbData = await GeneratorData.findOne().sort({ timestamp: -1 });
+        const { deviceId } = req.query;
+        const filter = deviceId ? { deviceId } : {};
+        const dbData = await GeneratorData.findOne(filter).sort({ timestamp: -1 });
         const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
         res.json({ success: true, data: isDbFresh ? dbData : latestData });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -209,7 +211,7 @@ app.get('/api/engine-data/latest', async (req, res) => {
 
 app.get('/api/engine-data/history', async (req, res) => {
     try {
-        const { limit = 1000, hours, startDate, endDate } = req.query;
+        const { limit = 1000, hours, startDate, endDate, deviceId } = req.query;
         let query = {};
         if (startDate && endDate) {
             const start = new Date(startDate); start.setHours(0, 0, 0, 0);
@@ -219,6 +221,7 @@ app.get('/api/engine-data/history', async (req, res) => {
             const h = parseInt(hours) || 24;
             query.timestamp = { $gte: new Date(Date.now() - h * 3600000) };
         }
+        if (deviceId) query.deviceId = deviceId;
         const data = await GeneratorData.find(query).sort({ timestamp: -1 }).limit(parseInt(limit));
         res.json({ success: true, count: data.length, data });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -426,7 +429,7 @@ app.get('/api/reports', async (req, res) => {
     try {
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
-        const { hours, startDate, endDate } = req.query;
+        const { hours, startDate, endDate, deviceId } = req.query;
 
         const normalizeNumeric = (v) => { const p = Number(v); return Number.isFinite(p) ? p : null; };
         const normalizeRow = (row) => {
@@ -466,17 +469,29 @@ app.get('/api/reports', async (req, res) => {
                 $group: {
                     _id: null,
                     count: { $sum: 1 },
+                    rpmCount: { $sum: { $cond: [{ $ne: ['$rpm', null] }, 1, 0] } },
                     rpmAvg: { $avg: '$rpm' }, rpmMin: { $min: '$rpm' }, rpmMax: { $max: '$rpm' },
+                    voltCount: { $sum: { $cond: [{ $ne: ['$volt', null] }, 1, 0] } },
                     voltAvg: { $avg: '$volt' }, voltMin: { $min: '$volt' }, voltMax: { $max: '$volt' },
+                    ampCount: { $sum: { $cond: [{ $ne: ['$amp', null] }, 1, 0] } },
                     ampAvg: { $avg: '$amp' }, ampMin: { $min: '$amp' }, ampMax: { $max: '$amp' },
+                    powerCount: { $sum: { $cond: [{ $ne: ['$power', null] }, 1, 0] } },
                     powerAvg: { $avg: '$power' }, powerMin: { $min: '$power' }, powerMax: { $max: '$power' },
+                    freqCount: { $sum: { $cond: [{ $ne: ['$freq', null] }, 1, 0] } },
                     freqAvg: { $avg: '$freq' }, freqMin: { $min: '$freq' }, freqMax: { $max: '$freq' },
+                    tempCount: { $sum: { $cond: [{ $ne: ['$temp', null] }, 1, 0] } },
                     tempAvg: { $avg: '$temp' }, tempMin: { $min: '$temp' }, tempMax: { $max: '$temp' },
+                    coolantCount: { $sum: { $cond: [{ $ne: ['$coolant', null] }, 1, 0] } },
                     coolantAvg: { $avg: '$coolant' }, coolantMin: { $min: '$coolant' }, coolantMax: { $max: '$coolant' },
+                    fuelCount: { $sum: { $cond: [{ $ne: ['$fuel', null] }, 1, 0] } },
                     fuelAvg: { $avg: '$fuel' }, fuelMin: { $min: '$fuel' }, fuelMax: { $max: '$fuel' },
+                    oilCount: { $sum: { $cond: [{ $ne: ['$oil', null] }, 1, 0] } },
                     oilAvg: { $avg: '$oil' }, oilMin: { $min: '$oil' }, oilMax: { $max: '$oil' },
+                    iatCount: { $sum: { $cond: [{ $ne: ['$iat', null] }, 1, 0] } },
                     iatAvg: { $avg: '$iat' }, iatMin: { $min: '$iat' }, iatMax: { $max: '$iat' },
+                    mapCount: { $sum: { $cond: [{ $ne: ['$map', null] }, 1, 0] } },
                     mapAvg: { $avg: '$map' }, mapMin: { $min: '$map' }, mapMax: { $max: '$map' },
+                    afrCount: { $sum: { $cond: [{ $ne: ['$afr', null] }, 1, 0] } },
                     afrAvg: { $avg: '$afr' }, afrMin: { $min: '$afr' }, afrMax: { $max: '$afr' }
                 }
             }
@@ -492,6 +507,7 @@ app.get('/api/reports', async (req, res) => {
             const max = summary[`${key}Max`];
             if ([avg, min, max].some((v) => Number.isFinite(Number(v)))) {
                 bySensor[key] = {
+                    count: Number(summary[`${key}Count`]) || 0,
                     avg: Number.isFinite(Number(avg)) ? Number(avg) : null,
                     min: Number.isFinite(Number(min)) ? Number(min) : null,
                     max: Number.isFinite(Number(max)) ? Number(max) : null
