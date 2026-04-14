@@ -30,19 +30,8 @@
         <div class="reports-page-container" style="padding: 20px;">
             <section class="reports-hero">
                 <div>
-                    <p class="hero-kicker">Monitoring Summary</p>
-                    <h1 class="hero-heading">Laporan engine tetap terbaca dengan nyaman di HP maupun desktop.</h1>
-                    <p class="hero-text">Pantau ringkasan performa, status data, dan tren sensor dalam layout yang lebih ringkas, rapi, dan mudah dipindai.</p>
-                </div>
-                <div class="hero-badge-grid">
-                    <div class="hero-badge">
-                        <span>Mode</span>
-                        <strong>Responsive</strong>
-                    </div>
-                    <div class="hero-badge">
-                        <span>Fallback</span>
-                        <strong>Auto Recovery</strong>
-                    </div>
+                    <p class="hero-kicker">Reports</p>
+                    <h1 class="hero-heading">Ringkasan aktivitas dan performa engine.</h1>
                 </div>
             </section>
 
@@ -137,7 +126,7 @@
 
                 <div id="chartContainer" class="chart-container">
                     <div class="chart-header">
-                        <div><h3 class="chart-title" id="chartTitle">Sensor Data</h3><div class="chart-description" id="chartDescription">Tren menampilkan nilai rata-rata sesuai rentang waktu.</div></div>
+                        <div><h3 class="chart-title" id="chartTitle">Sensor Data</h3><div class="chart-description" id="chartDescription"></div></div>
                         <div class="chart-actions">
                             <button class="chart-action-btn" id="toggleExport"><i class="fas fa-download"></i> Export</button>
                             <button class="chart-action-btn" id="printChart"><i class="fas fa-print"></i> Print</button>
@@ -163,7 +152,7 @@
                         <h3 class="analysis-title"><i class="fas fa-wave-square"></i> FFT Spectrum Analysis</h3>
                         <button class="chart-action-btn" id="recalculateFft"><i class="fas fa-sync-alt"></i> Recalculate FFT</button>
                     </div>
-                    <div class="analysis-subtitle" id="fftSummary">Select sensor and date range to analyze dominant frequencies.</div>
+                    <div class="analysis-subtitle" id="fftSummary"></div>
                     <div class="fft-chart-wrap">
                         <canvas id="fftChart"></canvas>
                     </div>
