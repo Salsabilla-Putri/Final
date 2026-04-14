@@ -131,45 +131,14 @@ function initDatePickers() {
     }
 }
 
-// --- 4. SENSOR SELECTOR ---
-// Sensors that support FFT analysis (periodic / electrical signals only)
-const FFT_SENSORS = ['rpm', 'volt', 'freq'];
-
-function selectSingleSensor(key) {
-    if (!SENSORS[key]) return;
-    selectedSensors = [key];
-
-    // Update active highlight on all sensor cards
-    document.querySelectorAll('.sensor-card').forEach(card => {
-        card.classList.toggle('active-sensor', card.dataset.sensor === key);
-    });
-
-    // Re-render trend chart for the selected sensor
-    if (currentData.length > 0) {
-        renderChart(currentData);
-        updateChartTitle(
-            document.getElementById('dateFrom')?.value,
-            document.getElementById('dateTo')?.value
-        );
-    }
-
-    // Show/hide & re-render FFT panel depending on sensor type
-    const analysisPanelEl = document.querySelector('.analysis-panel');
-    if (analysisPanelEl) {
-        if (FFT_SENSORS.includes(key)) {
-            analysisPanelEl.style.display = '';
-            if (currentData.length > 0) renderFftAnalysis(currentData);
-        } else {
-            analysisPanelEl.style.display = 'none';
-        }
-    }
-}
-
+// --- 4. SENSOR SELECTOR (legacy chart buttons removed) ---
 function initSensorSelector() {
     // Parameter buttons on chart header intentionally removed by request.
 }
 
-
+function syncSensorSelectorButtons() {
+    // no-op: chart header sensor buttons removed
+}
 
 // --- 5. EVENT LISTENERS ---
 function setupEventListeners() {
@@ -573,17 +542,7 @@ function applyRowsToReports(rows, meta = {}) {
         updateOverview(currentData);
         renderSensorCards(currentData);
         renderChart(currentData);
-
-        // Only render FFT for sensors that support it; hide the panel otherwise.
-        const analysisPanelEl = document.querySelector('.analysis-panel');
-        const activeSensor = selectedSensors[0] || 'rpm';
-        if (analysisPanelEl) {
-            analysisPanelEl.style.display = FFT_SENSORS.includes(activeSensor) ? '' : 'none';
-        }
-        if (FFT_SENSORS.includes(activeSensor)) {
-            renderFftAnalysis(currentData);
-        }
-
+        renderFftAnalysis(currentData);
         updateChartTitle(document.getElementById('dateFrom')?.value, document.getElementById('dateTo')?.value);
 
         if (meta.source === 'demo') {
@@ -651,14 +610,14 @@ async function loadReportData() {
             // query MongoDB Compass saat user memilih tanggal dalam WIB.
             // JANGAN ganti ke Date.UTC: itu akan mengunci ke UTC midnight dan
             // menggeser range 7 jam untuk user WIB.
-            const startDate = new Date(dateFrom.value);
-            startDate.setHours(0, 0, 0, 0);      // → local (WIB) midnight
+            fetchStartDate = new Date(dateFrom.value);
+            fetchStartDate.setHours(0, 0, 0, 0);      // → local (WIB) midnight
 
-            const endDate = new Date(dateTo.value);
-            endDate.setHours(23, 59, 59, 999);    // → local (WIB) end-of-day
+            fetchEndDate = new Date(dateTo.value);
+            fetchEndDate.setHours(23, 59, 59, 999);    // → local (WIB) end-of-day
 
             // Validate date range
-            if (endDate < startDate) {
+            if (fetchEndDate < fetchStartDate) {
                 showError('End date must be after start date');
                 return;
             }
@@ -668,7 +627,7 @@ async function loadReportData() {
             rangeStart = startDate;
             rangeEnd = endDate;
 
-            const rangeDays = Math.max(1, Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)));
+            const rangeDays = Math.max(1, Math.ceil((fetchEndDate - fetchStartDate) / (24 * 60 * 60 * 1000)));
             requestLimit = Math.min(100000, Math.max(5000, rangeDays * 2880));
 
             urls = buildReportUrls({ startDate, endDate, requestLimit, deviceId });
@@ -684,11 +643,11 @@ async function loadReportData() {
             console.log('Fetching last 24 hours with limit:', requestLimit);
         }
         
-        // ── Fetch row data AND MongoDB aggregation stats in parallel ──
+        // ── FIX: Fetch row data AND MongoDB aggregation stats in parallel ──
         console.log('Fetching from:', urls.primaryUrls[0], 'fallback:', urls.fallbackUrls[0]);
         const [response, separateDbStats] = await Promise.all([
             fetchWithFallback(urls.primaryUrls, urls.fallbackUrls),
-            fetchDbStats(rangeStart, rangeEnd, deviceId)
+            fetchDbStats(fetchStartDate, fetchEndDate, deviceId)
         ]);
         
         if (!response.ok) {
@@ -698,16 +657,9 @@ async function loadReportData() {
         const result = await response.json();
         const rows = Array.isArray(result) ? result : (result.data || []);
         periodAlertCount = await fetchPeriodAlertCount({ startDate: rangeStart, endDate: rangeEnd, deviceId });
-
-        // Merge DB aggregation stats (separateDbStats) into the meta so
-        // renderSensorCards always receives the true MongoDB min/max/avg.
-        const metaWithStats = {
-            ...result,
-            stats: separateDbStats || result?.stats || null
-        };
-
+        
         if ((result.success !== false) && rows) {
-            if (!applyRowsToReports(rows, metaWithStats)) {
+            if (!applyRowsToReports(rows, result)) {
                 const snapshot = await fetchLatestSnapshotRows();
                 if (!applyRowsToReports(snapshot.rows, { ...snapshot.result, source: 'memory' })) {
                     renderDataSourceNotice({
@@ -1595,11 +1547,9 @@ function renderSensorCards(data) {
             statusClass = 'status-warning';
         }
         
-        // Use the primary brand colour for every card so all cards are uniform.
-        const accentColor = '#1745a5';
+        const accentColor = '#1d4ed8';
 
         // Footer indicator: green check when stats come from DB, orange triangle when estimated
-        const hasDbStats = !!(reportStatsBySensor && reportStatsBySensor[key]);
         const footerIcon  = hasDbStats ? 'check-circle'       : 'exclamation-triangle';
         const footerColor = hasDbStats ? 'color:#22c55e'      : 'color:#f97316';
         const footerLabel = hasDbStats
