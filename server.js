@@ -270,12 +270,10 @@ app.get('/api/engine-data/history', async (req, res) => {
 
         // Jika ada filter tanggal spesifik dari Frontend
         if (startDate && endDate) {
-            // Set start date ke 00:00:00 dan end date ke 23:59:59
+            // ── FIX: frontend mengirim ISO string UTC (Date.UTC) — cukup parse langsung,
+            //    JANGAN setHours() karena itu mengubah ke local timezone server
             const start = new Date(startDate);
-            start.setHours(0,0,0,0);
-            
-            const end = new Date(endDate);
-            end.setHours(23,59,59,999);
+            const end   = new Date(endDate);
 
             query.timestamp = {
                 $gte: start,
@@ -470,12 +468,52 @@ app.post('/api/reports/analysis', async (req, res) => {
     }
 });
 
+// ── Helper: build MongoDB aggregation stats (bySensor) ──────────────────────
+//  Runs a single $group pipeline over the given query and returns the same
+//  { totalMatched, bySensor } shape expected by the frontend.
+const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','oil','iat','map','afr'];
+
+async function buildSensorStats(collection, matchQuery) {
+    const groupStage = { _id: null, totalMatched: { $sum: 1 } };
+    SENSOR_KEYS_FOR_STATS.forEach((key) => {
+        groupStage[`${key}Count`] = { $sum: { $cond: [{ $ne: [`$${key}`, null] }, 1, 0] } };
+        groupStage[`${key}Avg`]   = { $avg: `$${key}` };
+        groupStage[`${key}Min`]   = { $min: `$${key}` };
+        groupStage[`${key}Max`]   = { $max: `$${key}` };
+    });
+
+    const [summary] = await collection.aggregate([
+        { $match: matchQuery },
+        { $group: groupStage }
+    ]).toArray();
+
+    if (!summary) return { totalMatched: 0, bySensor: {} };
+
+    const bySensor = {};
+    SENSOR_KEYS_FOR_STATS.forEach((key) => {
+        const avg = summary[`${key}Avg`];
+        const min = summary[`${key}Min`];
+        const max = summary[`${key}Max`];
+        if ([avg, min, max].some((v) => Number.isFinite(Number(v)))) {
+            bySensor[key] = {
+                count: Number(summary[`${key}Count`]) || 0,
+                avg:   Number.isFinite(Number(avg)) ? +Number(avg).toFixed(4)  : null,
+                min:   Number.isFinite(Number(min)) ? Number(min) : null,
+                max:   Number.isFinite(Number(max)) ? Number(max) : null
+            };
+        }
+    });
+
+    return { totalMatched: Number(summary.totalMatched) || 0, bySensor };
+}
+
 // API Endpoint untuk mengambil data report dari collection MongoDB yang ditetapkan
 app.get('/api/reports', async (req, res) => {
     try {
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
-        const { hours, startDate, endDate } = req.query;
+        // ── FIX: extract deviceId so both data and stats are filtered per device
+        const { hours, startDate, endDate, deviceId } = req.query;
 
         const normalizeNumeric = (value) => {
             if (value === null || value === undefined || value === '') return null;
@@ -490,26 +528,28 @@ app.get('/api/reports', async (req, res) => {
             return {
                 ...row,
                 timestamp,
-                rpm: normalizeNumeric(row.rpm),
-                volt: normalizeNumeric(row.volt ?? row.voltage),
-                amp: normalizeNumeric(row.amp ?? row.current),
-                power: normalizeNumeric(row.power ?? row.kw ?? row.kW),
-                freq: normalizeNumeric(row.freq ?? row.frequency),
-                temp: normalizeNumeric(row.temp ?? row.temperature),
+                rpm:     normalizeNumeric(row.rpm),
+                volt:    normalizeNumeric(row.volt    ?? row.voltage),
+                amp:     normalizeNumeric(row.amp     ?? row.current),
+                power:   normalizeNumeric(row.power   ?? row.kw ?? row.kW),
+                freq:    normalizeNumeric(row.freq    ?? row.frequency),
+                temp:    normalizeNumeric(row.temp    ?? row.temperature),
                 coolant: normalizeNumeric(row.coolant ?? row.temp ?? row.temperature),
-                fuel: normalizeNumeric(row.fuel),
-                oil: normalizeNumeric(row.oil),
-                iat: normalizeNumeric(row.iat),
-                map: normalizeNumeric(row.map),
-                afr: normalizeNumeric(row.afr),
-                tps: normalizeNumeric(row.tps)
+                fuel:    normalizeNumeric(row.fuel),
+                oil:     normalizeNumeric(row.oil),
+                iat:     normalizeNumeric(row.iat),
+                map:     normalizeNumeric(row.map),
+                afr:     normalizeNumeric(row.afr),
+                tps:     normalizeNumeric(row.tps)
             };
         };
 
+        // ── FIX: parse dates as UTC (not local time) so the range matches
+        //    MongoDB's UTC-stored timestamps exactly
         const timeFilter = {};
         if (startDate && endDate) {
-            const start = new Date(startDate);
-            const end = new Date(endDate);
+            const start = new Date(startDate);   // ISO string from frontend → already UTC
+            const end   = new Date(endDate);
             if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
                 timeFilter.$gte = start;
                 timeFilter.$lte = end;
@@ -521,14 +561,22 @@ app.get('/api/reports', async (req, res) => {
             }
         }
 
+        // ── FIX: always include deviceId when provided
+        const buildMatchQuery = (timestampField = 'timestamp') => {
+            const q = {};
+            if (Object.keys(timeFilter).length) q[timestampField] = timeFilter;
+            if (deviceId) q.deviceId = deviceId;
+            return q;
+        };
+
         const buildFieldCondition = (fieldName) =>
             Object.keys(timeFilter).length ? { [fieldName]: timeFilter } : { [fieldName]: { $exists: true } };
 
         const mergeUniqueRows = (rows) => {
             const seen = new Set();
-            const out = [];
+            const out  = [];
             for (const row of rows) {
-                const ts = row.timestamp || row.createdAt || row.date || row.waktu || '';
+                const ts  = row.timestamp || row.createdAt || row.date || row.waktu || '';
                 const key = `${row._id || ''}|${ts}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
@@ -537,7 +585,10 @@ app.get('/api/reports', async (req, res) => {
             return out;
         };
 
-        let reports = [];
+        let reports     = [];
+        let statsResult = { totalMatched: 0, bySensor: {} };
+        let usedCollection = null;
+
         const candidateCollections = ['reports', 'generatordatas', 'generator_data'];
 
         if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
@@ -548,34 +599,48 @@ app.get('/api/reports', async (req, res) => {
                 if (!existingNames.has(collectionName)) continue;
 
                 const collection = mongoose.connection.db.collection(collectionName);
-                const orConditions = [
+
+                // Build $or with optional deviceId for raw find()
+                const orTimeConditions = [
                     buildFieldCondition('timestamp'),
                     buildFieldCondition('createdAt'),
                     buildFieldCondition('date')
                 ];
+                const findQuery = deviceId
+                    ? { $and: [{ $or: orTimeConditions }, { deviceId }] }
+                    : { $or: orTimeConditions };
 
-                const docs = await collection.find({ $or: orConditions }).limit(limit * 3).toArray();
+                const docs = await collection.find(findQuery).limit(limit * 3).toArray();
                 const merged = mergeUniqueRows(docs)
                     .sort((a, b) => new Date(b.timestamp || b.createdAt || b.date || 0) - new Date(a.timestamp || a.createdAt || a.date || 0))
                     .slice(0, limit);
 
                 if (merged.length) {
                     reports = merged;
+                    usedCollection = collection;
                     break;
                 }
+            }
+
+            // ── Run MongoDB aggregation on the same collection that provided data ──
+            if (usedCollection) {
+                const statsMatch = buildMatchQuery('timestamp');
+                statsResult = await buildSensorStats(usedCollection, statsMatch);
             }
         }
 
         if (!reports.length && isDbReady()) {
-            const orConditions = Object.keys(timeFilter).length
-                ? [{ timestamp: timeFilter }, { createdAt: timeFilter }, { date: timeFilter }]
-                : [];
-
-            const fallbackQuery = orConditions.length ? { $or: orConditions } : {};
+            const fallbackQuery = buildMatchQuery('timestamp');
             reports = await GeneratorData.find(fallbackQuery)
                 .sort({ timestamp: -1, createdAt: -1, date: -1 })
                 .limit(limit)
                 .lean();
+
+            // Run aggregation via Mongoose model as fallback
+            if (reports.length) {
+                const rawCollection = mongoose.connection.db.collection('generatordatas');
+                statsResult = await buildSensorStats(rawCollection, fallbackQuery);
+            }
         }
 
         const normalizedReports = reports
@@ -583,9 +648,75 @@ app.get('/api/reports', async (req, res) => {
             .filter(Boolean)
             .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-        res.json({ success: true, count: normalizedReports.length, data: normalizedReports, source: isDbReady() ? 'database' : 'memory' });
+        res.json({
+            success: true,
+            count:   normalizedReports.length,
+            data:    normalizedReports,
+            // ── FIX: include MongoDB aggregation stats so frontend never needs
+            //    to recompute min/max/avg from a limited/cleaned subset ──
+            stats:   statsResult,
+            source:  isDbReady() ? 'database' : 'memory'
+        });
     } catch (err) {
-        res.json({ success: true, count: 0, data: [], source: 'memory', warning: err.message });
+        res.json({ success: true, count: 0, data: [], stats: { totalMatched: 0, bySensor: {} }, source: 'memory', warning: err.message });
+    }
+});
+
+// ── Dedicated stats-only endpoint (called in parallel by frontend) ──────────
+//  Same aggregation as above but returns only stats — no row data payload.
+//  This ensures the frontend always has authoritative MongoDB stats even when
+//  the main /api/reports response is slow or partially cached.
+app.get('/api/reports/stats', async (req, res) => {
+    try {
+        const { hours, startDate, endDate, deviceId } = req.query;
+
+        const timeFilter = {};
+        if (startDate && endDate) {
+            const start = new Date(startDate);
+            const end   = new Date(endDate);
+            if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+                timeFilter.$gte = start;
+                timeFilter.$lte = end;
+            }
+        } else if (hours) {
+            const h = Number(hours);
+            if (!Number.isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600 * 1000);
+        }
+
+        const matchQuery = {};
+        if (Object.keys(timeFilter).length) matchQuery.timestamp = timeFilter;
+        if (deviceId) matchQuery.deviceId = deviceId;
+
+        if (!isDbReady()) {
+            return res.json({ success: false, error: 'Database not ready' });
+        }
+
+        // Use the same collection-discovery logic so stats always come from the
+        // same collection that /api/reports serves data from.
+        const candidateCollections = ['reports', 'generatordatas', 'generator_data'];
+        const existingCollections  = await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray();
+        const existingNames        = new Set(existingCollections.map((c) => c.name));
+
+        let statsResult = null;
+        for (const collectionName of candidateCollections) {
+            if (!existingNames.has(collectionName)) continue;
+            const collection = mongoose.connection.db.collection(collectionName);
+            // Quick check: does this collection have matching docs?
+            const sample = await collection.findOne(matchQuery);
+            if (!sample) continue;
+            statsResult = await buildSensorStats(collection, matchQuery);
+            break;
+        }
+
+        if (!statsResult) {
+            // Last resort: GeneratorData model
+            const rawCollection = mongoose.connection.db.collection('generatordatas');
+            statsResult = await buildSensorStats(rawCollection, matchQuery);
+        }
+
+        res.json({ success: true, stats: statsResult });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

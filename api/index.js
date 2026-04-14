@@ -455,7 +455,11 @@ app.get('/api/reports', async (req, res) => {
             if (!isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600000);
         }
 
+        // ── FIX: include deviceId in every query so both find() and the
+        //    aggregation pipeline are scoped to a single device — this makes
+        //    the stats match what MongoDB Compass shows when filtering by deviceId.
         const dbQuery = Object.keys(timeFilter).length ? { timestamp: timeFilter } : {};
+        if (deviceId) dbQuery.deviceId = deviceId;
 
         const reports = await GeneratorData
             .find(dbQuery)
