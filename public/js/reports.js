@@ -39,6 +39,13 @@ let fftChart = null;
 let currentData = [];
 let selectedSensors = ['rpm']; // Default sensor to show
 let activeRange = { start: null, end: null };
+let reportStatsBySensor = null;
+let reportTotalMatched = 0;
+
+function getReportDeviceId() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('deviceId') || localStorage.getItem('reportDeviceId') || '';
+}
 
 // --- 1. CHART MANAGEMENT ---
 function destroyChart() {
@@ -365,10 +372,13 @@ async function fetchWithFallback(primaryUrls, fallbackUrls = []) {
     return fetchFirstAvailable(fallbackUrls);
 }
 
-function buildReportUrls({ startDate, endDate, requestLimit }) {
+function buildReportUrls({ startDate, endDate, requestLimit, deviceId }) {
+    const baseParams = { limit: String(requestLimit) };
+    if (deviceId) baseParams.deviceId = deviceId;
+
     if (startDate && endDate) {
         const params = new URLSearchParams({
-            limit: String(requestLimit),
+            ...baseParams,
             startDate: startDate.toISOString(),
             endDate: endDate.toISOString()
         }).toString();
@@ -379,7 +389,7 @@ function buildReportUrls({ startDate, endDate, requestLimit }) {
         };
     }
 
-    const params = new URLSearchParams({ limit: String(requestLimit), hours: '24' }).toString();
+    const params = new URLSearchParams({ ...baseParams, hours: '24' }).toString();
     return {
         primaryUrls: buildApiCandidates(API_URL, params),
         fallbackUrls: buildApiCandidates('/api/engine-data/history', params)
@@ -412,7 +422,9 @@ function createDemoRows() {
 }
 
 async function fetchLatestSnapshotRows() {
-    const response = await fetchFirstAvailable(buildApiCandidates('/api/engine-data/latest'));
+    const deviceId = getReportDeviceId();
+    const query = deviceId ? new URLSearchParams({ deviceId }).toString() : '';
+    const response = await fetchFirstAvailable(buildApiCandidates('/api/engine-data/latest', query));
     if (!response.ok) {
         throw new Error(`Latest snapshot error: ${response.status}`);
     }
@@ -449,6 +461,8 @@ function renderDataSourceNotice({ source, mode = 'info', message }) {
 
 function applyRowsToReports(rows, meta = {}) {
     currentData = normalizeReportRows(rows);
+    reportStatsBySensor = meta?.stats?.bySensor || null;
+    reportTotalMatched = Number(meta?.stats?.totalMatched) || 0;
 
     if (currentData.length > 0) {
         updateOverview(currentData);
@@ -485,6 +499,9 @@ function applyRowsToReports(rows, meta = {}) {
 
 async function loadReportData() {
     console.log('Loading report data...');
+    reportStatsBySensor = null;
+    reportTotalMatched = 0;
+    const deviceId = getReportDeviceId();
     
     // Show loading state
     const loadingEl = document.getElementById('sensorsLoading');
@@ -527,12 +544,12 @@ async function loadReportData() {
             const rangeDays = Math.max(1, Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)));
             requestLimit = Math.min(100000, Math.max(5000, rangeDays * 2880));
 
-            urls = buildReportUrls({ startDate, endDate, requestLimit });
+            urls = buildReportUrls({ startDate, endDate, requestLimit, deviceId });
             console.log('Fetching with dates:', startDate.toISOString(), 'to', endDate.toISOString(), 'limit:', requestLimit);
         } else {
             // Default to last 24 hours
             requestLimit = 10000;
-            urls = buildReportUrls({ requestLimit });
+            urls = buildReportUrls({ requestLimit, deviceId });
             activeRange.start = null;
             activeRange.end = null;
             console.log('Fetching last 24 hours with limit:', requestLimit);
@@ -834,6 +851,162 @@ function destroyFftChart() {
     }
 }
 
+function calculateMedian(values) {
+    if (!Array.isArray(values) || values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+}
+
+function estimateSampleRate(rows) {
+    if (!Array.isArray(rows) || rows.length < 2) return 1;
+    const sorted = [...rows].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const deltas = [];
+    for (let i = 1; i < sorted.length; i++) {
+        const prev = new Date(sorted[i - 1].timestamp).getTime();
+        const curr = new Date(sorted[i].timestamp).getTime();
+        const dtSec = (curr - prev) / 1000;
+        if (Number.isFinite(dtSec) && dtSec > 0) deltas.push(dtSec);
+    }
+    const medianDt = calculateMedian(deltas);
+    return medianDt > 0 ? 1 / medianDt : 1;
+}
+
+function detectFftPeaks(spectrum, maxPeaks = 3) {
+    if (!Array.isArray(spectrum) || spectrum.length < 3) return [];
+    const candidates = [];
+    for (let i = 1; i < spectrum.length - 1; i++) {
+        const left = spectrum[i - 1].amp;
+        const mid = spectrum[i].amp;
+        const right = spectrum[i + 1].amp;
+        if (mid >= left && mid >= right) candidates.push(spectrum[i]);
+    }
+    return candidates
+        .sort((a, b) => b.amp - a.amp)
+        .slice(0, maxPeaks);
+}
+
+function calculateFftLocally(rows, sensorKey) {
+    const prepared = buildAnalysisRows(rows || [], sensorKey);
+    const values = prepared
+        .map((row) => Number(row[sensorKey]))
+        .filter((value) => Number.isFinite(value));
+
+    if (values.length < 16) {
+        return {
+            summary: 'Data belum cukup untuk menghitung FFT (minimal 16 sampel valid).',
+            stats: { count: values.length, mean: 0, trend: 'n/a' },
+            spectrum: [],
+            peaks: []
+        };
+    }
+
+    const sampleRate = estimateSampleRate(prepared);
+    const n = Math.min(values.length, 512);
+    const signal = values.slice(-n);
+    const mean = signal.reduce((a, b) => a + b, 0) / signal.length;
+    const centered = signal.map((v, i) => {
+        const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (signal.length - 1)));
+        return (v - mean) * hann;
+    });
+
+    const half = Math.floor(centered.length / 2);
+    const spectrum = [];
+
+    for (let k = 0; k <= half; k++) {
+        let real = 0;
+        let imag = 0;
+        for (let t = 0; t < centered.length; t++) {
+            const angle = (2 * Math.PI * k * t) / centered.length;
+            real += centered[t] * Math.cos(angle);
+            imag -= centered[t] * Math.sin(angle);
+        }
+        const amp = Math.sqrt(real * real + imag * imag) / centered.length;
+        const freq = (k * sampleRate) / centered.length;
+        spectrum.push({ freq, amp });
+    }
+
+    const significantSpectrum = spectrum.slice(1).filter((p) => p.freq > 0);
+    const peaks = detectFftPeaks(significantSpectrum, 3);
+    const trend = signal[signal.length - 1] > signal[0]
+        ? 'increasing'
+        : signal[signal.length - 1] < signal[0]
+            ? 'decreasing'
+            : 'stable';
+
+    const peakText = peaks.length
+        ? peaks.map((p) => `${p.freq.toFixed(3)} Hz`).join(', ')
+        : 'tidak ada frekuensi dominan';
+
+    return {
+        summary: `FFT lokal dihitung dari ${signal.length} sampel (fs ${sampleRate.toFixed(3)} Hz). Dominan: ${peakText}.`,
+        stats: { count: signal.length, mean, trend },
+        spectrum: significantSpectrum,
+        peaks
+    };
+}
+
+function drawFftResult(result, sensorKey) {
+    const summaryEl = document.getElementById('fftSummary');
+    const insightsEl = document.getElementById('fftInsights');
+    const canvas = document.getElementById('fftChart');
+    if (!canvas || !summaryEl || !insightsEl) return;
+
+    const payload = result?.data || result || {};
+    const stats = payload.stats || {};
+    const peaks = payload.peaks || [];
+    const spectrum = payload.spectrum || [];
+
+    summaryEl.textContent = payload.summary || 'FFT summary unavailable.';
+    insightsEl.innerHTML = '';
+
+    if (stats.count != null) {
+        const statsEl = document.createElement('div');
+        statsEl.className = 'fft-pill';
+        statsEl.innerHTML = `<strong>Stats</strong><br>Count: ${stats.count}<br>Mean: ${(stats.mean ?? 0).toFixed(2)}<br>Trend: ${stats.trend || 'n/a'}`;
+        insightsEl.appendChild(statsEl);
+    }
+
+    peaks.forEach((peak, idx) => {
+        const cycPerMin = (peak.freq || 0) * 60;
+        const el = document.createElement('div');
+        el.className = 'fft-pill';
+        el.innerHTML = `<strong>Peak ${idx + 1}</strong><br>${(peak.freq || 0).toFixed(3)} Hz (${cycPerMin.toFixed(1)} cyc/min)<br>Amp: ${(peak.amp || 0).toFixed(3)}`;
+        insightsEl.appendChild(el);
+    });
+
+    if (!spectrum.length) return;
+
+    const sensor = SENSORS[sensorKey] || { name: sensorKey, color: '#1745a5' };
+    fftChart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: spectrum.map((p) => (p.freq || 0).toFixed(3)),
+            datasets: [{
+                label: `${sensor.name} FFT Amplitude`,
+                data: spectrum.map((p) => p.amp || 0),
+                borderColor: sensor.color || '#1745a5',
+                backgroundColor: hexToRgba(sensor.color || '#1745a5', 0.12),
+                fill: true,
+                pointRadius: 1.5,
+                tension: 0.2,
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: true } },
+            scales: {
+                x: { title: { display: true, text: 'Frequency (Hz)' } },
+                y: { title: { display: true, text: 'Amplitude' } }
+            }
+        }
+    });
+}
+
 async function renderFftAnalysis(data) {
     const summaryEl = document.getElementById('fftSummary');
     const insightsEl = document.getElementById('fftInsights');
@@ -846,18 +1019,15 @@ async function renderFftAnalysis(data) {
     const sensorKey = selectedSensors[0] || 'rpm';
 
     try {
+        const analysisRows = buildAnalysisRows(data || [], sensorKey);
         const response = await fetch('/api/reports/analysis', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rows: buildAnalysisRows(data || [], sensorKey), sensor: sensorKey, maxPoints: 300 })
+            body: JSON.stringify({ rows: analysisRows, sensor: sensorKey, maxPoints: 300 })
         });
 
         if (response.status === 404) {
-            summaryEl.textContent = 'FFT analysis is not available on this server yet.';
-            const el = document.createElement('div');
-            el.className = 'fft-pill';
-            el.textContent = 'Gunakan grafik tren utama sementara endpoint analisis belum tersedia.';
-            insightsEl.appendChild(el);
+            drawFftResult(calculateFftLocally(analysisRows, sensorKey), sensorKey);
             return;
         }
 
@@ -866,65 +1036,14 @@ async function renderFftAnalysis(data) {
         }
 
         const result = await response.json();
-        const payload = result?.data || {};
-        summaryEl.textContent = payload.summary || 'FFT summary unavailable.';
-
-        const stats = payload.stats || {};
-        const peaks = payload.peaks || [];
-        const spectrum = payload.spectrum || [];
-
-        if (stats.count != null) {
-            const statsEl = document.createElement('div');
-            statsEl.className = 'fft-pill';
-            statsEl.innerHTML = `<strong>Stats</strong><br>Count: ${stats.count}<br>Mean: ${(stats.mean ?? 0).toFixed(2)}<br>Trend: ${stats.trend || 'n/a'}`;
-            insightsEl.appendChild(statsEl);
-        }
-
-        peaks.forEach((peak, idx) => {
-            const cycPerMin = (peak.freq || 0) * 60;
-            const el = document.createElement('div');
-            el.className = 'fft-pill';
-            el.innerHTML = `<strong>Peak ${idx + 1}</strong><br>${(peak.freq || 0).toFixed(3)} Hz (${cycPerMin.toFixed(1)} cyc/min)<br>Amp: ${(peak.amp || 0).toFixed(3)}`;
-            insightsEl.appendChild(el);
-        });
-
-        if (!spectrum.length) {
+        if (!result?.data?.spectrum?.length) {
+            drawFftResult(calculateFftLocally(analysisRows, sensorKey), sensorKey);
             return;
         }
-
-        const sensor = SENSORS[sensorKey] || { name: sensorKey, color: '#1745a5' };
-        fftChart = new Chart(canvas.getContext('2d'), {
-            type: 'line',
-            data: {
-                labels: spectrum.map((p) => (p.freq || 0).toFixed(3)),
-                datasets: [{
-                    label: `${sensor.name} FFT Amplitude`,
-                    data: spectrum.map((p) => p.amp || 0),
-                    borderColor: sensor.color || '#1745a5',
-                    backgroundColor: hexToRgba(sensor.color || '#1745a5', 0.12),
-                    fill: true,
-                    pointRadius: 1.5,
-                    tension: 0.2,
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: true } },
-                scales: {
-                    x: { title: { display: true, text: 'Frequency (Hz)' } },
-                    y: { title: { display: true, text: 'Amplitude' } }
-                }
-            }
-        });
+        drawFftResult(result, sensorKey);
     } catch (error) {
         console.error('FFT analysis error:', error);
-        summaryEl.textContent = 'Failed to calculate FFT analysis.';
-        const el = document.createElement('div');
-        el.className = 'fft-pill';
-        el.textContent = error.message;
-        insightsEl.appendChild(el);
+        drawFftResult(calculateFftLocally(data || [], sensorKey), sensorKey);
     }
 }
 
@@ -1296,16 +1415,26 @@ function renderSensorCards(data) {
         return;
     }
     
-    const latest = data[0] || {};
+    const latest = data[data.length - 1] || {};
     
     Object.entries(SENSORS).forEach(([key, config]) => {
         const values = data.map(d => d[key]).filter(v => v != null && !isNaN(v));
         
         if (values.length === 0) return;
         
-        const min = Math.min(...values);
-        const max = Math.max(...values);
-        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+        const computedMin = Math.min(...values);
+        const computedMax = Math.max(...values);
+        const computedAvg = values.reduce((a, b) => a + b, 0) / values.length;
+        const dbMin = reportStatsBySensor?.[key]?.min;
+        const dbMax = reportStatsBySensor?.[key]?.max;
+        const dbAvg = reportStatsBySensor?.[key]?.avg;
+        const dbCount = reportStatsBySensor?.[key]?.count;
+        const min = Number.isFinite(Number(dbMin)) ? Number(dbMin) : computedMin;
+        const max = Number.isFinite(Number(dbMax)) ? Number(dbMax) : computedMax;
+        const avg = Number.isFinite(Number(dbAvg)) ? Number(dbAvg) : computedAvg;
+        const readingCount = Number.isFinite(Number(dbCount)) && Number(dbCount) > 0
+            ? Number(dbCount)
+            : (reportTotalMatched > 0 ? reportTotalMatched : values.length);
         const current = latest[key] != null ? latest[key] : avg;
         
         // Determine status
@@ -1373,7 +1502,7 @@ function renderSensorCards(data) {
             <div class="sensor-footer">
                 <div class="warning-indicator ${min === 0 ? 'warning-nonzero' : 'warning-zero'}">
                     <i class="fas fa-${min === 0 ? 'exclamation-triangle' : 'check-circle'}"></i>
-                    ${values.length} readings
+                    ${readingCount} readings
                 </div>
             </div>
         `;

@@ -201,7 +201,9 @@ app.get('/api/health', (req, res) => res.json({
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        const dbData = await GeneratorData.findOne().sort({ timestamp: -1 });
+        const { deviceId } = req.query;
+        const filter = deviceId ? { deviceId } : {};
+        const dbData = await GeneratorData.findOne(filter).sort({ timestamp: -1 });
         const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
         res.json({ success: true, data: isDbFresh ? dbData : latestData });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -209,7 +211,7 @@ app.get('/api/engine-data/latest', async (req, res) => {
 
 app.get('/api/engine-data/history', async (req, res) => {
     try {
-        const { limit = 1000, hours, startDate, endDate } = req.query;
+        const { limit = 1000, hours, startDate, endDate, deviceId } = req.query;
         let query = {};
         if (startDate && endDate) {
             const start = new Date(startDate); start.setHours(0, 0, 0, 0);
@@ -219,6 +221,7 @@ app.get('/api/engine-data/history', async (req, res) => {
             const h = parseInt(hours) || 24;
             query.timestamp = { $gte: new Date(Date.now() - h * 3600000) };
         }
+        if (deviceId) query.deviceId = deviceId;
         const data = await GeneratorData.find(query).sort({ timestamp: -1 }).limit(parseInt(limit));
         res.json({ success: true, count: data.length, data });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -298,6 +301,74 @@ app.delete('/api/maintenance/:id', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
+function median(values = []) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+}
+
+function estimateSampleRateHz(rows = []) {
+    if (!Array.isArray(rows) || rows.length < 2) return 1;
+    const deltas = [];
+    const sorted = [...rows].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    for (let i = 1; i < sorted.length; i++) {
+        const prev = new Date(sorted[i - 1].timestamp).getTime();
+        const curr = new Date(sorted[i].timestamp).getTime();
+        const dtSec = (curr - prev) / 1000;
+        if (Number.isFinite(dtSec) && dtSec > 0) deltas.push(dtSec);
+    }
+
+    const dt = median(deltas);
+    return dt > 0 ? 1 / dt : 1;
+}
+
+function dft(values = [], sampleRateHz = 1) {
+    const n = Math.min(values.length, 512);
+    if (n < 16) return [];
+
+    const signal = values.slice(values.length - n);
+    const mean = signal.reduce((a, b) => a + b, 0) / signal.length;
+    const centered = signal.map((v, i) => {
+        const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (signal.length - 1)));
+        return (v - mean) * hann;
+    });
+
+    const half = Math.floor(centered.length / 2);
+    const spectrum = [];
+
+    for (let k = 1; k <= half; k++) {
+        let real = 0;
+        let imag = 0;
+        for (let t = 0; t < centered.length; t++) {
+            const angle = (2 * Math.PI * k * t) / centered.length;
+            real += centered[t] * Math.cos(angle);
+            imag -= centered[t] * Math.sin(angle);
+        }
+        const amp = Math.sqrt(real * real + imag * imag) / centered.length;
+        const freq = (k * sampleRateHz) / centered.length;
+        if (Number.isFinite(freq) && Number.isFinite(amp)) {
+            spectrum.push({ freq, amp });
+        }
+    }
+
+    return spectrum;
+}
+
+function findPeaks(spectrum = [], limit = 3) {
+    const peaks = [];
+    for (let i = 1; i < spectrum.length - 1; i++) {
+        const left = spectrum[i - 1].amp;
+        const mid = spectrum[i].amp;
+        const right = spectrum[i + 1].amp;
+        if (mid >= left && mid >= right) peaks.push(spectrum[i]);
+    }
+    return peaks.sort((a, b) => b.amp - a.amp).slice(0, limit);
+}
+
 app.post('/api/reports/analysis', async (req, res) => {
     try {
         const { rows = [], sensor = 'rpm', maxPoints = 300 } = req.body || {};
@@ -312,7 +383,8 @@ app.post('/api/reports/analysis', async (req, res) => {
 
         const step = Math.max(1, Math.floor(values.length / maxPoints));
         const sampled = values.filter((_, i) => i % step === 0).slice(0, maxPoints);
-        const labels = rows.filter((_, i) => i % step === 0).slice(0, maxPoints).map(r => r.timestamp || r.createdAt || '');
+        const sampledRows = rows.filter((_, i) => i % step === 0).slice(0, maxPoints);
+        const labels = sampledRows.map(r => r.timestamp || r.createdAt || '');
 
         const avg = sampled.reduce((a, b) => a + b, 0) / sampled.length;
         const min = Math.min(...sampled);
@@ -324,7 +396,30 @@ app.post('/api/reports/analysis', async (req, res) => {
         const diff = secondHalf - firstHalf;
         const trend = Math.abs(diff) < avg * 0.03 ? 'stable' : diff > 0 ? 'increasing' : 'decreasing';
 
-        res.json({ success: true, data: { ok: true, values: sampled, labels, avg: +avg.toFixed(2), min, max, trend, count: sampled.length } });
+        const sampleRateHz = estimateSampleRateHz(sampledRows);
+        const spectrum = dft(sampled, sampleRateHz);
+        const peaks = findPeaks(spectrum, 3);
+        const peakLabel = peaks.length
+            ? peaks.map((p) => `${p.freq.toFixed(3)} Hz`).join(', ')
+            : 'tidak ditemukan puncak dominan';
+
+        res.json({
+            success: true,
+            data: {
+                ok: true,
+                values: sampled,
+                labels,
+                avg: +avg.toFixed(2),
+                min,
+                max,
+                trend,
+                count: sampled.length,
+                stats: { count: sampled.length, mean: +avg.toFixed(2), trend, min, max },
+                spectrum,
+                peaks,
+                summary: `FFT dihitung dari ${sampled.length} sampel (fs ${sampleRateHz.toFixed(3)} Hz). Frekuensi dominan: ${peakLabel}.`
+            }
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -334,7 +429,7 @@ app.get('/api/reports', async (req, res) => {
     try {
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
-        const { hours, startDate, endDate } = req.query;
+        const { hours, startDate, endDate, deviceId } = req.query;
 
         const normalizeNumeric = (v) => { const p = Number(v); return Number.isFinite(p) ? p : null; };
         const normalizeRow = (row) => {
@@ -360,12 +455,77 @@ app.get('/api/reports', async (req, res) => {
             if (!isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600000);
         }
 
+        const dbQuery = {};
+        if (Object.keys(timeFilter).length) dbQuery.timestamp = timeFilter;
+        if (deviceId) dbQuery.deviceId = deviceId;
+
         const reports = await GeneratorData
-            .find(Object.keys(timeFilter).length ? { timestamp: timeFilter } : {})
+            .find(dbQuery)
             .sort({ timestamp: -1 }).limit(limit).lean();
 
         const normalized = reports.map(normalizeRow).filter(Boolean);
-        res.json({ success: true, count: normalized.length, data: normalized });
+
+        const summaryPipeline = [
+            { $match: dbQuery },
+            {
+                $group: {
+                    _id: null,
+                    count: { $sum: 1 },
+                    rpmCount: { $sum: { $cond: [{ $ne: ['$rpm', null] }, 1, 0] } },
+                    rpmAvg: { $avg: '$rpm' }, rpmMin: { $min: '$rpm' }, rpmMax: { $max: '$rpm' },
+                    voltCount: { $sum: { $cond: [{ $ne: ['$volt', null] }, 1, 0] } },
+                    voltAvg: { $avg: '$volt' }, voltMin: { $min: '$volt' }, voltMax: { $max: '$volt' },
+                    ampCount: { $sum: { $cond: [{ $ne: ['$amp', null] }, 1, 0] } },
+                    ampAvg: { $avg: '$amp' }, ampMin: { $min: '$amp' }, ampMax: { $max: '$amp' },
+                    powerCount: { $sum: { $cond: [{ $ne: ['$power', null] }, 1, 0] } },
+                    powerAvg: { $avg: '$power' }, powerMin: { $min: '$power' }, powerMax: { $max: '$power' },
+                    freqCount: { $sum: { $cond: [{ $ne: ['$freq', null] }, 1, 0] } },
+                    freqAvg: { $avg: '$freq' }, freqMin: { $min: '$freq' }, freqMax: { $max: '$freq' },
+                    tempCount: { $sum: { $cond: [{ $ne: ['$temp', null] }, 1, 0] } },
+                    tempAvg: { $avg: '$temp' }, tempMin: { $min: '$temp' }, tempMax: { $max: '$temp' },
+                    coolantCount: { $sum: { $cond: [{ $ne: ['$coolant', null] }, 1, 0] } },
+                    coolantAvg: { $avg: '$coolant' }, coolantMin: { $min: '$coolant' }, coolantMax: { $max: '$coolant' },
+                    fuelCount: { $sum: { $cond: [{ $ne: ['$fuel', null] }, 1, 0] } },
+                    fuelAvg: { $avg: '$fuel' }, fuelMin: { $min: '$fuel' }, fuelMax: { $max: '$fuel' },
+                    oilCount: { $sum: { $cond: [{ $ne: ['$oil', null] }, 1, 0] } },
+                    oilAvg: { $avg: '$oil' }, oilMin: { $min: '$oil' }, oilMax: { $max: '$oil' },
+                    iatCount: { $sum: { $cond: [{ $ne: ['$iat', null] }, 1, 0] } },
+                    iatAvg: { $avg: '$iat' }, iatMin: { $min: '$iat' }, iatMax: { $max: '$iat' },
+                    mapCount: { $sum: { $cond: [{ $ne: ['$map', null] }, 1, 0] } },
+                    mapAvg: { $avg: '$map' }, mapMin: { $min: '$map' }, mapMax: { $max: '$map' },
+                    afrCount: { $sum: { $cond: [{ $ne: ['$afr', null] }, 1, 0] } },
+                    afrAvg: { $avg: '$afr' }, afrMin: { $min: '$afr' }, afrMax: { $max: '$afr' }
+                }
+            }
+        ];
+
+        const summary = (await GeneratorData.aggregate(summaryPipeline))[0] || {};
+        const sensorKeys = ['rpm','volt','amp','power','freq','temp','coolant','fuel','oil','iat','map','afr'];
+        const bySensor = {};
+
+        sensorKeys.forEach((key) => {
+            const avg = summary[`${key}Avg`];
+            const min = summary[`${key}Min`];
+            const max = summary[`${key}Max`];
+            if ([avg, min, max].some((v) => Number.isFinite(Number(v)))) {
+                bySensor[key] = {
+                    count: Number(summary[`${key}Count`]) || 0,
+                    avg: Number.isFinite(Number(avg)) ? Number(avg) : null,
+                    min: Number.isFinite(Number(min)) ? Number(min) : null,
+                    max: Number.isFinite(Number(max)) ? Number(max) : null
+                };
+            }
+        });
+
+        res.json({
+            success: true,
+            count: normalized.length,
+            data: normalized,
+            stats: {
+                totalMatched: Number(summary.count) || 0,
+                bySensor
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
