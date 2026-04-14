@@ -455,9 +455,7 @@ app.get('/api/reports', async (req, res) => {
             if (!isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600000);
         }
 
-        const dbQuery = {};
-        if (Object.keys(timeFilter).length) dbQuery.timestamp = timeFilter;
-        if (deviceId) dbQuery.deviceId = deviceId;
+        const dbQuery = Object.keys(timeFilter).length ? { timestamp: timeFilter } : {};
 
         const reports = await GeneratorData
             .find(dbQuery)
