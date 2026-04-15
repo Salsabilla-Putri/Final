@@ -1,65 +1,352 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="utf-8" />
+  <title>Gen-Track — Status Listrik</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Public Generator Dashboard</title>
   <script src="js/auth-guard.js"></script>
-  <link rel="stylesheet" href="css/public-view.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/public-view.css">
 </head>
 <body>
-  <main class="container">
-    <header class="header">
-      <div>
-        <h1>Generator Public Dashboard</h1>
-        <p>Simple real-time status for all users</p>
+
+  <!-- ── SIDEBAR ── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon"><i class="fas fa-bolt"></i></div>
+      <div class="brand-text">
+        <span class="brand-name">Gen-Track</span>
+        <span class="brand-role">Mode Masyarakat</span>
       </div>
-      <button id="refreshBtn" type="button">Refresh</button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#heroSection" class="nav-link active">
+        <i class="fas fa-house-chimney"></i>
+        <span>Beranda</span>
+      </a>
+      <a href="#metricsSection" class="nav-link">
+        <i class="fas fa-gauge-high"></i>
+        <span>Kondisi Listrik</span>
+      </a>
+      <a href="#costSection" class="nav-link">
+        <i class="fas fa-receipt"></i>
+        <span>Estimasi Tagihan</span>
+      </a>
+      <a href="#healthSection" class="nav-link">
+        <i class="fas fa-shield-check"></i>
+        <span>Status Sistem</span>
+      </a>
+      <a href="#infoSection" class="nav-link">
+        <i class="fas fa-circle-info"></i>
+        <span>Panduan</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-pill">
+        <div class="user-avatar" id="sidebarAvatar">U</div>
+        <span id="sidebarName">Pengguna</span>
+      </div>
+      <button id="logoutPublic" class="logout-btn" title="Keluar">
+        <i class="fas fa-arrow-right-from-bracket"></i>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── OVERLAY ── -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- ── MAIN ── -->
+  <main class="main-content">
+
+    <!-- Top Bar -->
+    <header class="topbar">
+      <button class="menu-btn" id="menuBtn" aria-label="Buka menu">
+        <i class="fas fa-bars"></i>
+      </button>
+      <div class="topbar-title">
+        <i class="fas fa-bolt"></i> Status Listrik
+      </div>
+      <div class="topbar-actions">
+        <div class="live-indicator" id="liveIndicator">
+          <span class="live-dot"></span>
+          <span class="live-label">LIVE</span>
+        </div>
+        <button class="refresh-btn" id="refreshPublic" title="Perbarui data">
+          <i class="fas fa-rotate" id="refreshIcon"></i>
+        </button>
+      </div>
     </header>
 
-    <section id="loading" class="state">Loading latest generator status...</section>
-    <section id="error" class="state error hidden"></section>
-
-    <section id="content" class="hidden">
-      <div class="cards">
-        <article class="card">
-          <h2>Power Status</h2>
-          <p id="powerStatus">-</p>
-        </article>
-        <article class="card">
-          <h2>Generator Condition</h2>
-          <p id="generatorCondition">-</p>
-        </article>
-        <article class="card">
-          <h2>Fuel Status</h2>
-          <p id="fuelStatus">-</p>
-        </article>
-        <article class="card">
-          <h2>Engine Activity</h2>
-          <p id="engineActivity">-</p>
-        </article>
+    <!-- ── HERO: POWER SOURCE ── -->
+    <section class="hero-section" id="heroSection">
+      <div class="power-source-badge" id="powerSourceBadge">
+        <div class="psb-icon" id="psbIcon"><i class="fas fa-plug"></i></div>
+        <div class="psb-content">
+          <div class="psb-label">Sumber Listrik Aktif</div>
+          <div class="psb-value" id="powerSourceName">Memuat...</div>
+        </div>
+        <div class="psb-pulse" id="psbPulse"></div>
       </div>
 
-      <div class="summary">
-        <div>
-          <span>Estimated daily usage</span>
-          <strong id="dailyUsage">0 kWh</strong>
+      <div class="hero-grid">
+        <div class="hero-stat">
+          <span class="hs-label">Status Generator</span>
+          <span class="hs-value" id="heroGenState">--</span>
         </div>
-        <div>
-          <span>Estimated daily cost</span>
-          <strong id="estimatedCost">Rp 0</strong>
+        <div class="hero-stat">
+          <span class="hs-label">Status PLN</span>
+          <span class="hs-value" id="heroPLNState">--</span>
         </div>
-        <div>
-          <span>Last updated</span>
-          <strong id="lastUpdated">-</strong>
+        <div class="hero-stat">
+          <span class="hs-label">Kondisi Sistem</span>
+          <span class="hs-value" id="heroSysHealth">--</span>
         </div>
       </div>
 
-      <section>
-        <h2>Alerts</h2>
-        <div id="alerts" class="alerts"></div>
-      </section>
+      <div class="power-flow" id="powerFlow">
+        <div class="pf-node pf-source" id="pfSource">
+          <i class="fas fa-plug"></i>
+          <span id="pfSourceLabel">PLN</span>
+        </div>
+        <div class="pf-track">
+          <div class="pf-dots" id="pfDots">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <div class="pf-node pf-home">
+          <i class="fas fa-house"></i>
+          <span>Rumah</span>
+        </div>
+      </div>
     </section>
+
+    <!-- ── METRICS GRID ── -->
+    <section class="section" id="metricsSection">
+      <h2 class="section-title"><i class="fas fa-gauge-high"></i> Kondisi Listrik Saat Ini</h2>
+      <div class="metrics-grid">
+
+        <div class="metric-card" id="voltageCard">
+          <div class="mc-header">
+            <div class="mc-icon mc-icon--blue"><i class="fas fa-bolt-lightning"></i></div>
+            <span class="mc-label">Tegangan</span>
+          </div>
+          <div class="mc-value"><span id="metricVolt">--</span><span class="mc-unit">V</span></div>
+          <div class="mc-bar-wrap"><div class="mc-bar" id="voltBar"></div></div>
+          <div class="mc-note" id="voltNote">Standar rumah tangga: 198–242 V</div>
+        </div>
+
+        <div class="metric-card" id="freqCard">
+          <div class="mc-header">
+            <div class="mc-icon mc-icon--teal"><i class="fas fa-wave-square"></i></div>
+            <span class="mc-label">Frekuensi</span>
+          </div>
+          <div class="mc-value"><span id="metricFreq">--</span><span class="mc-unit">Hz</span></div>
+          <div class="mc-bar-wrap"><div class="mc-bar" id="freqBar"></div></div>
+          <div class="mc-note" id="freqNote">Standar PLN: 49.5–50.5 Hz</div>
+        </div>
+
+        <div class="metric-card" id="currentCard">
+          <div class="mc-header">
+            <div class="mc-icon mc-icon--amber"><i class="fas fa-arrow-right-arrow-left"></i></div>
+            <span class="mc-label">Arus Listrik</span>
+          </div>
+          <div class="mc-value"><span id="metricCurrent">--</span><span class="mc-unit">A</span></div>
+          <div class="mc-bar-wrap"><div class="mc-bar" id="currentBar"></div></div>
+          <div class="mc-note" id="currentNote">Beban penggunaan saat ini</div>
+        </div>
+
+        <div class="metric-card" id="powerCard">
+          <div class="mc-header">
+            <div class="mc-icon mc-icon--green"><i class="fas fa-plug-circle-bolt"></i></div>
+            <span class="mc-label">Daya Aktif</span>
+          </div>
+          <div class="mc-value"><span id="metricPower">--</span><span class="mc-unit">kW</span></div>
+          <div class="mc-bar-wrap"><div class="mc-bar" id="powerBar"></div></div>
+          <div class="mc-note" id="powerNote">Konsumsi daya real-time</div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── COST + FUEL ── -->
+    <section class="section two-col-section" id="costSection">
+
+      <div class="panel cost-panel">
+        <div class="panel-header">
+          <div class="panel-icon panel-icon--amber"><i class="fas fa-receipt"></i></div>
+          <div>
+            <h3>Estimasi Tagihan Hari Ini</h3>
+            <p>Perkiraan biaya listrik berdasarkan pemakaian</p>
+          </div>
+        </div>
+        <div class="cost-display">
+          <div class="cost-main">
+            <span class="cost-currency">Rp</span>
+            <span class="cost-amount" id="costAmount">0</span>
+          </div>
+          <div class="cost-sub">
+            <span id="costKwh">0.00 kWh</span> digunakan hari ini
+          </div>
+        </div>
+        <div class="cost-breakdown">
+          <div class="cb-row">
+            <span>Tarif listrik</span>
+            <strong id="costTariff">Rp 1.699/kWh</strong>
+          </div>
+          <div class="cb-row">
+            <span>Pemakaian sejak pukul 00:00</span>
+            <strong id="costHours">-- jam</strong>
+          </div>
+        </div>
+        <div class="cost-note">
+          <i class="fas fa-circle-info"></i>
+          Estimasi berdasarkan tarif R-1/TR golongan 1.300 VA
+        </div>
+      </div>
+
+      <div class="panel fuel-panel">
+        <div class="panel-header">
+          <div class="panel-icon panel-icon--red"><i class="fas fa-gas-pump"></i></div>
+          <div>
+            <h3>Bahan Bakar Generator</h3>
+            <p>Sisa bahan bakar dan estimasi operasi</p>
+          </div>
+        </div>
+
+        <div class="fuel-gauge-wrap">
+          <div class="fuel-gauge">
+            <div class="fuel-fill" id="fuelFill"></div>
+            <div class="fuel-label" id="fuelPct">--%</div>
+          </div>
+          <div class="fuel-ticks">
+            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+          </div>
+        </div>
+
+        <div class="fuel-stats">
+          <div class="fs-item">
+            <i class="fas fa-clock"></i>
+            <div>
+              <span class="fs-label">Estimasi Operasi</span>
+              <strong id="fuelRuntime">-- jam</strong>
+            </div>
+          </div>
+          <div class="fs-item">
+            <i class="fas fa-temperature-half"></i>
+            <div>
+              <span class="fs-label">Suhu Mesin</span>
+              <strong id="engineTemp">-- °C</strong>
+            </div>
+          </div>
+          <div class="fs-item">
+            <i class="fas fa-oil-can"></i>
+            <div>
+              <span class="fs-label">Tekanan Oli</span>
+              <strong id="oilPressure">-- kPa</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── SYSTEM HEALTH ── -->
+    <section class="section" id="healthSection">
+      <h2 class="section-title"><i class="fas fa-shield-check"></i> Status Kesehatan Sistem</h2>
+      <div class="health-grid">
+
+        <div class="health-item" id="hPLN">
+          <div class="hi-left">
+            <div class="hi-dot" id="hPLNDot"></div>
+            <div>
+              <div class="hi-title">Jaringan PLN</div>
+              <div class="hi-desc" id="hPLNDesc">Memeriksa...</div>
+            </div>
+          </div>
+          <div class="hi-badge" id="hPLNBadge">--</div>
+        </div>
+
+        <div class="health-item" id="hGen">
+          <div class="hi-left">
+            <div class="hi-dot" id="hGenDot"></div>
+            <div>
+              <div class="hi-title">Mesin Generator</div>
+              <div class="hi-desc" id="hGenDesc">Memeriksa...</div>
+            </div>
+          </div>
+          <div class="hi-badge" id="hGenBadge">--</div>
+        </div>
+
+        <div class="health-item" id="hSync">
+          <div class="hi-left">
+            <div class="hi-dot" id="hSyncDot"></div>
+            <div>
+              <div class="hi-title">Sinkronisasi Grid</div>
+              <div class="hi-desc" id="hSyncDesc">Memeriksa...</div>
+            </div>
+          </div>
+          <div class="hi-badge" id="hSyncBadge">--</div>
+        </div>
+
+        <div class="health-item" id="hAuto">
+          <div class="hi-left">
+            <div class="hi-dot" id="hAutoDot"></div>
+            <div>
+              <div class="hi-title">Kendali Otomatis</div>
+              <div class="hi-desc" id="hAutoDesc">Memeriksa...</div>
+            </div>
+          </div>
+          <div class="hi-badge" id="hAutoBadge">--</div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── INFO + TIPS ── -->
+    <section class="section" id="infoSection">
+      <div class="info-two-col">
+
+        <div class="panel message-panel">
+          <div class="panel-header">
+            <div class="panel-icon panel-icon--blue"><i class="fas fa-bullhorn"></i></div>
+            <div>
+              <h3>Informasi untuk Anda</h3>
+              <p>Pesan status terkini dari sistem</p>
+            </div>
+          </div>
+          <div class="message-box" id="publicMessageBox">
+            <p id="publicMessage">Mengambil informasi terbaru...</p>
+          </div>
+        </div>
+
+        <div class="panel tips-panel">
+          <div class="panel-header">
+            <div class="panel-icon panel-icon--green"><i class="fas fa-list-check"></i></div>
+            <div>
+              <h3>Yang Perlu Anda Lakukan</h3>
+              <p>Saran berdasarkan kondisi saat ini</p>
+            </div>
+          </div>
+          <ul class="tips-list" id="publicTips">
+            <li><i class="fas fa-spinner fa-spin"></i> Memuat saran...</li>
+          </ul>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="page-footer">
+      <span id="lastUpdate"><i class="fas fa-clock"></i> Belum diperbarui</span>
+      <span class="footer-sep">·</span>
+      <span>Sistem pembaruan otomatis setiap 10 detik</span>
+    </footer>
+
   </main>
 
   <script src="js/public-view.js"></script>
