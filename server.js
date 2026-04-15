@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 require('dotenv').config();
+const { transformPublicStatus } = require('./public_status');
 
 mongoose.set('bufferCommands', false);
 
@@ -259,6 +260,33 @@ app.get('/api/engine-data/latest', async (req, res) => {
         res.json({ success: true, data: isDbFresh ? dbData : latestData, source: isDbFresh ? 'database' : 'memory' });
     } catch (error) {
         res.json({ success: true, data: latestData, source: 'memory', warning: error.message });
+    }
+});
+
+app.get('/api/public-status', async (req, res) => {
+    try {
+        if (!isDbReady()) {
+            return res.status(503).json({ success: false, error: 'Database not ready' });
+        }
+
+        const { deviceId } = req.query;
+        const query = deviceId ? { deviceId } : {};
+
+        const latestDocs = await GeneratorData.find(query)
+            .sort({ timestamp: -1 })
+            .limit(2)
+            .lean();
+
+        if (!latestDocs.length) {
+            return res.status(404).json({ success: false, error: 'No generator data found' });
+        }
+
+        const [latestDoc, previousDoc] = latestDocs;
+        const payload = transformPublicStatus(latestDoc, previousDoc || null);
+
+        res.json({ success: true, data: payload });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 

@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const mqtt = require('mqtt');
 const cors = require('cors');
+const { transformPublicStatus } = require('../public_status');
 
 const app = express();
 
@@ -208,6 +209,30 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
         res.json({ success: true, data: isDbFresh ? dbData : latestData });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/public-status', async (req, res) => {
+    try {
+        const { deviceId } = req.query;
+        const effectiveDeviceId = deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const query = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
+
+        const latestDocs = await GeneratorData.find(query)
+            .sort({ timestamp: -1 })
+            .limit(2)
+            .lean();
+
+        if (!latestDocs.length) {
+            return res.status(404).json({ success: false, error: 'No generator data found' });
+        }
+
+        const [latestDoc, previousDoc] = latestDocs;
+        const payload = transformPublicStatus(latestDoc, previousDoc || null);
+
+        res.json({ success: true, data: payload });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 app.get('/api/engine-data/history', async (req, res) => {
