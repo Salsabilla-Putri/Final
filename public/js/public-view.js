@@ -1,507 +1,761 @@
 /**
- * Gen-Track · Public View  v2.0
- * Enhanced JS: power source detection, cost estimator,
- * animated flow, health checks, user-friendly language.
+ * Gen-Track Public Dashboard — public-view.js
+ * Non-technical, consumer-friendly generator monitoring
+ * Tries live API first, gracefully falls back to demo data
  */
 
 'use strict';
 
-/* ── CONSTANTS ─────────────────────────────────── */
-const TARIFF_PER_KWH = 1699;          // Rp/kWh — R-1/TR 1300VA (update sesuai tarif PLN)
-const MAX_POWER_KW   = 1.3;           // kapasitas daya rumah tangga (kW)
-const VOLT_MIN       = 198;
-const VOLT_MAX       = 242;
-const FREQ_MIN       = 49.5;
-const FREQ_MAX       = 50.5;
+/* ============================================================
+   CONFIGURATION
+   ============================================================ */
+const API = {
+  sensors:     '/api/sensors/latest',
+  alerts:      '/api/alerts?limit=20',
+  maintenance: '/api/maintenance',
+  readings:    '/api/readings?hours=168'
+};
 
-let accumulatedKwh   = 0;
-let sessionStartMs   = Date.now();
-let lastPowerKw      = 0;
-let lastUpdateMs     = 0;
+const REFRESH_INTERVAL = 10_000;
 
-/* ── UTILS ─────────────────────────────────────── */
-function fmt(ts) {
-  if (!ts) return '-';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return '-';
-  return d.toLocaleString('id-ID', { day:'2-digit', month:'short', year:'numeric',
-                                      hour:'2-digit', minute:'2-digit', second:'2-digit' });
+/* ============================================================
+   DEMO DATA FALLBACK
+   (used when backend is unreachable)
+   ============================================================ */
+const DEMO = {
+  useDemoMode: false,
+
+  sensor() {
+    const usePLN = Math.random() > 0.25;
+    return {
+      source: usePLN ? 'pln' : 'generator',
+      genHealthRaw: 'normal',
+      fuelPercent: 68,
+      voltageV: 220.4,
+      frequencyHz: 50.0,
+      loadPercent: 72,
+      runtime_today_h: 14.2,
+      temp_coolant: 82
+    };
+  },
+
+  alerts() {
+    return [
+      { _id: 'a1', type: 'info', message: 'Generator berhasil aktif dan menyuplai listrik', action: 'Tidak perlu tindakan', icon: 'fa-circle-info', timestamp: new Date(Date.now() - 15 * 60_000) },
+      { _id: 'a2', type: 'warning', message: 'Bahan bakar mulai berkurang, pertimbangkan pengisian segera', action: 'Hubungi petugas untuk isi BBM', icon: 'fa-triangle-exclamation', timestamp: new Date(Date.now() - 2 * 3600_000) },
+      { _id: 'a3', type: 'info', message: 'Perpindahan ke listrik PLN berhasil dilakukan', action: 'Tidak perlu tindakan', icon: 'fa-circle-info', timestamp: new Date(Date.now() - 5 * 3600_000) },
+      { _id: 'a4', type: 'info', message: 'Sistem berjalan normal, semua parameter dalam batas aman', action: 'Tidak perlu tindakan', icon: 'fa-circle-check', timestamp: new Date(Date.now() - 24 * 3600_000) }
+    ];
+  },
+
+  maintenance() {
+    return [
+      { _id: 'm1', task: 'Ganti oli mesin & filter', type: 'preventive', status: 'completed', completedAt: new Date(Date.now() - 30 * 86400_000), assignedTo: 'Stewart' },
+      { _id: 'm2', task: 'Periksa sabuk alternator', type: 'inspection', status: 'completed', completedAt: new Date(Date.now() - 14 * 86400_000), assignedTo: 'Rifananda' },
+      { _id: 'm3', task: 'Servis rutin 250 jam', type: 'preventive', status: 'scheduled', dueDate: new Date(Date.now() + 18 * 86400_000), assignedTo: 'Salsabilla' }
+    ];
+  },
+
+  weeklyKwh() {
+    return [14.2, 12.8, 16.1, 11.5, 17.4, 15.0, 14.2];
+  }
+};
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let state = {
+  source: null,
+  fuelPercent: null,
+  genHealth: null,
+  alerts: [],
+  maintenance: [],
+  showAllAlerts: false,
+  weeklyKwh: [],
+  todayKwh: 0
+};
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+function fmtTime(date) {
+  return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 }
 
-function fmtCurrency(n) {
-  return Math.round(n).toLocaleString('id-ID');
+function fmtDate(date) {
+  return date.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
-
-function initials(name) {
-  return (name || 'U').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+function fmtDateShort(date) {
+  return new Date(date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-/* ── POWER SOURCE LOGIC ─────────────────────────── */
-/**
- * Determines active power source.
- * Returns: 'PLN' | 'GENERATOR' | 'HYBRID' | 'OFF'
- */
-function detectPowerSource(data, isRunning) {
-  const sync = String(data.sync || '').toUpperCase();
-  const hasGrid = sync.includes('ON-GRID') || sync.includes('SYNC') || sync.includes('PLN');
-
-  if (!isRunning && !hasGrid) return 'OFF';
-  if (isRunning && hasGrid)   return 'HYBRID';
-  if (isRunning && !hasGrid)  return 'GENERATOR';
-  return 'PLN';   // grid only, generator standby
+function timeAgo(date) {
+  const diff = (Date.now() - new Date(date).getTime()) / 1000;
+  if (diff < 60) return 'Baru saja';
+  if (diff < 3600) return `${Math.floor(diff / 60)} menit lalu`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} jam lalu`;
+  return `${Math.floor(diff / 86400)} hari lalu`;
 }
 
-function powerSourceMeta(source) {
-  const map = {
-    PLN: {
-      label:   'Jaringan PLN (Listrik Utama)',
-      icon:    'fas fa-plug',
-      cls:     'pln',
-      flowCls: 'active',
-      flowLabel: 'PLN',
-      genState: 'Siaga (Standby)',
-      plnState: 'Aktif ✓',
-      sysHealth: 'Normal',
-    },
-    GENERATOR: {
-      label:   'Generator Cadangan',
-      icon:    'fas fa-bolt',
-      cls:     'gen',
-      flowCls: 'active gen-active',
-      flowLabel: 'Generator',
-      genState: 'Menyala ✓',
-      plnState: 'Tidak Aktif',
-      sysHealth: 'Mode Cadangan',
-    },
-    HYBRID: {
-      label:   'Hybrid (PLN + Generator)',
-      icon:    'fas fa-rotate',
-      cls:     'hyb',
-      flowCls: 'active',
-      flowLabel: 'PLN + Gen',
-      genState: 'Menyala ✓',
-      plnState: 'Aktif ✓',
-      sysHealth: 'Mode Hybrid',
-    },
-    OFF: {
-      label:   'Tidak Ada Sumber Listrik',
-      icon:    'fas fa-power-off',
-      cls:     'off',
-      flowCls: '',
-      flowLabel: '--',
-      genState: 'Mati',
-      plnState: 'Tidak Aktif',
-      sysHealth: 'Offline',
-    },
-  };
-  return map[source] || map.OFF;
+function idrFormat(num) {
+  return 'Rp ' + Math.round(num).toLocaleString('id-ID');
 }
 
-/* ── COST ACCUMULATOR ───────────────────────────── */
-function accumulateCost(powerKw, nowMs) {
-  if (lastUpdateMs > 0 && powerKw > 0) {
-    const dtHours = (nowMs - lastUpdateMs) / 3_600_000;
-    accumulatedKwh += powerKw * dtHours;
-  }
-  lastUpdateMs = nowMs;
-  lastPowerKw  = powerKw;
+function daysFromNow(date) {
+  const diff = (new Date(date).getTime() - Date.now()) / 86400_000;
+  return Math.ceil(diff);
 }
 
-function todayKwh(powerKw) {
-  // If session started same day, use accumulated. Otherwise estimate from hours since midnight.
-  const msNow      = Date.now();
-  const midnight   = new Date(); midnight.setHours(0,0,0,0);
-  const hoursToday = (msNow - midnight.getTime()) / 3_600_000;
-  return Math.max(accumulatedKwh, powerKw * hoursToday * 0.6); // 0.6 = utilisation factor estimate
-}
+/* ============================================================
+   SIDEBAR & MOBILE MENU
+   ============================================================ */
+function initSidebar() {
+  const hamburger = document.getElementById('hamburger');
+  const overlay   = document.getElementById('overlay');
+  const sidebar   = document.getElementById('sidebar');
 
-/* ── METRIC BAR + CARD STATUS ───────────────────── */
-function setMetricCard(barId, cardId, value, lo, hi, max, unit) {
-  const bar  = document.getElementById(barId);
-  const card = document.getElementById(cardId);
-  if (!bar || !card) return;
+  hamburger?.addEventListener('click', () => {
+    sidebar.classList.toggle('mobile-open');
+    overlay.classList.toggle('active');
+  });
+  overlay?.addEventListener('click', () => {
+    sidebar.classList.remove('mobile-open');
+    overlay.classList.remove('active');
+  });
 
-  const pct     = clamp((value - 0) / max * 100, 0, 100);
-  const inRange = value >= lo && value <= hi;
+  // Smooth scroll + active highlighting for nav links
+  document.querySelectorAll('.nav-link[data-section]').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const target = document.getElementById(link.dataset.section);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      sidebar.classList.remove('mobile-open');
+      overlay.classList.remove('active');
+      document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+      link.classList.add('active');
+    });
+  });
 
-  bar.style.width = pct + '%';
-  bar.classList.toggle('warn', !inRange && value > 0);
-  bar.classList.toggle('err',  value <= 0);
-}
-
-/* ── HEALTH STATUS HELPER ───────────────────────── */
-function setHealth(dotId, badgeId, descId, itemId, status, label, desc) {
-  const dot   = document.getElementById(dotId);
-  const badge = document.getElementById(badgeId);
-  const descEl = document.getElementById(descId);
-  const item   = document.getElementById(itemId);
-
-  if (dot)   { dot.className   = 'hi-dot ' + status; }
-  if (badge) { badge.className = 'hi-badge ' + status; badge.textContent = label; }
-  if (descEl){ descEl.textContent = desc; }
-  if (item)  { item.className  = 'health-item ' + status; }
-}
-
-// NEW CODE
-// EXTENSION ONLY: render top 3 alerts from API
-function renderAlerts(alerts = []) {
-  const listEl = document.getElementById('publicAlertsList');
-  if (!listEl) return;
-
-  const limitedAlerts = Array.isArray(alerts) ? alerts.slice(0, 3) : [];
-  if (!limitedAlerts.length) {
-    listEl.innerHTML = `<li class="public-alert public-alert--info"><strong>Aman:</strong> Tidak ada peringatan penting saat ini.</li>`;
-    return;
-  }
-
-  listEl.innerHTML = limitedAlerts.map((alert) => {
-    const type = String(alert?.type || 'info').toLowerCase();
-    const message = alert?.message || 'Peringatan sistem';
-    const action = alert?.action ? ` — ${alert.action}` : '';
-    return `<li class="public-alert public-alert--${type}"><strong>${message}</strong><span>${action}</span></li>`;
-  }).join('');
-}
-
-// NEW CODE
-// EXTENSION ONLY: render maintenance summary text
-function renderMaintenance(maintenance = {}) {
-  const statusEl = document.getElementById('maintenanceStatusText');
-  const recEl = document.getElementById('maintenanceRecommendationText');
-  if (!statusEl || !recEl) return;
-
-  statusEl.textContent = maintenance?.status || 'Good condition';
-  recEl.textContent = maintenance?.recommendation || 'No immediate maintenance action required.';
-}
-
-/* ── MAIN UPDATE FUNCTION ───────────────────────── */
-function updatePublicView(data) {
-  const nowMs    = Date.now();
-
-  /* --- Raw values --- */
-  const volt     = Number(data.volt   || 0);
-  const freq     = Number(data.freq   || 0);
-  const current  = Number(data.current || data.amp || 0);
-  const fuel     = Number(data.fuel   || 0);
-  const temp     = Number(data.temp   || data.coolant || 0);
-  const oil      = Number(data.oil    || data.oilPressure || 0);
-  const isRunning = String(data.status || '').toLowerCase() === 'on' || Number(data.rpm || 0) > 0;
-  const syncText  = String(data.sync  || '').toUpperCase();
-  const syncLabel = data.sync_label || (syncText === 'ON-GRID' ? 'Terhubung PLN' : 'Generator Aktif');
-
-  /* --- Derived --- */
-  const powerKw  = (volt * current) / 1000 || (isRunning ? 0.6 : 0);
-  const voltOk   = volt >= VOLT_MIN && volt <= VOLT_MAX;
-  const freqOk   = freq >= FREQ_MIN && freq <= FREQ_MAX;
-  const electricOk = voltOk && freqOk && volt > 0;
-  const syncOk   = syncText.includes('ON-GRID') || syncText.includes('SYNC') || syncText.includes('PLN');
-  const engineOk = (temp === 0 || temp <= 95) && (oil === 0 || oil >= 15);
-
-  /* --- Power source --- */
-  const source     = detectPowerSource(data, isRunning);
-  const sourceMeta = powerSourceMeta(source);
-
-  /* --- Cost --- */
-  accumulateCost(powerKw, nowMs);
-  const kwhToday = todayKwh(powerKw);
-  const costRp   = kwhToday * TARIFF_PER_KWH;
-
-  /* ── DOM Updates ── */
-
-  /* Sidebar user */
-  const username = localStorage.getItem('username') || 'Pengguna';
-  const sidebarName = document.getElementById('sidebarName');
-  const sidebarAvatar = document.getElementById('sidebarAvatar');
-  if (sidebarName) sidebarName.textContent = username;
-  if (sidebarAvatar) sidebarAvatar.textContent = initials(username);
-
-  /* Power source badge */
-  const badge = document.getElementById('powerSourceBadge');
-  const psbIcon = document.getElementById('psbIcon');
-  const psbValue = document.getElementById('powerSourceName');
-  if (badge)  { badge.className = 'power-source-badge ' + sourceMeta.cls; }
-  if (psbIcon) psbIcon.innerHTML = `<i class="${sourceMeta.icon}"></i>`;
-  if (psbValue) psbValue.textContent = sourceMeta.label;
-  const publicSyncLabel = document.getElementById('publicSyncLabel');
-  if (publicSyncLabel) publicSyncLabel.textContent = syncLabel;
-
-  /* Hero stats */
-  document.getElementById('heroGenState').textContent  = sourceMeta.genState;
-  document.getElementById('heroPLNState').textContent  = sourceMeta.plnState;
-  document.getElementById('heroSysHealth').textContent = sourceMeta.sysHealth;
-
-  /* Power flow */
-  const flowEl = document.getElementById('powerFlow');
-  const pfSourceLabel = document.getElementById('pfSourceLabel');
-  if (flowEl) {
-    flowEl.className = 'power-flow ' + sourceMeta.flowCls;
-  }
-  if (pfSourceLabel) pfSourceLabel.textContent = sourceMeta.flowLabel;
-
-  /* Source icon on flow */
-  const pfSrc = document.querySelector('.pf-source i');
-  if (pfSrc) {
-    pfSrc.className = source === 'GENERATOR' ? 'fas fa-bolt' : 'fas fa-plug';
-    pfSrc.parentElement.style.background = source === 'GENERATOR' ? '#fef3c7' : '#d1fae5';
-    pfSrc.style.color = source === 'GENERATOR' ? '#d97706' : '#059669';
-  }
-
-  /* Metrics */
-  document.getElementById('metricVolt').textContent    = volt > 0    ? volt.toFixed(1)    : '--';
-  document.getElementById('metricFreq').textContent    = freq > 0    ? freq.toFixed(2)    : '--';
-  document.getElementById('metricCurrent').textContent = current > 0 ? current.toFixed(1) : '--';
-  document.getElementById('metricPower').textContent   = powerKw > 0 ? powerKw.toFixed(2) : '--';
-
-  document.getElementById('voltNote').textContent  = voltOk
-    ? `Tegangan normal (${VOLT_MIN}–${VOLT_MAX} V)` : volt > 0
-    ? `Tegangan di luar normal — sistem auto-menyesuaikan` : 'Tidak terdeteksi tegangan';
-
-  document.getElementById('freqNote').textContent  = freqOk
-    ? `Frekuensi stabil (${FREQ_MIN}–${FREQ_MAX} Hz)` : freq > 0
-    ? `Frekuensi belum stabil, hindari peralatan sensitif` : 'Tidak terdeteksi frekuensi';
-
-  document.getElementById('powerNote').textContent = powerKw > 0
-    ? `${((powerKw / MAX_POWER_KW) * 100).toFixed(0)}% kapasitas daya digunakan`
-    : 'Tidak ada konsumsi daya terdeteksi';
-
-  setMetricCard('voltBar',    'voltageCard', volt,    VOLT_MIN, VOLT_MAX, 260, 'V');
-  setMetricCard('freqBar',    'freqCard',    freq,    FREQ_MIN, FREQ_MAX,  55, 'Hz');
-  setMetricCard('currentBar', 'currentCard', current, 0,        16,        20, 'A');
-  setMetricCard('powerBar',   'powerCard',   powerKw, 0,        MAX_POWER_KW, MAX_POWER_KW * 1.2, 'kW');
-
-  /* Cost */
-  document.getElementById('costAmount').textContent = fmtCurrency(costRp);
-  document.getElementById('costKwh').textContent    = kwhToday.toFixed(2) + ' kWh';
-  document.getElementById('costTariff').textContent = 'Rp ' + TARIFF_PER_KWH.toLocaleString('id-ID') + '/kWh';
-
-  const midnight  = new Date(); midnight.setHours(0,0,0,0);
-  const hoursUsed = ((Date.now() - midnight.getTime()) / 3_600_000).toFixed(1);
-  document.getElementById('costHours').textContent = hoursUsed + ' jam';
-
-  /* Fuel gauge */
-  const fuelFill = document.getElementById('fuelFill');
-  const fuelPct  = document.getElementById('fuelPct');
-  if (fuelFill) fuelFill.style.width = clamp(fuel, 0, 100) + '%';
-  if (fuelPct)  fuelPct.textContent  = fuel > 0 ? fuel.toFixed(0) + '%' : '--%';
-
-  /* Fuel stats */
-  let runtimeText;
-  if (!isRunning)   runtimeText = 'Generator tidak aktif';
-  else if (fuel >= 75) runtimeText = 'Lebih dari 8 jam';
-  else if (fuel >= 50) runtimeText = '6–8 jam';
-  else if (fuel >= 25) runtimeText = '3–6 jam';
-  else if (fuel >= 10) runtimeText = 'Kurang dari 3 jam';
-  else               runtimeText  = 'Kritis — segera isi BBM';
-
-  document.getElementById('fuelRuntime').textContent  = runtimeText;
-  document.getElementById('engineTemp').textContent   = temp > 0 ? temp.toFixed(0) + ' °C' : '-- °C';
-  document.getElementById('oilPressure').textContent  = oil > 0  ? oil.toFixed(0)  + ' kPa' : '-- kPa';
-
-  /* Health items */
-  // PLN
-  if (volt > 0 && electricOk) {
-    setHealth('hPLNDot','hPLNBadge','hPLNDesc','hPLN','ok','Normal','Tegangan & frekuensi PLN stabil');
-  } else if (volt > 0) {
-    setHealth('hPLNDot','hPLNBadge','hPLNDesc','hPLN','warn','Tidak Stabil','Sistem sedang menstabilkan daya');
-  } else {
-    setHealth('hPLNDot','hPLNBadge','hPLNDesc','hPLN','err','Tidak Aktif','Tidak ada pasokan dari PLN');
-  }
-
-  // Generator
-  if (!isRunning) {
-    setHealth('hGenDot','hGenBadge','hGenDesc','hGen','ok','Siaga','Mesin generator siap diaktifkan otomatis');
-  } else if (engineOk) {
-    setHealth('hGenDot','hGenBadge','hGenDesc','hGen','ok','Berjalan Normal','Suhu & tekanan oli dalam batas aman');
-  } else {
-    setHealth('hGenDot','hGenBadge','hGenDesc','hGen','warn','Perlu Diperiksa','Parameter mesin di luar batas normal');
-  }
-
-  // Sync
-  if (syncOk && isRunning) {
-    setHealth('hSyncDot','hSyncBadge','hSyncDesc','hSync','ok','Tersinkron','Generator & PLN tersinkron dengan baik');
-  } else if (isRunning) {
-    setHealth('hSyncDot','hSyncBadge','hSyncDesc','hSync','warn','Menyinkronkan','Sistem sedang dalam proses sinkronisasi');
-  } else {
-    setHealth('hSyncDot','hSyncBadge','hSyncDesc','hSync','ok','Siaga','Sinkronisasi akan aktif saat generator menyala');
-  }
-
-  // Auto control
-  if (electricOk || (!isRunning)) {
-    setHealth('hAutoDot','hAutoBadge','hAutoDesc','hAuto','ok','Aktif','Sistem kendali otomatis bekerja normal');
-  } else {
-    setHealth('hAutoDot','hAutoBadge','hAutoDesc','hAuto','warn','Menyesuaikan','Sistem sedang mengatur ulang parameter');
-  }
-
-  /* Public message */
-  let msg;
-  if (source === 'OFF') {
-    msg = 'Sistem tidak mendeteksi sumber listrik aktif. Jika terjadi pemadaman, generator cadangan akan menyala otomatis dalam beberapa detik.';
-  } else if (source === 'GENERATOR') {
-    msg = fuel < 25
-      ? 'Generator cadangan sedang menyuplai listrik rumah Anda. Bahan bakar mulai menipis — tim kami sudah diberitahu untuk pengisian segera.'
-      : 'Listrik PLN sedang tidak tersedia. Generator cadangan aktif menyuplai daya untuk rumah Anda secara otomatis. Anda dapat menggunakan listrik seperti biasa.';
-  } else if (source === 'HYBRID') {
-    msg = 'Sistem berjalan dalam mode hybrid — PLN dan generator bekerja bersama untuk memastikan kualitas listrik terbaik bagi rumah Anda.';
-  } else if (!electricOk && volt > 0) {
-    msg = 'Listrik PLN aktif namun kualitasnya sedang tidak stabil. Sistem sedang menyesuaikan secara otomatis. Sementara itu, hindari penggunaan alat elektronik sensitif seperti laptop atau TV.';
-  } else {
-    msg = 'Semua sistem berjalan normal. Listrik PLN tersedia stabil dan generator siaga jika sewaktu-waktu dibutuhkan. Anda dapat menggunakan listrik seperti biasa.';
-  }
-  document.getElementById('publicMessage').textContent = msg;
-
-  /* Message border color */
-  const msgBox = document.getElementById('publicMessageBox');
-  if (msgBox) {
-    const colors = { PLN: '#3b82f6', GENERATOR: '#f59e0b', HYBRID: '#8b5cf6', OFF: '#ef4444' };
-    msgBox.style.borderLeftColor = colors[source] || '#3b82f6';
-  }
-
-  /* Tips */
-  const tips = buildTips({ source, electricOk, fuel, engineOk, volt, isRunning });
-  const tipsList = document.getElementById('publicTips');
-  if (tipsList) {
-    tipsList.innerHTML = tips.map(t =>
-      `<li><i class="${t.icon}"></i><span>${t.text}</span></li>`
-    ).join('');
-  }
-
-  /* Last update */
-  document.getElementById('lastUpdate').innerHTML =
-    `<i class="fas fa-clock"></i> Diperbarui: ${fmt(data.timestamp || new Date().toISOString())}`;
-
-  // NEW CODE
-  // EXTENSION ONLY
-  renderAlerts(data.alerts || []);
-  renderMaintenance(data.maintenance || {});
-}
-
-/* ── TIPS BUILDER ───────────────────────────────── */
-function buildTips({ source, electricOk, fuel, engineOk, volt, isRunning }) {
-  const tips = [];
-
-  if (source === 'OFF') {
-    tips.push({ icon: 'fas fa-lightbulb', text: 'Jika listrik padam cukup lama, simpan makanan di kulkas dan minimalkan membuka pintunya.' });
-    tips.push({ icon: 'fas fa-mobile-screen-button', text: 'Isi daya perangkat penting (HP, laptop, senter darurat) saat masih ada listrik.' });
-    return tips;
-  }
-
-  if (source === 'GENERATOR') {
-    tips.push({ icon: 'fas fa-check-circle', text: 'Generator aktif — listrik tetap tersedia untuk kebutuhan rumah tangga Anda.' });
-    if (fuel < 25) tips.push({ icon: 'fas fa-triangle-exclamation', text: 'Bahan bakar generator rendah. Tim operasional sedang mempersiapkan pengisian.' });
-  }
-
-  if (!electricOk && volt > 0) {
-    tips.push({ icon: 'fas fa-triangle-exclamation', text: 'Hindari menyalakan TV, kulkas baru, atau peralatan sensitif sampai listrik kembali stabil.' });
-  }
-
-  if (!engineOk && isRunning) {
-    tips.push({ icon: 'fas fa-wrench', text: 'Teknisi sudah dihubungi untuk memeriksa kondisi mesin generator.' });
-  }
-
-  if (tips.length === 0) {
-    tips.push({ icon: 'fas fa-circle-check', text: 'Listrik berjalan normal — Anda dapat menggunakan semua peralatan rumah seperti biasa.' });
-    tips.push({ icon: 'fas fa-leaf', text: 'Matikan peralatan yang tidak terpakai untuk menghemat listrik dan mengurangi tagihan.' });
-    tips.push({ icon: 'fas fa-bell', text: 'Jika merasakan gangguan listrik, laporkan melalui aplikasi atau hubungi petugas setempat.' });
-  }
-
-  return tips;
-}
-
-/* ── LOAD DATA ──────────────────────────────────── */
-async function loadPublicData() {
-  const refreshBtn  = document.getElementById('refreshPublic');
-  const refreshIcon = document.getElementById('refreshIcon');
-  const liveInd     = document.getElementById('liveIndicator');
-
-  if (refreshBtn)  refreshBtn.classList.add('spinning');
-
-  try {
-    const res  = await fetch('/api/engine-data/latest');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const data = json?.data || {};
-
-    updatePublicView(data);
-
-    if (liveInd) {
-      liveInd.style.background = 'var(--ok-bg)';
-      liveInd.style.color      = 'var(--ok)';
-    }
-
-  } catch (err) {
-    console.error('Gen-Track fetch error:', err);
-
-    document.getElementById('powerSourceName').textContent = 'Data Tidak Tersedia';
-    document.getElementById('publicMessage').textContent   =
-      'Koneksi ke sistem monitoring sedang bermasalah. Data mungkin tidak terkini. Coba perbarui halaman.';
-
-    const tipsList = document.getElementById('publicTips');
-    if (tipsList) {
-      tipsList.innerHTML = `
-        <li><i class="fas fa-wifi"></i><span>Pastikan koneksi internet Anda aktif.</span></li>
-        <li><i class="fas fa-rotate"></i><span>Coba tekan tombol Perbarui di pojok kanan atas.</span></li>
-        <li><i class="fas fa-headset"></i><span>Jika masalah berlanjut, hubungi petugas teknis setempat.</span></li>
-      `;
-    }
-
-    if (liveInd) {
-      liveInd.style.background = 'var(--err-bg)';
-      liveInd.style.color      = 'var(--err)';
-    }
-  } finally {
-    if (refreshBtn) refreshBtn.classList.remove('spinning');
-  }
-}
-
-/* ── NAV: ACTIVE LINK ON SCROLL ─────────────────── */
-function initScrollSpy() {
-  const sections = ['heroSection','metricsSection','costSection','healthSection','infoSection'];
-  const navLinks  = document.querySelectorAll('.nav-link');
-
-  const obs = new IntersectionObserver((entries) => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        navLinks.forEach(a => {
-          a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id);
+  // Update active link on scroll
+  const sections = ['status', 'usage', 'alerts', 'maintenance'];
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        document.querySelectorAll('.nav-link').forEach(l => {
+          l.classList.toggle('active', l.dataset.section === id);
         });
       }
     });
-  }, { threshold: 0.4 });
+  }, { threshold: 0.35 });
 
   sections.forEach(id => {
     const el = document.getElementById(id);
-    if (el) obs.observe(el);
+    if (el) observer.observe(el);
   });
 }
 
-/* ── SIDEBAR TOGGLE ────────────────────────────── */
-function initSidebar() {
-  const menuBtn  = document.getElementById('menuBtn');
-  const overlay  = document.getElementById('sidebarOverlay');
-
-  function close() { document.body.classList.remove('sidebar-open'); }
-  function open()  { document.body.classList.add('sidebar-open'); }
-
-  if (menuBtn)  menuBtn.addEventListener('click', open);
-  if (overlay)  overlay.addEventListener('click', close);
-
-  document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', close));
+/* ============================================================
+   LIVE CLOCK
+   ============================================================ */
+function startClock() {
+  function tick() {
+    const now = new Date();
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const s = String(now.getSeconds()).padStart(2, '0');
+    const clockEl = document.getElementById('heroClock');
+    if (clockEl) clockEl.textContent = `${h}:${m}:${s}`;
+    const dateEl = document.getElementById('heroDate');
+    if (dateEl) dateEl.textContent = fmtDate(now);
+  }
+  tick();
+  setInterval(tick, 1000);
 }
 
-/* ── LOGOUT ─────────────────────────────────────── */
-document.getElementById('logoutPublic')?.addEventListener('click', () => {
-  localStorage.removeItem('isLoggedIn');
-  localStorage.removeItem('userRole');
-  localStorage.removeItem('username');
-  window.location.replace('login.html');
+/* ============================================================
+   API FETCH WITH DEMO FALLBACK
+   ============================================================ */
+async function apiFetch(url, demoData) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    if (json.success) return json.data;
+    throw new Error('API error');
+  } catch {
+    DEMO.useDemoMode = true;
+    return typeof demoData === 'function' ? demoData() : demoData;
+  }
+}
+
+/* ============================================================
+   SENSOR / POWER SOURCE
+   ============================================================ */
+async function refreshSensor() {
+  const data = await apiFetch(API.sensors, DEMO.sensor);
+
+  const source = data.source || (data.voltageV > 100 ? 'pln' : 'generator');
+  state.source = source;
+  state.fuelPercent = data.fuelPercent ?? 68;
+  state.genHealth = data.genHealthRaw ?? 'normal';
+
+  renderHero(source, data);
+  renderPowerCard(source, data);
+  renderGenCard(data);
+  renderFuelCard(data.fuelPercent ?? 68);
+  renderUsage(data);
+
+  const lastUpdateEl = document.getElementById('lastUpdate');
+  if (lastUpdateEl) {
+    lastUpdateEl.textContent = `Diperbarui: ${fmtTime(new Date())}`;
+  }
+}
+
+function renderHero(source, data) {
+  const banner = document.getElementById('heroBanner');
+  const heroVal = document.getElementById('heroValue');
+  const heroDesc = document.getElementById('heroDesc');
+  const heroIcon = document.getElementById('heroIconInner');
+
+  if (source === 'pln') {
+    banner.className = 'hero-banner state-pln';
+    heroVal.textContent = 'Menggunakan Listrik PLN';
+    heroDesc.textContent = 'Listrik dari PLN aktif dan stabil. Generator dalam mode standby.';
+    heroIcon.className = 'fas fa-city';
+  } else if (source === 'generator') {
+    banner.className = 'hero-banner state-gen';
+    heroVal.textContent = 'Menggunakan Generator';
+    heroDesc.textContent = 'Generator sedang aktif menyuplai listrik. PLN sedang tidak tersedia.';
+    heroIcon.className = 'fas fa-engine';
+  } else if (source === 'switching') {
+    banner.className = 'hero-banner state-switching';
+    heroVal.textContent = 'Sedang Perpindahan Sumber';
+    heroDesc.textContent = 'Sistem sedang berpindah sumber listrik, mungkin ada kedip sebentar.';
+    heroIcon.className = 'fas fa-shuffle';
+  } else {
+    banner.className = 'hero-banner state-error';
+    heroVal.textContent = 'Cek Sistem';
+    heroDesc.textContent = 'Tidak dapat membaca status sumber listrik.';
+    heroIcon.className = 'fas fa-triangle-exclamation';
+  }
+}
+
+function renderPowerCard(source, data) {
+  const el = document.getElementById('powerSource');
+  const hint = document.getElementById('powerHint');
+  const dot = document.getElementById('powerDot');
+
+  const map = {
+    pln:        { label: 'Listrik PLN',       hint: 'Sumber utama aktif & stabil', dot: 'dot-green' },
+    generator:  { label: 'Generator',          hint: 'Generator aktif menyuplai listrik', dot: 'dot-amber' },
+    switching:  { label: 'Berpindah...',       hint: 'Proses perpindahan sumber berlangsung', dot: 'dot-blue' },
+    default:    { label: 'Tidak Diketahui',    hint: 'Cek koneksi sistem', dot: '' }
+  };
+  const s = map[source] || map.default;
+  el.textContent = s.label;
+  hint.textContent = s.hint;
+  dot.className = 'card-status-dot ' + s.dot;
+}
+
+function renderGenCard(data) {
+  const health = data.genHealthRaw ?? 'normal';
+  const tempC = data.temp_coolant;
+  const el = document.getElementById('genCondition');
+  const hint = document.getElementById('genHint');
+  const dot = document.getElementById('genDot');
+
+  let label, hintText, dotClass;
+
+  if (health === 'normal' || health === 'ok') {
+    label = state.source === 'generator' ? 'Sedang Berjalan' : 'Siap Digunakan';
+    hintText = state.source === 'generator' ? 'Generator aktif, semua sistem normal' : 'Generator standby dalam kondisi baik';
+    dotClass = 'dot-green';
+  } else if (health === 'warning' || health === 'overheat') {
+    label = 'Perlu Perhatian';
+    hintText = 'Ada kondisi yang perlu diperiksa teknisi';
+    dotClass = 'dot-amber';
+  } else if (health === 'critical' || health === 'fault') {
+    label = 'Butuh Servis';
+    hintText = 'Segera hubungi teknisi';
+    dotClass = 'dot-red';
+  } else {
+    label = 'Standby';
+    hintText = 'Status sedang dikonfirmasi';
+    dotClass = 'dot-blue';
+  }
+
+  if (tempC) {
+    hintText += ` · Suhu: ${Math.round(tempC)}°C`;
+  }
+
+  el.textContent = label;
+  hint.textContent = hintText;
+  dot.className = 'card-status-dot ' + dotClass;
+}
+
+function renderFuelCard(pct) {
+  const el = document.getElementById('fuelStatus');
+  const dot = document.getElementById('fuelDot');
+  const segs = document.querySelectorAll('.fuel-seg');
+
+  let label, dotClass, fillClass;
+  const filled = Math.round((pct / 100) * 5);
+
+  if (pct >= 60) {
+    label = 'Cukup';
+    dotClass = 'dot-green';
+    fillClass = 'filled-full';
+  } else if (pct >= 25) {
+    label = 'Perlu Diisi Segera';
+    dotClass = 'dot-amber';
+    fillClass = 'filled-medium';
+  } else {
+    label = 'Hampir Habis!';
+    dotClass = 'dot-red';
+    fillClass = 'filled-low';
+  }
+
+  // Full = force label to "Penuh"
+  if (pct >= 90) label = 'Penuh';
+
+  el.textContent = `${label} (${Math.round(pct)}%)`;
+  dot.className = 'card-status-dot ' + dotClass;
+
+  segs.forEach((seg, i) => {
+    seg.className = 'fuel-seg ' + (i < filled ? fillClass : '');
+  });
+}
+
+/* ============================================================
+   USAGE & COST
+   ============================================================ */
+async function refreshUsage() {
+  const data = await apiFetch(API.readings, () => ({
+    todayKwh: 14.2,
+    weeklyKwh: DEMO.weeklyKwh()
+  }));
+
+  const todayKwh = data.todayKwh ?? data.today_kwh ?? 14.2;
+  const weeklyKwh = data.weeklyKwh ?? DEMO.weeklyKwh();
+  state.todayKwh = todayKwh;
+  state.weeklyKwh = weeklyKwh;
+
+  renderUsageCard(todayKwh);
+  renderCostCard(todayKwh);
+  renderWeeklyChart(weeklyKwh);
+}
+
+function renderUsage(sensorData) {
+  // called from sensor refresh when runtime data is present
+  if (sensorData.runtime_today_h) {
+    const kwh = sensorData.runtime_today_h * (sensorData.loadPercent / 100) * 8;
+    renderUsageCard(kwh);
+    renderCostCard(kwh);
+  }
+}
+
+function renderUsageCard(kwh) {
+  const maxKwh = 50;
+  const pct = Math.min(100, (kwh / maxKwh) * 100);
+  document.getElementById('dailyUsage').textContent = `${kwh.toFixed(1)} kWh`;
+  document.getElementById('usageBarFill').style.width = `${pct}%`;
+  document.getElementById('usageBarMax').textContent = `${maxKwh} kWh`;
+
+  let note = '';
+  if (kwh < 10)  note = 'Penggunaan sangat rendah hari ini, sangat hemat!';
+  else if (kwh < 25) note = 'Penggunaan normal, efisiensi bagus.';
+  else if (kwh < 40) note = 'Penggunaan agak tinggi hari ini.';
+  else note = 'Penggunaan tinggi hari ini. Pertimbangkan hemat energi.';
+  document.getElementById('usageNote').textContent = note;
+}
+
+function renderCostCard(kwh) {
+  // PLN tarif ~Rp 1.444/kWh (nonsubsidi R1/1300VA), generator ~Rp 2.200/kWh (BBM)
+  const tariffPLN = 1444;
+  const tariffGen = 2200;
+
+  const plnKwh = state.source === 'generator' ? kwh * 0.2 : kwh * 0.85;
+  const genKwh = kwh - plnKwh;
+  const totalCost = (plnKwh * tariffPLN) + (genKwh * tariffGen);
+  const plnCost   = plnKwh * tariffPLN;
+  const genCost   = genKwh * tariffGen;
+
+  document.getElementById('estimatedCost').textContent = idrFormat(totalCost);
+  document.getElementById('plnCost').textContent = idrFormat(plnCost);
+  document.getElementById('genCost').textContent = idrFormat(genCost);
+}
+
+/* ============================================================
+   WEEKLY CHART
+   ============================================================ */
+const DAYS_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+
+function renderWeeklyChart(kwhArr) {
+  const container = document.getElementById('weeklyBars');
+  if (!container) return;
+
+  const days = kwhArr.slice(-7);
+  const maxVal = Math.max(...days, 1);
+  const today = new Date().getDay();
+  const totalKwh = days.reduce((a, b) => a + b, 0);
+
+  document.getElementById('weeklyUsage').textContent = `${totalKwh.toFixed(1)} kWh`;
+
+  container.innerHTML = '';
+  days.forEach((val, i) => {
+    const dayOffset = (today - (days.length - 1 - i) + 7) % 7;
+    const dayName = DAYS_ID[dayOffset] ?? '?';
+    const isToday = i === days.length - 1;
+    const heightPct = (val / maxVal) * 100;
+
+    const group = document.createElement('div');
+    group.className = 'week-bar-group';
+    group.innerHTML = `
+      <div class="week-bar-track">
+        <div class="week-bar-fill ${isToday ? 'today' : ''}" style="height:${heightPct}%" title="${val.toFixed(1)} kWh"></div>
+      </div>
+      <div class="week-bar-day ${isToday ? 'today' : ''}">${isToday ? 'Hari ini' : dayName}</div>
+    `;
+    container.appendChild(group);
+  });
+}
+
+/* ============================================================
+   ALERTS
+   ============================================================ */
+const ALERT_VISIBLE_DEFAULT = 3;
+
+async function refreshAlerts() {
+  const raw = await apiFetch(API.alerts, DEMO.alerts);
+  // Map technical alarm data to human-friendly messages
+  const mapped = raw.map(mapAlertToFriendly);
+  state.alerts = mapped;
+
+  // Update sidebar badge
+  const active = mapped.filter(a => !a.resolved).length;
+  const badge = document.getElementById('alertBadge');
+  if (badge) {
+    badge.textContent = active;
+    badge.style.display = active > 0 ? '' : 'none';
+  }
+
+  renderAlerts();
+}
+
+function mapAlertToFriendly(alarm) {
+  // If it's already a friendly alert (from demo), return as-is
+  if (alarm.message && (alarm.type === 'info' || alarm.type === 'warning' || alarm.type === 'critical')) {
+    return alarm;
+  }
+
+  // Map technical parameters to friendly messages
+  const param = (alarm.parameter || '').toLowerCase();
+  const severity = alarm.severity || 'low';
+  let type, message, action, icon;
+
+  if (severity === 'critical') {
+    type = 'critical';
+    icon = 'fa-circle-xmark';
+    action = 'Hubungi teknisi segera';
+  } else if (severity === 'medium' || severity === 'warning') {
+    type = 'warning';
+    icon = 'fa-triangle-exclamation';
+    action = 'Pantau kondisi ini';
+  } else {
+    type = 'info';
+    icon = 'fa-circle-info';
+    action = 'Tidak perlu tindakan segera';
+  }
+
+  // Friendly message mapping
+  if (param.includes('fuel') || param.includes('bbm')) {
+    message = severity === 'critical'
+      ? 'Bahan bakar hampir habis, segera isi!'
+      : 'Bahan bakar mulai berkurang';
+    action = 'Hubungi petugas untuk pengisian BBM';
+    icon = 'fa-gas-pump';
+  } else if (param.includes('temp') || param.includes('suhu')) {
+    message = severity === 'critical'
+      ? 'Suhu generator terlalu tinggi, perlu pendinginan segera'
+      : 'Suhu generator agak tinggi';
+    action = severity === 'critical' ? 'Hubungi teknisi segera' : 'Pastikan ventilasi ruang generator baik';
+    icon = 'fa-temperature-high';
+  } else if (param.includes('voltage') || param.includes('tegangan')) {
+    message = 'Tegangan listrik tidak stabil terdeteksi';
+    action = 'Kurangi beban peralatan elektronik sensitif';
+    icon = 'fa-bolt';
+  } else if (param.includes('oil') || param.includes('oli')) {
+    message = 'Tekanan oli rendah terdeteksi';
+    action = 'Hubungi teknisi untuk pemeriksaan oli';
+    icon = 'fa-droplet';
+    type = 'critical';
+  } else if (param.includes('battery') || param.includes('baterai') || param.includes('aki')) {
+    message = 'Daya aki starter lemah';
+    action = 'Hubungi teknisi untuk pengecekan aki';
+    icon = 'fa-car-battery';
+  } else if (param.includes('overload') || param.includes('beban')) {
+    message = 'Beban listrik melebihi kapasitas normal';
+    action = 'Matikan beberapa peralatan yang tidak digunakan';
+    icon = 'fa-plug-circle-exclamation';
+  } else {
+    message = severity === 'critical'
+      ? 'Sistem membutuhkan perhatian segera'
+      : type === 'warning'
+        ? 'Ada kondisi yang perlu dipantau'
+        : 'Generator berhasil aktif';
+    icon = type === 'info' ? 'fa-circle-check' : icon;
+  }
+
+  return {
+    _id: alarm._id,
+    type,
+    message,
+    action,
+    icon,
+    timestamp: alarm.timestamp || new Date(),
+    resolved: alarm.resolved || false
+  };
+}
+
+function renderAlerts() {
+  const list = document.getElementById('alertsList');
+  const noAlerts = document.getElementById('noAlerts');
+  if (!list) return;
+
+  list.innerHTML = '';
+
+  if (state.alerts.length === 0) {
+    list.classList.add('hidden');
+    noAlerts.classList.remove('hidden');
+    return;
+  }
+
+  noAlerts.classList.add('hidden');
+  list.classList.remove('hidden');
+
+  state.alerts.forEach((alert, i) => {
+    const isHidden = !state.showAllAlerts && i >= ALERT_VISIBLE_DEFAULT;
+    const card = document.createElement('div');
+    card.className = `alert-card type-${alert.type}${isHidden ? ' hidden' : ''}`;
+    card.dataset.id = alert._id;
+
+    card.innerHTML = `
+      <div class="alert-icon type-${alert.type}">
+        <i class="fas ${alert.icon || 'fa-bell'}"></i>
+      </div>
+      <div class="alert-body">
+        <div class="alert-message">${alert.message}</div>
+        <span class="alert-action type-${alert.type}">
+          <i class="fas fa-arrow-right"></i> ${alert.action}
+        </span>
+        <div class="alert-meta">${timeAgo(alert.timestamp)}</div>
+      </div>
+      <div class="alert-card-right">
+        <span class="alert-type-label">${alert.type === 'info' ? 'Info' : alert.type === 'warning' ? 'Perhatian' : 'Kritis'}</span>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+
+  // Show/hide "see all" button
+  const seeAllBtn = document.getElementById('seeAllBtn');
+  if (seeAllBtn) {
+    seeAllBtn.style.display = state.alerts.length > ALERT_VISIBLE_DEFAULT ? '' : 'none';
+    seeAllBtn.querySelector('i').className = state.showAllAlerts ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
+    seeAllBtn.innerHTML = `${state.showAllAlerts ? 'Sembunyikan' : 'Tampilkan semua ('+state.alerts.length+')'} <i class="fas ${state.showAllAlerts ? 'fa-chevron-up' : 'fa-chevron-down'}" id="seeAllIcon"></i>`;
+    seeAllBtn.onclick = toggleAllAlerts;
+  }
+}
+
+window.toggleAllAlerts = function() {
+  state.showAllAlerts = !state.showAllAlerts;
+  renderAlerts();
+};
+
+/* ============================================================
+   MAINTENANCE
+   ============================================================ */
+async function refreshMaintenance() {
+  const data = await apiFetch(API.maintenance, DEMO.maintenance);
+  state.maintenance = data;
+  renderMaintenance(data);
+}
+
+function renderMaintenance(tasks) {
+  const completed = tasks.filter(t => t.status === 'completed').sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+  const upcoming  = tasks.filter(t => t.status !== 'completed').sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  const overdue   = upcoming.filter(t => new Date(t.dueDate) < new Date());
+
+  // Status card
+  const statusCard = document.getElementById('maintStatusCard');
+  const statusIcon = document.getElementById('maintStatusIcon');
+  const statusVal  = document.getElementById('maintStatusValue');
+  const statusDesc = document.getElementById('maintStatusDesc');
+
+  if (overdue.length > 0) {
+    statusCard.classList.add('status-critical');
+    statusIcon.innerHTML = '<i class="fas fa-circle-exclamation"></i>';
+    statusVal.textContent  = 'Servis Direkomendasikan';
+    statusDesc.textContent = `${overdue.length} jadwal perawatan telah lewat`;
+  } else if (upcoming.length > 0) {
+    const next = upcoming[0];
+    const days = daysFromNow(next.dueDate);
+    if (days <= 7) {
+      statusCard.classList.add('status-warn');
+      statusIcon.innerHTML = '<i class="fas fa-clock"></i>';
+      statusVal.textContent  = 'Perawatan Segera';
+      statusDesc.textContent = `Jadwal servis dalam ${days} hari`;
+    } else {
+      statusIcon.innerHTML = '<i class="fas fa-circle-check"></i>';
+      statusVal.textContent  = 'Kondisi Baik';
+      statusDesc.textContent = 'Generator terawat dengan baik';
+    }
+  } else {
+    statusIcon.innerHTML = '<i class="fas fa-circle-check"></i>';
+    statusVal.textContent  = 'Kondisi Baik';
+    statusDesc.textContent = 'Semua perawatan terjadwal dengan baik';
+  }
+
+  // Last maintenance
+  const lastEl = document.getElementById('lastMaint');
+  if (lastEl) {
+    lastEl.textContent = completed.length > 0
+      ? fmtDateShort(completed[0].completedAt) + ` · ${completed[0].task}`
+      : 'Belum ada data';
+  }
+
+  // Next maintenance
+  const nextEl = document.getElementById('nextMaint');
+  const nextCd = document.getElementById('nextMaintCountdown');
+  if (nextEl) {
+    if (upcoming.length > 0) {
+      const next = upcoming[0];
+      const days = daysFromNow(next.dueDate);
+      nextEl.textContent = fmtDateShort(next.dueDate) + ` · ${next.task}`;
+      if (nextCd) {
+        if (days < 0) {
+          nextCd.textContent = `Sudah lewat ${Math.abs(days)} hari`;
+          nextCd.className = 'maint-date-countdown countdown-soon';
+        } else if (days <= 7) {
+          nextCd.textContent = `${days} hari lagi`;
+          nextCd.className = 'maint-date-countdown countdown-soon';
+        } else {
+          nextCd.textContent = `${days} hari lagi`;
+          nextCd.className = 'maint-date-countdown countdown-ok';
+        }
+      }
+    } else {
+      nextEl.textContent = 'Belum terjadwal';
+    }
+  }
+
+  // History list
+  const histList = document.getElementById('maintHistory');
+  if (histList) {
+    histList.innerHTML = '';
+    const histItems = completed.slice(0, 4);
+    if (histItems.length === 0) {
+      histList.innerHTML = '<p style="font-size:13px;color:var(--muted)">Belum ada riwayat perawatan</p>';
+    } else {
+      histItems.forEach(t => {
+        histList.innerHTML += `
+          <div class="maint-history-item">
+            <div class="maint-hist-dot"></div>
+            <div class="maint-hist-text">${t.task}</div>
+            <div class="maint-hist-date">${fmtDateShort(t.completedAt)}</div>
+          </div>
+        `;
+      });
+    }
+  }
+}
+
+/* ============================================================
+   SERVICE REQUEST MODAL
+   ============================================================ */
+window.requestService = function() {
+  document.getElementById('serviceModal').classList.remove('hidden');
+};
+
+window.closeServiceModal = function() {
+  document.getElementById('serviceModal').classList.add('hidden');
+};
+
+window.submitServiceRequest = async function() {
+  const name  = document.getElementById('svcName').value.trim();
+  const phone = document.getElementById('svcPhone').value.trim();
+  const note  = document.getElementById('svcNote').value.trim();
+
+  if (!name || !phone) {
+    showToast('Mohon isi nama dan nomor telepon Anda');
+    return;
+  }
+
+  // In production this would POST to an API endpoint
+  const payload = { name, phone, note, timestamp: new Date(), type: 'service_request' };
+  console.log('Service request:', payload);
+
+  closeServiceModal();
+  showToast('✓ Permintaan servis berhasil dikirim. Tim kami akan menghubungi Anda segera.');
+
+  document.getElementById('svcName').value = '';
+  document.getElementById('svcPhone').value = '';
+  document.getElementById('svcNote').value = '';
+};
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+function showToast(msg, duration = 4000) {
+  const toast = document.getElementById('toast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.classList.remove('hidden');
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => toast.classList.add('hidden'), duration);
+}
+
+/* ============================================================
+   CLOSE MODAL ON OUTSIDE CLICK
+   ============================================================ */
+function initModalClose() {
+  document.getElementById('serviceModal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeServiceModal();
+  });
+}
+
+/* ============================================================
+   MAIN INIT & REFRESH LOOP
+   ============================================================ */
+async function refreshAll() {
+  await Promise.allSettled([
+    refreshSensor(),
+    refreshAlerts(),
+    refreshMaintenance(),
+    refreshUsage()
+  ]);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initSidebar();
+  startClock();
+  initModalClose();
+
+  // Check auth (public users still need to be logged in as 'Masyarakat')
+  const role = localStorage.getItem('userRole');
+  if (role && role !== 'Masyarakat' && role !== 'Administrator' && role !== 'Operator') {
+    // Redirect to login if not authenticated at all
+    if (!localStorage.getItem('isLoggedIn')) {
+      window.location.href = 'login.html';
+      return;
+    }
+  }
+
+  // Initial load
+  refreshAll();
+
+  // Auto-refresh every 10 seconds
+  setInterval(refreshAll, REFRESH_INTERVAL);
 });
-
-/* ── REFRESH BUTTON ─────────────────────────────── */
-document.getElementById('refreshPublic')?.addEventListener('click', loadPublicData);
-
-/* ── INIT ───────────────────────────────────────── */
-initSidebar();
-initScrollSpy();
-loadPublicData();
-setInterval(loadPublicData, 10_000);

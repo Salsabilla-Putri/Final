@@ -1,388 +1,377 @@
 <!doctype html>
 <html lang="id">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
   <title>Gen-Track — Status Listrik</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="js/auth-guard.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/public-view.css">
+  <link rel="stylesheet" href="public-view.css">
 </head>
 <body>
 
-  <!-- ── SIDEBAR ── -->
+  <!-- ===== SIDEBAR ===== -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="brand-icon"><i class="fas fa-bolt"></i></div>
-      <div class="brand-text">
-        <span class="brand-name">Gen-Track</span>
-        <span class="brand-role">Mode Masyarakat</span>
-      </div>
+      <span class="brand-name">Gen-Track</span>
     </div>
 
     <nav class="sidebar-nav">
-      <a href="#heroSection" class="nav-link active">
-        <i class="fas fa-house-chimney"></i>
-        <span>Beranda</span>
+      <a href="#status" class="nav-link active" data-section="status">
+        <span class="nav-icon"><i class="fas fa-house-chimney"></i></span>
+        <span class="nav-text">Beranda</span>
       </a>
-      <a href="#metricsSection" class="nav-link">
-        <i class="fas fa-gauge-high"></i>
-        <span>Kondisi Listrik</span>
+      <a href="#usage" class="nav-link" data-section="usage">
+        <span class="nav-icon"><i class="fas fa-chart-simple"></i></span>
+        <span class="nav-text">Penggunaan</span>
       </a>
-      <a href="#costSection" class="nav-link">
-        <i class="fas fa-receipt"></i>
-        <span>Estimasi Tagihan</span>
+      <a href="#alerts" class="nav-link" data-section="alerts">
+        <span class="nav-icon"><i class="fas fa-bell"></i></span>
+        <span class="nav-text">Notifikasi</span>
+        <span class="nav-badge" id="alertBadge">2</span>
       </a>
-      <a href="#healthSection" class="nav-link">
-        <i class="fas fa-shield-check"></i>
-        <span>Status Sistem</span>
-      </a>
-      <a href="#infoSection" class="nav-link">
-        <i class="fas fa-circle-info"></i>
-        <span>Panduan</span>
+      <a href="#maintenance" class="nav-link" data-section="maintenance">
+        <span class="nav-icon"><i class="fas fa-screwdriver-wrench"></i></span>
+        <span class="nav-text">Perawatan</span>
       </a>
     </nav>
 
     <div class="sidebar-footer">
-      <div class="user-pill">
-        <div class="user-avatar" id="sidebarAvatar">U</div>
-        <span id="sidebarName">Pengguna</span>
-      </div>
-      <button id="logoutPublic" class="logout-btn" title="Keluar">
-        <i class="fas fa-arrow-right-from-bracket"></i>
-      </button>
+      <a href="login.html" class="nav-link nav-logout">
+        <span class="nav-icon"><i class="fas fa-right-from-bracket"></i></span>
+        <span class="nav-text">Keluar</span>
+      </a>
     </div>
   </aside>
 
-  <!-- ── OVERLAY ── -->
-  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <!-- Mobile top bar -->
+  <header class="mobile-header">
+    <button class="hamburger" id="hamburger" aria-label="Buka menu">
+      <i class="fas fa-bars"></i>
+    </button>
+    <div class="mobile-brand">
+      <div class="brand-icon sm"><i class="fas fa-bolt"></i></div>
+      <span>Gen-Track</span>
+    </div>
+    <div class="mobile-live">
+      <span class="live-dot"></span> Live
+    </div>
+  </header>
+  <div class="sidebar-overlay" id="overlay"></div>
 
-  <!-- ── MAIN ── -->
-  <main class="main-content">
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="main">
 
-    <!-- Top Bar -->
-    <header class="topbar">
-      <button class="menu-btn" id="menuBtn" aria-label="Buka menu">
-        <i class="fas fa-bars"></i>
-      </button>
-      <div class="topbar-title">
-        <i class="fas fa-bolt"></i> Status Listrik
+    <!-- PAGE HEADER -->
+    <section class="page-header">
+      <div>
+        <h1 class="page-title">Status Listrik</h1>
+        <p class="page-subtitle">Informasi real-time kondisi listrik untuk umum</p>
       </div>
-      <div class="topbar-actions">
-        <div class="live-indicator" id="liveIndicator">
-          <span class="live-dot"></span>
-          <span class="live-label">LIVE</span>
+      <div class="header-live">
+        <span class="live-dot"></span>
+        <span id="lastUpdate">Memuat...</span>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 1: STATUS ===== -->
+    <section id="status" class="section">
+
+      <!-- HERO STATUS BANNER -->
+      <div class="hero-banner" id="heroBanner">
+        <div class="hero-icon-wrap">
+          <div class="hero-icon" id="heroIcon">
+            <i class="fas fa-plug" id="heroIconInner"></i>
+          </div>
         </div>
-        <button class="refresh-btn" id="refreshPublic" title="Perbarui data">
-          <i class="fas fa-rotate" id="refreshIcon"></i>
+        <div class="hero-text">
+          <div class="hero-label">Sumber Listrik Saat Ini</div>
+          <div class="hero-value" id="heroValue">Memuat...</div>
+          <div class="hero-desc" id="heroDesc">Mengambil data...</div>
+        </div>
+        <div class="hero-time-wrap">
+          <div class="hero-clock" id="heroClock">--:--</div>
+          <div class="hero-date" id="heroDate">--</div>
+        </div>
+      </div>
+
+      <!-- STATUS CARDS GRID -->
+      <div class="status-grid">
+
+        <!-- Card 1: Power Source -->
+        <div class="status-card" id="card-power">
+          <div class="card-icon-wrap">
+            <div class="card-icon bg-blue">
+              <i class="fas fa-tower-broadcast"></i>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="card-label">Sumber Listrik</div>
+            <div class="card-value" id="powerSource">--</div>
+            <div class="card-hint" id="powerHint">Mengambil data...</div>
+          </div>
+          <div class="card-status-dot" id="powerDot"></div>
+        </div>
+
+        <!-- Card 2: Generator Health -->
+        <div class="status-card" id="card-gen">
+          <div class="card-icon-wrap">
+            <div class="card-icon bg-green">
+              <i class="fas fa-engine"></i>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="card-label">Kondisi Generator</div>
+            <div class="card-value" id="genCondition">--</div>
+            <div class="card-hint" id="genHint">Mengambil data...</div>
+          </div>
+          <div class="card-status-dot" id="genDot"></div>
+        </div>
+
+        <!-- Card 3: Fuel Level -->
+        <div class="status-card" id="card-fuel">
+          <div class="card-icon-wrap">
+            <div class="card-icon bg-amber">
+              <i class="fas fa-gas-pump"></i>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="card-label">Bahan Bakar</div>
+            <div class="card-value" id="fuelStatus">--</div>
+            <div class="fuel-gauge" id="fuelGauge">
+              <div class="fuel-seg" data-seg="1"></div>
+              <div class="fuel-seg" data-seg="2"></div>
+              <div class="fuel-seg" data-seg="3"></div>
+              <div class="fuel-seg" data-seg="4"></div>
+              <div class="fuel-seg" data-seg="5"></div>
+            </div>
+          </div>
+          <div class="card-status-dot" id="fuelDot"></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ===== SECTION 2: USAGE & COST ===== -->
+    <section id="usage" class="section">
+      <h2 class="section-title">
+        <i class="fas fa-chart-simple"></i> Penggunaan & Biaya
+      </h2>
+
+      <div class="usage-grid">
+
+        <!-- Daily Usage -->
+        <div class="usage-card">
+          <div class="usage-card-header">
+            <div class="usage-icon bg-blue">
+              <i class="fas fa-bolt"></i>
+            </div>
+            <div>
+              <div class="usage-label">Pemakaian Hari Ini</div>
+              <div class="usage-value" id="dailyUsage">-- kWh</div>
+            </div>
+          </div>
+          <div class="usage-bar-wrap">
+            <div class="usage-bar">
+              <div class="usage-bar-fill" id="usageBarFill" style="width: 0%"></div>
+            </div>
+            <div class="usage-bar-labels">
+              <span>0 kWh</span>
+              <span id="usageBarMax">50 kWh</span>
+            </div>
+          </div>
+          <div class="usage-note" id="usageNote">--</div>
+        </div>
+
+        <!-- Estimated Cost -->
+        <div class="usage-card">
+          <div class="usage-card-header">
+            <div class="usage-icon bg-green">
+              <i class="fas fa-receipt"></i>
+            </div>
+            <div>
+              <div class="usage-label">Estimasi Biaya Hari Ini</div>
+              <div class="usage-value" id="estimatedCost">Rp --</div>
+            </div>
+          </div>
+          <div class="cost-breakdown">
+            <div class="cost-row">
+              <span><i class="fas fa-city" style="color:var(--c-blue)"></i> Listrik PLN</span>
+              <span id="plnCost">Rp --</span>
+            </div>
+            <div class="cost-row">
+              <span><i class="fas fa-engine" style="color:var(--c-amber)"></i> BBM Generator</span>
+              <span id="genCost">Rp --</span>
+            </div>
+          </div>
+          <div class="cost-note">
+            <i class="fas fa-circle-info"></i> Perkiraan saja, tagihan resmi dapat berbeda
+          </div>
+        </div>
+
+        <!-- This Week Summary -->
+        <div class="usage-card usage-card-wide">
+          <div class="usage-card-header">
+            <div class="usage-icon bg-purple">
+              <i class="fas fa-calendar-week"></i>
+            </div>
+            <div>
+              <div class="usage-label">Ringkasan 7 Hari Terakhir</div>
+              <div class="usage-value" id="weeklyUsage">-- kWh</div>
+            </div>
+          </div>
+          <div class="weekly-bars" id="weeklyBars">
+            <!-- filled by JS -->
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ===== SECTION 3: ALERTS ===== -->
+    <section id="alerts" class="section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="fas fa-bell"></i> Notifikasi
+        </h2>
+        <button class="see-all-btn" id="seeAllBtn" onclick="toggleAllAlerts()">
+          Tampilkan semua <i class="fas fa-chevron-down" id="seeAllIcon"></i>
         </button>
       </div>
-    </header>
 
-    <!-- ── HERO: POWER SOURCE ── -->
-    <section class="hero-section" id="heroSection">
-      <div class="power-source-badge" id="powerSourceBadge">
-        <div class="psb-icon" id="psbIcon"><i class="fas fa-plug"></i></div>
-        <div class="psb-content">
-          <div class="psb-label">Sumber Listrik Aktif</div>
-          <div class="psb-value" id="powerSourceName">Memuat...</div>
-          <!-- NEW CODE -->
-          <!-- EXTENSION ONLY -->
-          <div class="psb-subvalue" id="publicSyncLabel">Memuat label sinkronisasi...</div>
-        </div>
-        <div class="psb-pulse" id="psbPulse"></div>
+      <div class="alerts-list" id="alertsList">
+        <!-- filled by JS -->
       </div>
 
-      <div class="hero-grid">
-        <div class="hero-stat">
-          <span class="hs-label">Status Generator</span>
-          <span class="hs-value" id="heroGenState">--</span>
+      <div class="no-alerts hidden" id="noAlerts">
+        <div class="no-alerts-icon">
+          <i class="fas fa-check-circle"></i>
         </div>
-        <div class="hero-stat">
-          <span class="hs-label">Status PLN</span>
-          <span class="hs-value" id="heroPLNState">--</span>
-        </div>
-        <div class="hero-stat">
-          <span class="hs-label">Kondisi Sistem</span>
-          <span class="hs-value" id="heroSysHealth">--</span>
-        </div>
-      </div>
-
-      <div class="power-flow" id="powerFlow">
-        <div class="pf-node pf-source" id="pfSource">
-          <i class="fas fa-plug"></i>
-          <span id="pfSourceLabel">PLN</span>
-        </div>
-        <div class="pf-track">
-          <div class="pf-dots" id="pfDots">
-            <span></span><span></span><span></span><span></span><span></span>
-          </div>
-        </div>
-        <div class="pf-node pf-home">
-          <i class="fas fa-house"></i>
-          <span>Rumah</span>
-        </div>
+        <p>Semua baik-baik saja! Tidak ada notifikasi saat ini.</p>
       </div>
     </section>
 
-    <!-- NEW CODE -->
-    <!-- EXTENSION ONLY -->
-    <section class="section two-col-section" id="alertsSection">
-      <div class="panel public-alerts-panel">
-        <div class="panel-header">
-          <div class="panel-icon panel-icon--red"><i class="fas fa-bell"></i></div>
-          <div>
-            <h3>Notifikasi Penting</h3>
-            <p>Peringatan sederhana untuk masyarakat (maks. 3)</p>
+    <!-- ===== SECTION 4: MAINTENANCE ===== -->
+    <section id="maintenance" class="section">
+      <h2 class="section-title">
+        <i class="fas fa-screwdriver-wrench"></i> Perawatan Generator
+      </h2>
+
+      <div class="maint-grid">
+
+        <!-- Status Card -->
+        <div class="maint-card maint-status-card" id="maintStatusCard">
+          <div class="maint-status-icon" id="maintStatusIcon">
+            <i class="fas fa-circle-check"></i>
+          </div>
+          <div class="maint-status-text">
+            <div class="maint-status-label">Status Perawatan</div>
+            <div class="maint-status-value" id="maintStatusValue">Kondisi Baik</div>
+            <div class="maint-status-desc" id="maintStatusDesc">Generator dalam kondisi optimal</div>
           </div>
         </div>
-        <ul class="public-alerts-list" id="publicAlertsList">
-          <li class="public-alert public-alert--info">Memuat notifikasi...</li>
-        </ul>
-      </div>
 
-      <div class="panel public-maintenance-panel">
-        <div class="panel-header">
-          <div class="panel-icon panel-icon--teal"><i class="fas fa-screwdriver-wrench"></i></div>
-          <div>
-            <h3>Status Perawatan</h3>
-            <p>Ringkasan keputusan maintenance otomatis</p>
+        <!-- Last / Next Service -->
+        <div class="maint-card">
+          <div class="maint-dates">
+            <div class="maint-date-item">
+              <div class="maint-date-icon bg-green">
+                <i class="fas fa-calendar-check"></i>
+              </div>
+              <div>
+                <div class="maint-date-label">Perawatan Terakhir</div>
+                <div class="maint-date-value" id="lastMaint">--</div>
+              </div>
+            </div>
+            <div class="maint-divider"></div>
+            <div class="maint-date-item">
+              <div class="maint-date-icon bg-amber">
+                <i class="fas fa-calendar-clock"></i>
+              </div>
+              <div>
+                <div class="maint-date-label">Perawatan Berikutnya</div>
+                <div class="maint-date-value" id="nextMaint">--</div>
+                <div class="maint-date-countdown" id="nextMaintCountdown"></div>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="maintenance-simple">
-          <p><strong>Status:</strong> <span id="maintenanceStatusText">Memuat...</span></p>
-          <p><strong>Rekomendasi:</strong> <span id="maintenanceRecommendationText">Memuat...</span></p>
-        </div>
-      </div>
-    </section>
 
-    <!-- ── METRICS GRID ── -->
-    <section class="section" id="metricsSection">
-      <h2 class="section-title"><i class="fas fa-gauge-high"></i> Kondisi Listrik Saat Ini</h2>
-      <div class="metrics-grid">
-
-        <div class="metric-card" id="voltageCard">
-          <div class="mc-header">
-            <div class="mc-icon mc-icon--blue"><i class="fas fa-bolt-lightning"></i></div>
-            <span class="mc-label">Tegangan</span>
+        <!-- History -->
+        <div class="maint-card maint-history">
+          <div class="maint-card-title">Riwayat Perawatan</div>
+          <div class="maint-history-list" id="maintHistory">
+            <!-- filled by JS -->
           </div>
-          <div class="mc-value"><span id="metricVolt">--</span><span class="mc-unit">V</span></div>
-          <div class="mc-bar-wrap"><div class="mc-bar" id="voltBar"></div></div>
-          <div class="mc-note" id="voltNote">Standar rumah tangga: 198–242 V</div>
         </div>
 
-        <div class="metric-card" id="freqCard">
-          <div class="mc-header">
-            <div class="mc-icon mc-icon--teal"><i class="fas fa-wave-square"></i></div>
-            <span class="mc-label">Frekuensi</span>
+        <!-- Contact CTA -->
+        <div class="maint-card maint-cta">
+          <div class="cta-icon">
+            <i class="fas fa-headset"></i>
           </div>
-          <div class="mc-value"><span id="metricFreq">--</span><span class="mc-unit">Hz</span></div>
-          <div class="mc-bar-wrap"><div class="mc-bar" id="freqBar"></div></div>
-          <div class="mc-note" id="freqNote">Standar PLN: 49.5–50.5 Hz</div>
-        </div>
-
-        <div class="metric-card" id="currentCard">
-          <div class="mc-header">
-            <div class="mc-icon mc-icon--amber"><i class="fas fa-arrow-right-arrow-left"></i></div>
-            <span class="mc-label">Arus Listrik</span>
+          <div class="cta-text">
+            <div class="cta-title">Butuh Bantuan Teknisi?</div>
+            <div class="cta-desc">Jika Anda melihat masalah atau generator perlu perhatian, hubungi tim kami segera.</div>
           </div>
-          <div class="mc-value"><span id="metricCurrent">--</span><span class="mc-unit">A</span></div>
-          <div class="mc-bar-wrap"><div class="mc-bar" id="currentBar"></div></div>
-          <div class="mc-note" id="currentNote">Beban penggunaan saat ini</div>
-        </div>
-
-        <div class="metric-card" id="powerCard">
-          <div class="mc-header">
-            <div class="mc-icon mc-icon--green"><i class="fas fa-plug-circle-bolt"></i></div>
-            <span class="mc-label">Daya Aktif</span>
+          <div class="cta-actions">
+            <a href="tel:+6281234567890" class="cta-btn cta-btn-primary">
+              <i class="fas fa-phone"></i> Hubungi Sekarang
+            </a>
+            <button class="cta-btn cta-btn-secondary" onclick="requestService()">
+              <i class="fas fa-clipboard-list"></i> Minta Servis
+            </button>
           </div>
-          <div class="mc-value"><span id="metricPower">--</span><span class="mc-unit">kW</span></div>
-          <div class="mc-bar-wrap"><div class="mc-bar" id="powerBar"></div></div>
-          <div class="mc-note" id="powerNote">Konsumsi daya real-time</div>
         </div>
 
       </div>
     </section>
 
-    <!-- ── COST + FUEL ── -->
-    <section class="section two-col-section" id="costSection">
-
-      <div class="panel cost-panel">
-        <div class="panel-header">
-          <div class="panel-icon panel-icon--amber"><i class="fas fa-receipt"></i></div>
-          <div>
-            <h3>Estimasi Tagihan Hari Ini</h3>
-            <p>Perkiraan biaya listrik berdasarkan pemakaian</p>
-          </div>
-        </div>
-        <div class="cost-display">
-          <div class="cost-main">
-            <span class="cost-currency">Rp</span>
-            <span class="cost-amount" id="costAmount">0</span>
-          </div>
-          <div class="cost-sub">
-            <span id="costKwh">0.00 kWh</span> digunakan hari ini
-          </div>
-        </div>
-        <div class="cost-breakdown">
-          <div class="cb-row">
-            <span>Tarif listrik</span>
-            <strong id="costTariff">Rp 1.699/kWh</strong>
-          </div>
-          <div class="cb-row">
-            <span>Pemakaian sejak pukul 00:00</span>
-            <strong id="costHours">-- jam</strong>
-          </div>
-        </div>
-        <div class="cost-note">
-          <i class="fas fa-circle-info"></i>
-          Estimasi berdasarkan tarif R-1/TR golongan 1.300 VA
-        </div>
-      </div>
-
-      <div class="panel fuel-panel">
-        <div class="panel-header">
-          <div class="panel-icon panel-icon--red"><i class="fas fa-gas-pump"></i></div>
-          <div>
-            <h3>Bahan Bakar Generator</h3>
-            <p>Sisa bahan bakar dan estimasi operasi</p>
-          </div>
-        </div>
-
-        <div class="fuel-gauge-wrap">
-          <div class="fuel-gauge">
-            <div class="fuel-fill" id="fuelFill"></div>
-            <div class="fuel-label" id="fuelPct">--%</div>
-          </div>
-          <div class="fuel-ticks">
-            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-          </div>
-        </div>
-
-        <div class="fuel-stats">
-          <div class="fs-item">
-            <i class="fas fa-clock"></i>
-            <div>
-              <span class="fs-label">Estimasi Operasi</span>
-              <strong id="fuelRuntime">-- jam</strong>
-            </div>
-          </div>
-          <div class="fs-item">
-            <i class="fas fa-temperature-half"></i>
-            <div>
-              <span class="fs-label">Suhu Mesin</span>
-              <strong id="engineTemp">-- °C</strong>
-            </div>
-          </div>
-          <div class="fs-item">
-            <i class="fas fa-oil-can"></i>
-            <div>
-              <span class="fs-label">Tekanan Oli</span>
-              <strong id="oilPressure">-- kPa</strong>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </section>
-
-    <!-- ── SYSTEM HEALTH ── -->
-    <section class="section" id="healthSection">
-      <h2 class="section-title"><i class="fas fa-shield-check"></i> Status Kesehatan Sistem</h2>
-      <div class="health-grid">
-
-        <div class="health-item" id="hPLN">
-          <div class="hi-left">
-            <div class="hi-dot" id="hPLNDot"></div>
-            <div>
-              <div class="hi-title">Jaringan PLN</div>
-              <div class="hi-desc" id="hPLNDesc">Memeriksa...</div>
-            </div>
-          </div>
-          <div class="hi-badge" id="hPLNBadge">--</div>
-        </div>
-
-        <div class="health-item" id="hGen">
-          <div class="hi-left">
-            <div class="hi-dot" id="hGenDot"></div>
-            <div>
-              <div class="hi-title">Mesin Generator</div>
-              <div class="hi-desc" id="hGenDesc">Memeriksa...</div>
-            </div>
-          </div>
-          <div class="hi-badge" id="hGenBadge">--</div>
-        </div>
-
-        <div class="health-item" id="hSync">
-          <div class="hi-left">
-            <div class="hi-dot" id="hSyncDot"></div>
-            <div>
-              <div class="hi-title">Sinkronisasi Grid</div>
-              <div class="hi-desc" id="hSyncDesc">Memeriksa...</div>
-            </div>
-          </div>
-          <div class="hi-badge" id="hSyncBadge">--</div>
-        </div>
-
-        <div class="health-item" id="hAuto">
-          <div class="hi-left">
-            <div class="hi-dot" id="hAutoDot"></div>
-            <div>
-              <div class="hi-title">Kendali Otomatis</div>
-              <div class="hi-desc" id="hAutoDesc">Memeriksa...</div>
-            </div>
-          </div>
-          <div class="hi-badge" id="hAutoBadge">--</div>
-        </div>
-
-      </div>
-    </section>
-
-    <!-- ── INFO + TIPS ── -->
-    <section class="section" id="infoSection">
-      <div class="info-two-col">
-
-        <div class="panel message-panel">
-          <div class="panel-header">
-            <div class="panel-icon panel-icon--blue"><i class="fas fa-bullhorn"></i></div>
-            <div>
-              <h3>Informasi untuk Anda</h3>
-              <p>Pesan status terkini dari sistem</p>
-            </div>
-          </div>
-          <div class="message-box" id="publicMessageBox">
-            <p id="publicMessage">Mengambil informasi terbaru...</p>
-          </div>
-        </div>
-
-        <div class="panel tips-panel">
-          <div class="panel-header">
-            <div class="panel-icon panel-icon--green"><i class="fas fa-list-check"></i></div>
-            <div>
-              <h3>Yang Perlu Anda Lakukan</h3>
-              <p>Saran berdasarkan kondisi saat ini</p>
-            </div>
-          </div>
-          <ul class="tips-list" id="publicTips">
-            <li><i class="fas fa-spinner fa-spin"></i> Memuat saran...</li>
-          </ul>
-        </div>
-
-      </div>
-    </section>
-
-    <!-- Footer -->
+    <!-- FOOTER -->
     <footer class="page-footer">
-      <span id="lastUpdate"><i class="fas fa-clock"></i> Belum diperbarui</span>
-      <span class="footer-sep">·</span>
-      <span>Sistem pembaruan otomatis setiap 10 detik</span>
+      <div>
+        <strong>Gen-Track</strong> — Generator Monitoring System &nbsp;·&nbsp; TA252601020
+      </div>
+      <div>Data diperbarui setiap 10 detik</div>
     </footer>
 
   </main>
 
-  <script src="js/public-view.js"></script>
+  <!-- REQUEST SERVICE MODAL -->
+  <div class="modal-overlay hidden" id="serviceModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Minta Servis</h3>
+        <button class="modal-close" onclick="closeServiceModal()"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-intro">Isi form ini dan tim teknisi kami akan segera merespons.</p>
+        <div class="form-group">
+          <label>Nama Anda</label>
+          <input type="text" id="svcName" placeholder="Contoh: Bapak Ahmad" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>Nomor Telepon</label>
+          <input type="tel" id="svcPhone" placeholder="Contoh: 0812-xxxx-xxxx" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>Masalah yang Dilaporkan</label>
+          <textarea id="svcNote" rows="3" placeholder="Jelaskan masalah secara singkat..." class="form-input"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn-cancel" onclick="closeServiceModal()">Batal</button>
+        <button class="modal-btn-submit" onclick="submitServiceRequest()">
+          <i class="fas fa-paper-plane"></i> Kirim Permintaan
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="public-view.js"></script>
 </body>
 </html>
