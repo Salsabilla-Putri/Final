@@ -89,6 +89,9 @@
         <div class="psb-content">
           <div class="psb-label">Sumber Listrik Aktif</div>
           <div class="psb-value" id="powerSourceName">Memuat...</div>
+          <!-- NEW CODE -->
+          <!-- EXTENSION ONLY -->
+          <div class="psb-subvalue" id="publicSyncLabel">Memuat label sinkronisasi...</div>
         </div>
         <div class="psb-pulse" id="psbPulse"></div>
       </div>
@@ -121,6 +124,37 @@
         <div class="pf-node pf-home">
           <i class="fas fa-house"></i>
           <span>Rumah</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW CODE -->
+    <!-- EXTENSION ONLY -->
+    <section class="section two-col-section" id="alertsSection">
+      <div class="panel public-alerts-panel">
+        <div class="panel-header">
+          <div class="panel-icon panel-icon--red"><i class="fas fa-bell"></i></div>
+          <div>
+            <h3>Notifikasi Penting</h3>
+            <p>Peringatan sederhana untuk masyarakat (maks. 3)</p>
+          </div>
+        </div>
+        <ul class="public-alerts-list" id="publicAlertsList">
+          <li class="public-alert public-alert--info">Memuat notifikasi...</li>
+        </ul>
+      </div>
+
+      <div class="panel public-maintenance-panel">
+        <div class="panel-header">
+          <div class="panel-icon panel-icon--teal"><i class="fas fa-screwdriver-wrench"></i></div>
+          <div>
+            <h3>Status Perawatan</h3>
+            <p>Ringkasan keputusan maintenance otomatis</p>
+          </div>
+        </div>
+        <div class="maintenance-simple">
+          <p><strong>Status:</strong> <span id="maintenanceStatusText">Memuat...</span></p>
+          <p><strong>Rekomendasi:</strong> <span id="maintenanceRecommendationText">Memuat...</span></p>
         </div>
       </div>
     </section>

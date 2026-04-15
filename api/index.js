@@ -2,7 +2,12 @@ const express = require('express');
 const mongoose = require('mongoose');
 const mqtt = require('mqtt');
 const cors = require('cors');
-const { transformPublicStatus } = require('../public_status');
+const {
+    transformPublicStatus,
+    generateAlerts,
+    getMaintenanceStatus,
+    getPublicLabels
+} = require('../public_status');
 
 const app = express();
 
@@ -205,9 +210,22 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const requestedDeviceId = req.query.deviceId;
         const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
         const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
-        const dbData = await GeneratorData.findOne(filter).sort({ timestamp: -1 });
+        const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
+        const dbData = latestDocs[0] || null;
         const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
-        res.json({ success: true, data: isDbFresh ? dbData : latestData });
+        const baseData = isDbFresh ? dbData : latestData;
+        const previousDoc = latestDocs[1] || null;
+
+        // NEW CODE
+        // EXTENSION ONLY: add non-breaking enrichment fields to existing payload
+        const enrichedData = {
+            ...baseData,
+            alerts: generateAlerts(baseData, previousDoc),
+            maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
+            ...getPublicLabels(baseData)
+        };
+
+        res.json({ success: true, data: enrichedData });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 

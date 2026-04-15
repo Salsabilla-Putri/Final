@@ -144,6 +144,37 @@ function setHealth(dotId, badgeId, descId, itemId, status, label, desc) {
   if (item)  { item.className  = 'health-item ' + status; }
 }
 
+// NEW CODE
+// EXTENSION ONLY: render top 3 alerts from API
+function renderAlerts(alerts = []) {
+  const listEl = document.getElementById('publicAlertsList');
+  if (!listEl) return;
+
+  const limitedAlerts = Array.isArray(alerts) ? alerts.slice(0, 3) : [];
+  if (!limitedAlerts.length) {
+    listEl.innerHTML = `<li class="public-alert public-alert--info"><strong>Aman:</strong> Tidak ada peringatan penting saat ini.</li>`;
+    return;
+  }
+
+  listEl.innerHTML = limitedAlerts.map((alert) => {
+    const type = String(alert?.type || 'info').toLowerCase();
+    const message = alert?.message || 'Peringatan sistem';
+    const action = alert?.action ? ` — ${alert.action}` : '';
+    return `<li class="public-alert public-alert--${type}"><strong>${message}</strong><span>${action}</span></li>`;
+  }).join('');
+}
+
+// NEW CODE
+// EXTENSION ONLY: render maintenance summary text
+function renderMaintenance(maintenance = {}) {
+  const statusEl = document.getElementById('maintenanceStatusText');
+  const recEl = document.getElementById('maintenanceRecommendationText');
+  if (!statusEl || !recEl) return;
+
+  statusEl.textContent = maintenance?.status || 'Good condition';
+  recEl.textContent = maintenance?.recommendation || 'No immediate maintenance action required.';
+}
+
 /* ── MAIN UPDATE FUNCTION ───────────────────────── */
 function updatePublicView(data) {
   const nowMs    = Date.now();
@@ -157,6 +188,7 @@ function updatePublicView(data) {
   const oil      = Number(data.oil    || data.oilPressure || 0);
   const isRunning = String(data.status || '').toLowerCase() === 'on' || Number(data.rpm || 0) > 0;
   const syncText  = String(data.sync  || '').toUpperCase();
+  const syncLabel = data.sync_label || (syncText === 'ON-GRID' ? 'Terhubung PLN' : 'Generator Aktif');
 
   /* --- Derived --- */
   const powerKw  = (volt * current) / 1000 || (isRunning ? 0.6 : 0);
@@ -191,6 +223,8 @@ function updatePublicView(data) {
   if (badge)  { badge.className = 'power-source-badge ' + sourceMeta.cls; }
   if (psbIcon) psbIcon.innerHTML = `<i class="${sourceMeta.icon}"></i>`;
   if (psbValue) psbValue.textContent = sourceMeta.label;
+  const publicSyncLabel = document.getElementById('publicSyncLabel');
+  if (publicSyncLabel) publicSyncLabel.textContent = syncLabel;
 
   /* Hero stats */
   document.getElementById('heroGenState').textContent  = sourceMeta.genState;
@@ -335,6 +369,11 @@ function updatePublicView(data) {
   /* Last update */
   document.getElementById('lastUpdate').innerHTML =
     `<i class="fas fa-clock"></i> Diperbarui: ${fmt(data.timestamp || new Date().toISOString())}`;
+
+  // NEW CODE
+  // EXTENSION ONLY
+  renderAlerts(data.alerts || []);
+  renderMaintenance(data.maintenance || {});
 }
 
 /* ── TIPS BUILDER ───────────────────────────────── */

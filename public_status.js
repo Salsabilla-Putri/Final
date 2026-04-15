@@ -69,17 +69,78 @@ function generateAlerts(latestDoc, previousDoc) {
         });
     }
 
+    // NEW CODE
+    // EXTENSION ONLY: add inactive generator info alert
+    const status = String(latestDoc?.status || '').toUpperCase();
+    if (status !== 'RUNNING') {
+        alerts.push({
+            type: 'info',
+            message: 'Generator is not active',
+            action: 'Monitoring standby mode'
+        });
+    }
+
     const latestSync = String(latestDoc?.sync || '').toUpperCase();
     const previousSync = String(previousDoc?.sync || '').toUpperCase();
     if (previousSync && latestSync && latestSync !== previousSync) {
         alerts.push({
             type: 'info',
-            message: 'Power source switched',
+            message: 'Power source changed',
             action: 'System adjusted automatically'
         });
     }
 
     return alerts;
+}
+
+// NEW CODE
+// EXTENSION ONLY: maintenance helper based on current + recent sensor data
+function getMaintenanceStatus(latestDoc, recentDocs = []) {
+    const latestTemp = Number(latestDoc?.temp || 0);
+    const latestFuel = Number(latestDoc?.fuel || 0);
+    const latestRpm = Number(latestDoc?.rpm || 0);
+
+    const rpmValues = [latestRpm, ...recentDocs.map((doc) => Number(doc?.rpm || 0))]
+        .filter((rpm) => Number.isFinite(rpm) && rpm > 0);
+    const maxRpm = rpmValues.length ? Math.max(...rpmValues) : 0;
+    const minRpm = rpmValues.length ? Math.min(...rpmValues) : 0;
+    const rpmUnstable = rpmValues.length >= 2 && (maxRpm - minRpm > 300);
+
+    const fuelValues = [latestFuel, ...recentDocs.map((doc) => Number(doc?.fuel || 0))]
+        .filter((fuel) => Number.isFinite(fuel));
+    const lowFuelCount = fuelValues.filter((fuel) => fuel < 30).length;
+    const fuelConsistentlyLow = fuelValues.length >= 2 && lowFuelCount >= 2;
+
+    if (latestTemp > 90 || rpmUnstable) {
+        return {
+            status: 'Service recommended',
+            recommendation: 'Please schedule a technician inspection soon.'
+        };
+    }
+
+    if (fuelConsistentlyLow) {
+        return {
+            status: 'Check fuel system',
+            recommendation: 'Inspect fuel lines and refill planning for stable operation.'
+        };
+    }
+
+    return {
+        status: 'Good condition',
+        recommendation: 'No immediate maintenance action required.'
+    };
+}
+
+// NEW CODE
+// EXTENSION ONLY: simple public labels without removing raw data
+function getPublicLabels(latestDoc) {
+    const syncValue = String(latestDoc?.sync || '').toUpperCase();
+    const statusValue = String(latestDoc?.status || '').toUpperCase();
+
+    return {
+        sync_label: syncValue === 'ON-GRID' ? 'Terhubung PLN' : 'Generator Aktif',
+        status_label: statusValue === 'RUNNING' ? 'Generator Menyala' : 'Generator Tidak Aktif'
+    };
 }
 
 function transformPublicStatus(latestDoc, previousDoc = null) {
@@ -89,6 +150,8 @@ function transformPublicStatus(latestDoc, previousDoc = null) {
     const engineActivity = getEngineActivity(latestDoc?.rpm);
     const dailyUsage = getDailyUsage(latestDoc?.power);
     const estimatedCost = getEstimatedCost(dailyUsage);
+    const maintenance = getMaintenanceStatus(latestDoc, previousDoc ? [previousDoc] : []);
+    const labels = getPublicLabels(latestDoc);
 
     return {
         power_status: powerStatus,
@@ -98,10 +161,15 @@ function transformPublicStatus(latestDoc, previousDoc = null) {
         daily_usage: dailyUsage,
         estimated_cost: estimatedCost,
         alerts: generateAlerts(latestDoc, previousDoc),
+        maintenance,
+        ...labels,
         last_updated: latestDoc?.timestamp || new Date().toISOString()
     };
 }
 
 module.exports = {
-    transformPublicStatus
+    transformPublicStatus,
+    generateAlerts,
+    getMaintenanceStatus,
+    getPublicLabels
 };
