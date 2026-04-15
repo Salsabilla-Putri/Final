@@ -1,6 +1,7 @@
 const API_URL = '/api/maintenance';
 let allTasks = [];
 let currentFilter = 'all';
+let pendingSuggestion = null;
 
 // --- 1. LOAD DATA DARI SERVER (MONGODB) ---
 async function fetchTasks() {
@@ -48,12 +49,15 @@ function render() {
     }
 
     filtered.forEach(t => {
+        const suggestionBadge = t.source === 'system'
+            ? '<div style="margin-top:4px;"><span class="status-badge status-scheduled">Saran dari Sistem</span></div>'
+            : '';
         let displayStatus = t.status;
         if(t.status === 'scheduled' && new Date(t.dueDate) < now) displayStatus = 'overdue';
 
         const row = `
         <tr>
-            <td><b>${t.task}</b></td>
+            <td><b>${t.task}</b>${suggestionBadge}</td>
             <td style="text-transform:capitalize">${t.type || '-'}</td>
             <td class="priority-${t.priority}" style="text-transform:capitalize">${t.priority || '-'}</td>
             <td>${new Date(t.dueDate).toLocaleDateString()}</td>
@@ -115,7 +119,9 @@ async function saveMaintenance() {
         type: document.getElementById('taskType').value,
         priority: document.getElementById('priority').value,
         dueDate: document.getElementById('dueDate').value,
-        assignedTo: document.getElementById('assignedTo').value
+        assignedTo: document.getElementById('assignedTo').value,
+        source: pendingSuggestion ? 'system' : 'manual',
+        suggestionId: pendingSuggestion?._id || null
     };
 
     if(!payload.task || !payload.dueDate) return showNotif('Please fill required fields', 'error');
@@ -126,6 +132,15 @@ async function saveMaintenance() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
+
+    if (pendingSuggestion?._id) {
+        await fetch(`/api/maintenance/suggestion/${pendingSuggestion._id}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'scheduled' })
+        });
+        pendingSuggestion = null;
+    }
 
     closeAddModal();
     fetchTasks(); // Refresh data
@@ -164,6 +179,34 @@ function setFilter(f, btn) {
 
 function openAddModal() { document.getElementById('addMaintenanceModal').style.display = 'flex'; }
 function closeAddModal() { document.getElementById('addMaintenanceModal').style.display = 'none'; }
+
+async function loadPendingSuggestion() {
+    try {
+        const res = await fetch('/api/maintenance/suggestion');
+        const json = await res.json();
+        pendingSuggestion = json?.data?.suggestion && json.data.suggestion.status === 'pending'
+            ? json.data.suggestion
+            : null;
+
+        if (!pendingSuggestion) return;
+        document.getElementById('taskName').value = pendingSuggestion.recommendation || '';
+        document.getElementById('taskType').value = 'preventive';
+        document.getElementById('priority').value = pendingSuggestion.decisionStatus === 'BAHAYA' ? 'high' : 'medium';
+        if (pendingSuggestion.suggestedDate) {
+            const due = new Date(pendingSuggestion.suggestedDate);
+            document.getElementById('dueDate').value = due.toISOString().slice(0, 10);
+        }
+        showNotif('Form diprefill dari Saran Maintenance sistem', 'success');
+    } catch (error) {
+        console.warn('loadPendingSuggestion error:', error);
+    }
+}
+
+const originalOpenAddModal = openAddModal;
+openAddModal = function() {
+    originalOpenAddModal();
+    loadPendingSuggestion();
+};
 
 function showNotif(msg, type) {
     const el = document.getElementById('notification');

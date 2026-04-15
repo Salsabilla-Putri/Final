@@ -29,6 +29,7 @@ let trendChart  = null;
 let donutChart  = null;
 let uptimeChart = null;
 let chartsReady = false;
+let latestDecisionPayload = null;
 
 /* ── UTILS ─────────────────────────────────── */
 const $ = id => document.getElementById(id);
@@ -645,6 +646,7 @@ async function loadPublicData() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const json = await res.json();
     updatePublicView(json?.data || {});
+    await loadMaintenanceDecision();
 
     if (lbEl) { lbEl.style.background='var(--ok-bg)'; lbEl.style.color='var(--ok)'; lbEl.style.borderColor='var(--ok-border)'; }
   } catch(e) {
@@ -661,9 +663,73 @@ async function loadPublicData() {
   }
 }
 
+async function loadMaintenanceDecision() {
+  try {
+    const res = await fetch('/api/maintenance/suggestion');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const data = json?.data || {};
+    latestDecisionPayload = data;
+
+    const status = String(data.status || 'AMAN').toUpperCase();
+    const badge = $('decisionBadge');
+    const statusText = status === 'BAHAYA' ? 'Bahaya' : status === 'WASPADA' ? 'Waspada' : 'Aman';
+    if (badge) badge.textContent = statusText;
+
+    if ($('decisionMessage')) $('decisionMessage').textContent = data.message || 'Kondisi mesin stabil.';
+    if ($('decisionRecommendation')) $('decisionRecommendation').textContent = data.recommendation || 'Lanjutkan pemantauan rutin.';
+
+    const navState = status === 'BAHAYA' ? 'err' : status === 'WASPADA' ? 'warn' : 'ok';
+    setNavDot('navDot-decision', navState);
+
+    const btn = $('approveSuggestionBtn');
+    const info = $('decisionApproveInfo');
+    const hasPendingSuggestion = Boolean(data.suggestion && data.suggestion.status === 'pending');
+    if (btn) btn.disabled = hasPendingSuggestion;
+    if (info) {
+      info.textContent = hasPendingSuggestion
+        ? 'Saran sudah dikirim ke teknisi dan menunggu penjadwalan.'
+        : 'Klik Setujui untuk mengirim saran maintenance ke teknisi.';
+    }
+  } catch (error) {
+    console.warn('loadMaintenanceDecision error:', error);
+    if ($('decisionMessage')) $('decisionMessage').textContent = 'Rekomendasi belum tersedia. Coba lagi beberapa saat.';
+    setNavDot('navDot-decision', 'warn');
+  }
+}
+
+async function approveMaintenanceSuggestion() {
+  if (!latestDecisionPayload) return;
+  const btn = $('approveSuggestionBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    const payload = {
+      source: 'system',
+      status: 'pending',
+      decisionStatus: latestDecisionPayload.status,
+      message: latestDecisionPayload.message,
+      recommendation: latestDecisionPayload.recommendation,
+      suggestedDate: latestDecisionPayload.suggestedDate || null
+    };
+
+    const res = await fetch('/api/maintenance/suggestion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if ($('decisionApproveInfo')) $('decisionApproveInfo').textContent = 'Saran berhasil dikirim ke halaman teknisi.';
+  } catch (error) {
+    console.warn('approveMaintenanceSuggestion error:', error);
+    if ($('decisionApproveInfo')) $('decisionApproveInfo').textContent = 'Gagal mengirim saran. Silakan coba lagi.';
+    if (btn) btn.disabled = false;
+  }
+}
+
 /* ── SCROLL SPY ─────────────────────────────── */
 function initScrollSpy() {
-  const sectionIds = ['heroSection','electricSection','engineSection','lifespanSection','fuelSection','maintenanceSection','healthSection','infoSection'];
+  const sectionIds = ['heroSection','electricSection','engineSection','lifespanSection','fuelSection','maintenanceSection','decisionSection','healthSection','infoSection'];
   const links = document.querySelectorAll('.sb-link');
   const obs = new IntersectionObserver(entries => {
     entries.forEach(e => {
@@ -698,6 +764,7 @@ $('logoutPublic')?.addEventListener('click', () => {
 
 /* ── REFRESH BTN ────────────────────────────── */
 $('refreshPublic')?.addEventListener('click', loadPublicData);
+$('approveSuggestionBtn')?.addEventListener('click', approveMaintenanceSuggestion);
 
 /* ── BOOT ────────────────────────────────────── */
 initSidebarUser();
