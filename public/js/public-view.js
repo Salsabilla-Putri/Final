@@ -29,6 +29,7 @@ let trendChart  = null;
 let donutChart  = null;
 let uptimeChart = null;
 let chartsReady = false;
+let latestDecisionPayload = null;
 
 /* ── UTILS ─────────────────────────────────── */
 const $ = id => document.getElementById(id);
@@ -641,10 +642,15 @@ async function loadPublicData() {
   if (btn) btn.classList.add('spinning');
 
   try {
-    const res  = await fetch('/api/engine-data/latest');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const json = await res.json();
+    const [latestRes, decisionRes]  = await Promise.all([
+      fetch('/api/engine-data/latest'),
+      fetch('/api/maintenance/suggestion')
+    ]);
+    if (!latestRes.ok) throw new Error('HTTP ' + latestRes.status);
+    const json = await latestRes.json();
+    const decisionJson = decisionRes.ok ? await decisionRes.json() : null;
     updatePublicView(json?.data || {});
+    updateDecisionView(decisionJson?.data || null, decisionJson?.suggestion || null);
 
     if (lbEl) { lbEl.style.background='var(--ok-bg)'; lbEl.style.color='var(--ok)'; lbEl.style.borderColor='var(--ok-border)'; }
   } catch(e) {
@@ -661,9 +667,66 @@ async function loadPublicData() {
   }
 }
 
+function updateDecisionView(decision, suggestion) {
+  latestDecisionPayload = decision || null;
+  const status = decision?.status || '-';
+  const statusText = $('decisionStatusText');
+  const messageText = $('decisionMessageText');
+  const recommendationText = $('decisionRecommendationText');
+  const badge = $('decisionBadge');
+  const approveInfo = $('decisionApproveInfo');
+  const approveBtn = $('approveDecisionBtn');
+
+  if (statusText) statusText.textContent = status;
+  if (messageText) messageText.textContent = decision?.message || 'Belum ada data keputusan.';
+  if (recommendationText) recommendationText.textContent = decision?.recommendation || '-';
+
+  if (badge) {
+    badge.className = 'sh-b';
+    badge.textContent = status === '-' ? 'Tidak tersedia' : status;
+    if (status === 'AMAN') badge.classList.add('ok');
+    else if (status === 'WASPADA') badge.classList.add('warn');
+    else if (status === 'BAHAYA') badge.classList.add('err');
+  }
+
+  const navStatus = status === 'BAHAYA' ? 'err' : (status === 'WASPADA' ? 'warn' : 'ok');
+  setNavDot('navDot-decision', navStatus);
+
+  if (!approveBtn) return;
+  const alreadyPending = suggestion?.status === 'pending';
+  approveBtn.disabled = !decision || alreadyPending;
+  approveBtn.textContent = alreadyPending ? 'Sudah Disetujui' : 'Setujui';
+  if (approveInfo) {
+    approveInfo.textContent = alreadyPending
+      ? 'Saran ini sudah masuk ke halaman teknisi.'
+      : 'Setujui jika Anda ingin kirim saran ini ke teknisi.';
+  }
+}
+
+async function approveDecision() {
+  if (!latestDecisionPayload) return;
+  const approveBtn = $('approveDecisionBtn');
+  const infoEl = $('decisionApproveInfo');
+  if (approveBtn) approveBtn.disabled = true;
+  try {
+    const res = await fetch('/api/maintenance/suggestion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'approve', decision: latestDecisionPayload })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (infoEl) infoEl.textContent = 'Saran berhasil dikirim ke teknisi.';
+    loadPublicData();
+  } catch (error) {
+    console.error('Approve decision error:', error);
+    if (infoEl) infoEl.textContent = 'Gagal kirim saran. Coba lagi.';
+    if (approveBtn) approveBtn.disabled = false;
+  }
+}
+
 /* ── SCROLL SPY ─────────────────────────────── */
 function initScrollSpy() {
-  const sectionIds = ['heroSection','electricSection','engineSection','lifespanSection','fuelSection','maintenanceSection','healthSection','infoSection'];
+  const sectionIds = ['heroSection','electricSection','engineSection','lifespanSection','fuelSection','maintenanceSection','decisionSection','healthSection','infoSection'];
   const links = document.querySelectorAll('.sb-link');
   const obs = new IntersectionObserver(entries => {
     entries.forEach(e => {
@@ -698,6 +761,7 @@ $('logoutPublic')?.addEventListener('click', () => {
 
 /* ── REFRESH BTN ────────────────────────────── */
 $('refreshPublic')?.addEventListener('click', loadPublicData);
+$('approveDecisionBtn')?.addEventListener('click', approveDecision);
 
 /* ── BOOT ────────────────────────────────────── */
 initSidebarUser();

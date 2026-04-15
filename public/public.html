@@ -10,89 +10,25 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="css/public-view.css">
+  <link rel="stylesheet" href="sidebar.css">
+  <link rel="stylesheet" href="css/topbar.css">
 </head>
 <body>
-
-  <!-- ══ SIDEBAR ══ -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sb-brand">
-      <div class="sb-logo"><i class="fas fa-bolt"></i></div>
-      <div>
-        <div class="sb-name">Gen-Track</div>
-        <div class="sb-role">Mode Masyarakat</div>
-      </div>
-    </div>
-
-    <div class="sb-sys-badge" id="sbSysBadge">
-      <div class="ssb-dot" id="sbSysDot"></div>
-      <span id="sbSysLabel">Memuat sistem...</span>
-    </div>
-
-    <nav class="sb-nav">
-      <div class="sb-group">Pemantauan</div>
-      <a href="#heroSection"       class="sb-link" data-section="heroSection">
-        <i class="fas fa-house-chimney"></i><span>Beranda</span>
-      </a>
-      <a href="#electricSection"   class="sb-link" data-section="electricSection">
-        <i class="fas fa-bolt-lightning"></i><span>Output Listrik</span>
-        <span class="sbl-dot" id="navDot-electric"></span>
-      </a>
-      <a href="#engineSection"     class="sb-link" data-section="engineSection">
-        <i class="fas fa-gears"></i><span>Mesin Motor</span>
-        <span class="sbl-dot" id="navDot-engine"></span>
-      </a>
-      <a href="#lifespanSection"   class="sb-link" data-section="lifespanSection">
-        <i class="fas fa-chart-line"></i><span>Masa Hidup</span>
-        <span class="sbl-dot" id="navDot-lifespan"></span>
-      </a>
-
-      <div class="sb-group">Status</div>
-      <a href="#fuelSection"       class="sb-link" data-section="fuelSection">
-        <i class="fas fa-gas-pump"></i><span>Bahan Bakar</span>
-        <span class="sbl-dot" id="navDot-fuel"></span>
-      </a>
-      <a href="#maintenanceSection" class="sb-link" data-section="maintenanceSection">
-        <i class="fas fa-screwdriver-wrench"></i><span>Jadwal Perawatan</span>
-        <span class="sbl-dot" id="navDot-maintenance"></span>
-      </a>
-      <a href="#healthSection"     class="sb-link" data-section="healthSection">
-        <i class="fas fa-shield-check"></i><span>Kondisi Sistem</span>
-        <span class="sbl-dot" id="navDot-health"></span>
-      </a>
-      <a href="#infoSection"       class="sb-link" data-section="infoSection">
-        <i class="fas fa-circle-info"></i><span>Panduan</span>
-      </a>
-    </nav>
-
-    <div class="sb-footer">
-      <div class="sb-user">
-        <div class="sb-avatar" id="sbAvatar">U</div>
-        <div class="sb-user-info">
-          <span id="sbUsername">Pengguna</span>
-          <span class="sb-urole">Masyarakat Awam</span>
-        </div>
-      </div>
-      <button class="sb-logout-btn" id="logoutPublic" title="Keluar">
-        <i class="fas fa-arrow-right-from-bracket"></i>
-      </button>
-    </div>
-  </aside>
-
-  <div class="sb-overlay" id="sbOverlay"></div>
-
-  <!-- ══ MAIN ══ -->
-  <main class="main" id="mainContent">
-
-    <header class="topbar">
-      <button class="tb-menu" id="menuBtn"><i class="fas fa-bars"></i></button>
-      <div class="tb-brand"><i class="fas fa-bolt"></i><span>Gen-Track</span></div>
-      <div class="tb-right">
+  <div id="sidebar-container"></div>
+  <div class="main-content">
+    <div class="topbar">
+      <div class="topbar-title">Public Monitoring</div>
+      <div style="display: flex; align-items: center; gap: 10px;">
         <div class="live-badge" id="liveBadge"><span class="live-dot"></span><span>LIVE</span></div>
         <button class="tb-btn" id="refreshPublic" title="Perbarui">
           <i class="fas fa-rotate" id="refreshIcon"></i>
         </button>
+        <div class="user-info" id="user-btn" style="cursor: pointer;">
+          <i class="fas fa-user"></i> <span>Pengguna</span>
+        </div>
       </div>
-    </header>
+    </div>
+    <main class="main" id="mainContent">
 
     <!-- 1. HERO ── -->
     <section class="hero-wrap" id="heroSection">
@@ -334,7 +270,19 @@
       <div class="maint-list" id="maintList"><!-- populated by JS --></div>
     </section>
 
-    <!-- 7. KONDISI SISTEM ── -->
+    <!-- 7. REKOMENDASI KONDISI MESIN ── -->
+    <section class="cs" id="decisionSection">
+      <div class="sh"><div class="sh-t"><i class="fas fa-lightbulb"></i> Rekomendasi Kondisi Mesin</div><div class="sh-b" id="decisionBadge">Memuat...</div></div>
+      <div class="decision-card">
+        <p class="decision-line"><b>Status:</b> <span id="decisionStatusText">-</span></p>
+        <p class="decision-line"><b>Penjelasan:</b> <span id="decisionMessageText">Memuat data rekomendasi...</span></p>
+        <p class="decision-line"><b>Rekomendasi:</b> <span id="decisionRecommendationText">-</span></p>
+        <button class="decision-approve-btn" id="approveDecisionBtn">Setujui</button>
+        <small id="decisionApproveInfo">Setujui jika Anda ingin kirim saran ini ke teknisi.</small>
+      </div>
+    </section>
+
+    <!-- 8. KONDISI SISTEM ── -->
     <section class="cs" id="healthSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-shield-check"></i> Kondisi Sistem</div></div>
       <div class="health-grid">
@@ -347,7 +295,7 @@
       </div>
     </section>
 
-    <!-- 8. PANDUAN ── -->
+    <!-- 9. PANDUAN ── -->
     <section class="cs" id="infoSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-circle-info"></i> Informasi &amp; Panduan</div></div>
       <div class="info-layout">
@@ -369,6 +317,8 @@
   </main>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="js/sidebar.js"></script>
   <script src="js/public-view.js"></script>
+  </div>
 </body>
 </html>
