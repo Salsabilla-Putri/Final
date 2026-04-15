@@ -372,6 +372,11 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   line-height: 1;
   transition: color .4s;
 }
+.psb-subvalue {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255,255,255,.75);
+}
 .pln .psb-value { color: var(--pln-400); }
 .gen .psb-value { color: var(--gen-400); }
 .hyb .psb-value { color: #a78bfa; }
@@ -626,6 +631,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .panel-icon--red   { background: var(--err-bg);  color: var(--err); }
 .panel-icon--blue  { background: var(--info-bg); color: var(--info); }
 .panel-icon--green { background: var(--ok-bg);   color: var(--ok); }
+.panel-icon--teal  { background: var(--pln-100); color: var(--pln-500); }
 
 .panel-header h3 {
   font-size: 14px;
@@ -634,6 +640,47 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   margin-bottom: 2px;
 }
 .panel-header p { font-size: 12px; color: var(--text-3); }
+
+/* NEW CODE */
+/* EXTENSION ONLY: public alerts + maintenance cards */
+.public-alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.public-alert {
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.public-alert strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-1);
+}
+
+.public-alert span { color: var(--text-3); }
+.public-alert--critical { border-color: #fecaca; background: #fff1f2; }
+.public-alert--warning { border-color: #fde68a; background: #fffbeb; }
+.public-alert--info { border-color: #bfdbfe; background: #eff6ff; }
+
+.maintenance-simple {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.maintenance-simple p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
 
 /* ── COST PANEL ──────────────────────────────── */
 .cost-display {
