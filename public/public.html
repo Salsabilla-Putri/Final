@@ -1,374 +1,67 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Gen-Track — Status Listrik</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Public Generator Dashboard</title>
   <script src="js/auth-guard.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/public-view.css">
+  <link rel="stylesheet" href="css/public-view.css" />
 </head>
 <body>
-
-  <!-- ══ SIDEBAR ══ -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sb-brand">
-      <div class="sb-logo"><i class="fas fa-bolt"></i></div>
+  <main class="container">
+    <header class="header">
       <div>
-        <div class="sb-name">Gen-Track</div>
-        <div class="sb-role">Mode Masyarakat</div>
+        <h1>Generator Public Dashboard</h1>
+        <p>Simple real-time status for all users</p>
       </div>
-    </div>
-
-    <div class="sb-sys-badge" id="sbSysBadge">
-      <div class="ssb-dot" id="sbSysDot"></div>
-      <span id="sbSysLabel">Memuat sistem...</span>
-    </div>
-
-    <nav class="sb-nav">
-      <div class="sb-group">Pemantauan</div>
-      <a href="#heroSection"       class="sb-link" data-section="heroSection">
-        <i class="fas fa-house-chimney"></i><span>Beranda</span>
-      </a>
-      <a href="#electricSection"   class="sb-link" data-section="electricSection">
-        <i class="fas fa-bolt-lightning"></i><span>Output Listrik</span>
-        <span class="sbl-dot" id="navDot-electric"></span>
-      </a>
-      <a href="#engineSection"     class="sb-link" data-section="engineSection">
-        <i class="fas fa-gears"></i><span>Mesin Motor</span>
-        <span class="sbl-dot" id="navDot-engine"></span>
-      </a>
-      <a href="#lifespanSection"   class="sb-link" data-section="lifespanSection">
-        <i class="fas fa-chart-line"></i><span>Masa Hidup</span>
-        <span class="sbl-dot" id="navDot-lifespan"></span>
-      </a>
-
-      <div class="sb-group">Status</div>
-      <a href="#fuelSection"       class="sb-link" data-section="fuelSection">
-        <i class="fas fa-gas-pump"></i><span>Bahan Bakar</span>
-        <span class="sbl-dot" id="navDot-fuel"></span>
-      </a>
-      <a href="#maintenanceSection" class="sb-link" data-section="maintenanceSection">
-        <i class="fas fa-screwdriver-wrench"></i><span>Jadwal Perawatan</span>
-        <span class="sbl-dot" id="navDot-maintenance"></span>
-      </a>
-      <a href="#healthSection"     class="sb-link" data-section="healthSection">
-        <i class="fas fa-shield-check"></i><span>Kondisi Sistem</span>
-        <span class="sbl-dot" id="navDot-health"></span>
-      </a>
-      <a href="#infoSection"       class="sb-link" data-section="infoSection">
-        <i class="fas fa-circle-info"></i><span>Panduan</span>
-      </a>
-    </nav>
-
-    <div class="sb-footer">
-      <div class="sb-user">
-        <div class="sb-avatar" id="sbAvatar">U</div>
-        <div class="sb-user-info">
-          <span id="sbUsername">Pengguna</span>
-          <span class="sb-urole">Masyarakat Awam</span>
-        </div>
-      </div>
-      <button class="sb-logout-btn" id="logoutPublic" title="Keluar">
-        <i class="fas fa-arrow-right-from-bracket"></i>
-      </button>
-    </div>
-  </aside>
-
-  <div class="sb-overlay" id="sbOverlay"></div>
-
-  <!-- ══ MAIN ══ -->
-  <main class="main" id="mainContent">
-
-    <header class="topbar">
-      <button class="tb-menu" id="menuBtn"><i class="fas fa-bars"></i></button>
-      <div class="tb-brand"><i class="fas fa-bolt"></i><span>Gen-Track</span></div>
-      <div class="tb-right">
-        <div class="live-badge" id="liveBadge"><span class="live-dot"></span><span>LIVE</span></div>
-        <button class="tb-btn" id="refreshPublic" title="Perbarui">
-          <i class="fas fa-rotate" id="refreshIcon"></i>
-        </button>
-      </div>
+      <button id="refreshBtn" type="button">Refresh</button>
     </header>
 
-    <!-- 1. HERO ── -->
-    <section class="hero-wrap" id="heroSection">
-      <div class="hero-card" id="heroCard">
-        <div class="hero-left">
-          <div class="hero-icon-wrap" id="heroIconWrap">
-            <i class="fas fa-plug" id="heroIconI"></i>
-          </div>
-          <div class="hero-text">
-            <div class="hero-lbl">Sumber Listrik Aktif</div>
-            <div class="hero-val" id="heroSourceName">Memuat...</div>
-            <div class="hero-sub" id="heroSourceSub">Menghubungkan ke sistem</div>
-          </div>
+    <section id="loading" class="state">Loading latest generator status...</section>
+    <section id="error" class="state error hidden"></section>
+
+    <section id="content" class="hidden">
+      <div class="cards">
+        <article class="card">
+          <h2>Power Status</h2>
+          <p id="powerStatus">-</p>
+        </article>
+        <article class="card">
+          <h2>Generator Condition</h2>
+          <p id="generatorCondition">-</p>
+        </article>
+        <article class="card">
+          <h2>Fuel Status</h2>
+          <p id="fuelStatus">-</p>
+        </article>
+        <article class="card">
+          <h2>Engine Activity</h2>
+          <p id="engineActivity">-</p>
+        </article>
+      </div>
+
+      <div class="summary">
+        <div>
+          <span>Estimated daily usage</span>
+          <strong id="dailyUsage">0 kWh</strong>
         </div>
-        <div class="hero-trio">
-          <div class="ht-item">
-            <span class="ht-lbl">Generator</span>
-            <span class="ht-val" id="htGen">--</span>
-          </div>
-          <div class="ht-sep"></div>
-          <div class="ht-item">
-            <span class="ht-lbl">PLN</span>
-            <span class="ht-val" id="htPLN">--</span>
-          </div>
-          <div class="ht-sep"></div>
-          <div class="ht-item">
-            <span class="ht-lbl">Sistem</span>
-            <span class="ht-val" id="htCond">--</span>
-          </div>
+        <div>
+          <span>Estimated daily cost</span>
+          <strong id="estimatedCost">Rp 0</strong>
+        </div>
+        <div>
+          <span>Last updated</span>
+          <strong id="lastUpdated">-</strong>
         </div>
       </div>
 
-      <div class="flow-bar" id="powerFlow">
-        <div class="fn fn-src" id="fnSrc">
-          <div class="fn-ico"><i id="fnSrcIcon" class="fas fa-plug"></i></div>
-          <span id="fnSrcLabel">PLN</span>
-        </div>
-        <div class="fl"><div class="fl-energy" id="flEnergy1"><div class="fle"></div><div class="fle"></div><div class="fle"></div><div class="fle"></div></div></div>
-        <div class="fn fn-mid">
-          <div class="fn-ico fn-ico-mid"><i class="fas fa-shuffle"></i></div>
-          <span>ATS</span>
-        </div>
-        <div class="fl"><div class="fl-energy" id="flEnergy2"><div class="fle"></div><div class="fle"></div><div class="fle"></div><div class="fle"></div></div></div>
-        <div class="fn fn-home">
-          <div class="fn-ico fn-ico-home"><i class="fas fa-house"></i></div>
-          <span>Beban</span>
-        </div>
-        <div class="fl-kw" id="flKw">-- kW</div>
-      </div>
+      <section>
+        <h2>Alerts</h2>
+        <div id="alerts" class="alerts"></div>
+      </section>
     </section>
-
-    <!-- 2. OUTPUT LISTRIK ── -->
-    <section class="cs" id="electricSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-bolt-lightning"></i> Output Listrik Generator</div><div class="sh-b" id="electricBadge">--</div></div>
-      <div class="m4">
-        <div class="mc" id="mcVolt">
-          <div class="mc-t"><div class="mci mci-b"><i class="fas fa-bolt"></i></div><span class="mc-l">Tegangan</span></div>
-          <div class="mc-v"><span id="mVolt">--</span><em>V</em></div>
-          <div class="mc-bar"><div class="mc-fill" id="mVoltBar"></div></div>
-          <div class="mc-h" id="mVoltHint">Standar: 198–242 V</div>
-        </div>
-        <div class="mc" id="mcFreq">
-          <div class="mc-t"><div class="mci mci-t"><i class="fas fa-wave-square"></i></div><span class="mc-l">Frekuensi</span></div>
-          <div class="mc-v"><span id="mFreq">--</span><em>Hz</em></div>
-          <div class="mc-bar"><div class="mc-fill" id="mFreqBar"></div></div>
-          <div class="mc-h" id="mFreqHint">Standar: 49.5–50.5 Hz</div>
-        </div>
-        <div class="mc" id="mcAmp">
-          <div class="mc-t"><div class="mci mci-a"><i class="fas fa-arrow-right-arrow-left"></i></div><span class="mc-l">Arus Listrik</span></div>
-          <div class="mc-v"><span id="mAmp">--</span><em>A</em></div>
-          <div class="mc-bar"><div class="mc-fill" id="mAmpBar"></div></div>
-          <div class="mc-h" id="mAmpHint">Beban saat ini</div>
-        </div>
-        <div class="mc" id="mcPow">
-          <div class="mc-t"><div class="mci mci-g"><i class="fas fa-plug-circle-bolt"></i></div><span class="mc-l">Daya Aktif</span></div>
-          <div class="mc-v"><span id="mPow">--</span><em>kW</em></div>
-          <div class="mc-bar"><div class="mc-fill" id="mPowBar"></div></div>
-          <div class="mc-h" id="mPowHint">Kapasitas terpakai</div>
-        </div>
-      </div>
-      <div class="chart-panel">
-        <div class="cp-head">
-          <span>Tren Tegangan &amp; Frekuensi (20 data terakhir)</span>
-          <div class="cp-leg">
-            <span class="cpl cpl-b"></span><span>Tegangan (V)</span>
-            <span class="cpl cpl-t"></span><span>Frekuensi (Hz×4)</span>
-          </div>
-        </div>
-        <div style="height:170px;position:relative">
-          <canvas id="trendChart" role="img" aria-label="Grafik tren tegangan dan frekuensi 20 data terakhir"></canvas>
-        </div>
-      </div>
-    </section>
-
-    <!-- 3. MESIN MOTOR BAKAR ── -->
-    <section class="cs" id="engineSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-gears"></i> Mesin Motor Bakar</div><div class="sh-b" id="engineBadge">--</div></div>
-      <div class="engine-layout">
-        <!-- RPM Gauge -->
-        <div class="gauge-card">
-          <div class="gc-lbl">Putaran Mesin</div>
-          <svg viewBox="0 0 200 125" class="gauge-svg">
-            <path d="M 15 112 A 90 90 0 0 1 185 112" fill="none" stroke="#e8effe" stroke-width="14" stroke-linecap="round"/>
-            <path id="rpmArc" d="M 15 112 A 90 90 0 0 1 185 112" fill="none" stroke="#1f4191" stroke-width="14"
-                  stroke-linecap="round" stroke-dasharray="282.7" stroke-dashoffset="282.7" style="transition:stroke-dashoffset .6s,stroke .4s"/>
-            <text x="100" y="90"  text-anchor="middle" class="gv-n" id="rpmVal">0</text>
-            <text x="100" y="110" text-anchor="middle" class="gv-u">RPM</text>
-            <text x="15"  y="126" text-anchor="middle" class="gv-tk">0</text>
-            <text x="185" y="126" text-anchor="middle" class="gv-tk">3600</text>
-          </svg>
-          <div class="gc-status" id="rpmStatus">Standby</div>
-        </div>
-        <!-- Temperature Gauge -->
-        <div class="gauge-card">
-          <div class="gc-lbl">Suhu Mesin</div>
-          <svg viewBox="0 0 200 125" class="gauge-svg">
-            <path d="M 15 112 A 90 90 0 0 1 185 112" fill="none" stroke="#e8effe" stroke-width="14" stroke-linecap="round"/>
-            <path id="tempArc" d="M 15 112 A 90 90 0 0 1 185 112" fill="none" stroke="#10b981" stroke-width="14"
-                  stroke-linecap="round" stroke-dasharray="282.7" stroke-dashoffset="282.7" style="transition:stroke-dashoffset .6s,stroke .4s"/>
-            <text x="100" y="90"  text-anchor="middle" class="gv-n" id="tempVal">0</text>
-            <text x="100" y="110" text-anchor="middle" class="gv-u">°C</text>
-            <text x="15"  y="126" text-anchor="middle" class="gv-tk">0</text>
-            <text x="185" y="126" text-anchor="middle" class="gv-tk">120°</text>
-          </svg>
-          <div class="gc-status" id="tempStatus">Normal</div>
-        </div>
-        <!-- Engine sub-stats -->
-        <div class="engine-stats">
-          <div class="es" id="esOil">
-            <div class="es-ico"><i class="fas fa-oil-can"></i></div>
-            <div class="es-body">
-              <span class="es-l">Tekanan Oli</span>
-              <strong id="esOilVal">-- kPa</strong>
-              <span class="es-h">Normal: 280–550 kPa</span>
-            </div>
-            <div class="es-dot" id="esOilDot"></div>
-          </div>
-          <div class="es" id="esCoolant">
-            <div class="es-ico"><i class="fas fa-droplet"></i></div>
-            <div class="es-body">
-              <span class="es-l">Level Coolant</span>
-              <strong id="esCoolantVal">-- %</strong>
-              <span class="es-h">Batas min: 30%</span>
-            </div>
-            <div class="es-dot" id="esCoolantDot"></div>
-          </div>
-          <div class="es" id="esBatt">
-            <div class="es-ico"><i class="fas fa-car-battery"></i></div>
-            <div class="es-body">
-              <span class="es-l">Tegangan Aki</span>
-              <strong id="esBattVal">-- V</strong>
-              <span class="es-h">Normal: 12.4–14.5 V</span>
-            </div>
-            <div class="es-dot" id="esBattDot"></div>
-          </div>
-          <div class="es" id="esLoad">
-            <div class="es-ico"><i class="fas fa-gauge-high"></i></div>
-            <div class="es-body">
-              <span class="es-l">Beban Mesin</span>
-              <strong id="esLoadVal">-- %</strong>
-              <span class="es-h">Optimal: 70–85%</span>
-            </div>
-            <div class="es-dot" id="esLoadDot"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 4. MASA HIDUP ── -->
-    <section class="cs" id="lifespanSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-chart-line"></i> Masa Hidup &amp; Jam Operasi</div><div class="sh-b" id="lifespanBadge">--</div></div>
-      <div class="lifespan-layout">
-        <div class="ls-donut-card">
-          <div class="lsdc-chart">
-            <canvas id="lifespanDonut" role="img" aria-label="Donut chart kondisi masa hidup generator"></canvas>
-            <div class="lsdc-center">
-              <div class="lsdc-pct" id="ldcPct">--%</div>
-              <div class="lsdc-sub">Kondisi</div>
-            </div>
-          </div>
-          <div class="lsdc-stats">
-            <div class="lsdc-row"><span>Total Jam Pakai</span><strong id="engHoursTotal">--</strong></div>
-            <div class="lsdc-row"><span>Umur Mesin (est.)</span><strong>10.000 jam</strong></div>
-            <div class="lsdc-row"><span>Sisa Umur (est.)</span><strong id="engHoursRemain">--</strong></div>
-          </div>
-        </div>
-        <div class="ls-uptime-card">
-          <div class="lsuc-head">
-            <span>Waktu Operasi 7 Hari Terakhir</span>
-            <strong id="weeklyTotal">-- jam</strong>
-          </div>
-          <div style="height:160px;position:relative">
-            <canvas id="uptimeChart" role="img" aria-label="Grafik waktu operasi mingguan"></canvas>
-          </div>
-        </div>
-      </div>
-      <div class="nsb" id="nextServiceBanner">
-        <div class="nsb-ico"><i class="fas fa-wrench"></i></div>
-        <div class="nsb-body">
-          <div class="nsb-t" id="nsbTitle">Memuat jadwal servis...</div>
-          <div class="nsb-s" id="nsbSub">Informasi servis berikutnya</div>
-        </div>
-        <div class="nsb-val" id="nsbVal">--</div>
-      </div>
-    </section>
-
-    <!-- 5. BAHAN BAKAR ── -->
-    <section class="cs" id="fuelSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-gas-pump"></i> Bahan Bakar</div><div class="sh-b" id="fuelBadge">--</div></div>
-      <div class="fuel-layout">
-        <div class="fuel-card">
-          <div class="fuel-gauge-wrap">
-            <div class="fuel-track"><div class="fuel-fill" id="fuelBarFill"></div></div>
-            <div class="fuel-pct" id="fuelPct">--%</div>
-            <div class="fuel-ticks"><span>E</span><span>¼</span><span>½</span><span>¾</span><span>F</span></div>
-          </div>
-          <div class="fuel-stats">
-            <div class="fst"><i class="fas fa-clock"></i><div><span>Estimasi Operasi</span><strong id="fuelRuntime">--</strong></div></div>
-            <div class="fst"><i class="fas fa-fire-burner"></i><div><span>Konsumsi BBM</span><strong id="fuelConsumption">~2–3 L/jam</strong></div></div>
-            <div class="fst"><i class="fas fa-triangle-exclamation"></i><div><span>Status</span><strong id="fuelStatusText">--</strong></div></div>
-          </div>
-        </div>
-        <div class="fuel-advice" id="fuelAdvice">
-          <i class="fas fa-circle-info fai"></i>
-          <p id="fuelAdviceText">Mengambil informasi bahan bakar...</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- 6. JADWAL PERAWATAN ── -->
-    <section class="cs" id="maintenanceSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-screwdriver-wrench"></i> Jadwal Perawatan</div><div class="sh-b" id="maintenanceBadge">--</div></div>
-      <div class="maint-summary">
-        <div class="ms-box"><div class="ms-n ms-ok" id="maintOkCount">--</div><div class="ms-l">Komponen OK</div></div>
-        <div class="ms-box"><div class="ms-n ms-warn" id="maintWarnCount">--</div><div class="ms-l">Segera Cek</div></div>
-        <div class="ms-box"><div class="ms-n ms-err" id="maintErrCount">--</div><div class="ms-l">Perlu Servis</div></div>
-        <div class="ms-box ms-next-box"><div class="ms-nv" id="maintNextDate">--</div><div class="ms-l">Jadwal Servis Berikutnya</div></div>
-      </div>
-      <div class="maint-list" id="maintList"><!-- populated by JS --></div>
-    </section>
-
-    <!-- 7. KONDISI SISTEM ── -->
-    <section class="cs" id="healthSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-shield-check"></i> Kondisi Sistem</div></div>
-      <div class="health-grid">
-        <div class="hc" id="hcPLN"><div class="hc-l"><div class="hc-dot" id="hcPLNDot"></div><div><div class="hc-t">Jaringan PLN</div><div class="hc-d" id="hcPLNDesc">Memeriksa...</div></div></div><div class="hc-badge" id="hcPLNBadge">--</div></div>
-        <div class="hc" id="hcGen"><div class="hc-l"><div class="hc-dot" id="hcGenDot"></div><div><div class="hc-t">Unit Generator</div><div class="hc-d" id="hcGenDesc">Memeriksa...</div></div></div><div class="hc-badge" id="hcGenBadge">--</div></div>
-        <div class="hc" id="hcSync"><div class="hc-l"><div class="hc-dot" id="hcSyncDot"></div><div><div class="hc-t">Sinkronisasi Grid</div><div class="hc-d" id="hcSyncDesc">Memeriksa...</div></div></div><div class="hc-badge" id="hcSyncBadge">--</div></div>
-        <div class="hc" id="hcAuto"><div class="hc-l"><div class="hc-dot" id="hcAutoDot"></div><div><div class="hc-t">Kendali Otomatis (ATS)</div><div class="hc-d" id="hcAutoDesc">Memeriksa...</div></div></div><div class="hc-badge" id="hcAutoBadge">--</div></div>
-        <div class="hc" id="hcEngine"><div class="hc-l"><div class="hc-dot" id="hcEngineDot"></div><div><div class="hc-t">Mesin Motor</div><div class="hc-d" id="hcEngineDesc">Memeriksa...</div></div></div><div class="hc-badge" id="hcEngineBadge">--</div></div>
-        <div class="hc" id="hcMaint"><div class="hc-l"><div class="hc-dot" id="hcMaintDot"></div><div><div class="hc-t">Status Perawatan</div><div class="hc-d" id="hcMaintDesc">Memeriksa...</div></div></div><div class="hc-badge" id="hcMaintBadge">--</div></div>
-      </div>
-    </section>
-
-    <!-- 8. PANDUAN ── -->
-    <section class="cs" id="infoSection">
-      <div class="sh"><div class="sh-t"><i class="fas fa-circle-info"></i> Informasi &amp; Panduan</div></div>
-      <div class="info-layout">
-        <div class="info-msg">
-          <div class="im-header"><div class="im-ico" id="imIcon"><i class="fas fa-bullhorn"></i></div><span>Pesan Status Sistem</span></div>
-          <p id="publicMessage">Mengambil informasi...</p>
-        </div>
-        <div class="info-tips">
-          <div class="it-header"><i class="fas fa-list-check"></i> Yang Perlu Anda Lakukan</div>
-          <ul id="publicTips"><li><i class="fas fa-spinner fa-spin"></i><span>Memuat saran...</span></li></ul>
-        </div>
-      </div>
-    </section>
-
-    <footer class="page-footer">
-      <span id="lastUpdate"><i class="fas fa-clock"></i> Belum diperbarui</span>
-      <span>·</span><span>Auto-refresh setiap 10 detik</span><span>·</span><span>Gen-Track v3.0</span>
-    </footer>
   </main>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <script src="js/public-view.js"></script>
 </body>
 </html>
