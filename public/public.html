@@ -55,7 +55,7 @@
         <i class="fas fa-screwdriver-wrench"></i><span>Jadwal Perawatan</span>
         <span class="sbl-dot" id="navDot-maintenance"></span>
       </a>
-      <a href="#decisionSection" class="sb-link" data-section="decisionSection">
+      <a href="#decisionSection"     class="sb-link" data-section="decisionSection">
         <i class="fas fa-lightbulb"></i><span>Rekomendasi Mesin</span>
         <span class="sbl-dot" id="navDot-decision"></span>
       </a>
@@ -338,23 +338,19 @@
       <div class="maint-list" id="maintList"><!-- populated by JS --></div>
     </section>
 
+    <!-- 7. REKOMENDASI KONDISI MESIN ── -->
     <section class="cs" id="decisionSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-lightbulb"></i> Rekomendasi Kondisi Mesin</div><div class="sh-b" id="decisionBadge">Memuat...</div></div>
-      <div class="info-layout">
-        <div class="info-msg">
-          <div class="im-header"><div class="im-ico"><i class="fas fa-heart-pulse"></i></div><span>Status Mesin</span></div>
-          <p id="decisionMessage">Sistem sedang menganalisis kondisi mesin.</p>
-        </div>
-        <div class="info-tips">
-          <div class="it-header"><i class="fas fa-list-check"></i> Rekomendasi</div>
-          <p id="decisionRecommendation">Menyiapkan saran tindakan...</p>
-          <button class="tb-btn" id="approveSuggestionBtn" style="margin-top:12px;">Setujui</button>
-          <p id="decisionApproveInfo" style="margin-top:8px;color:#5a6d90;font-size:13px;"></p>
-        </div>
+      <div class="decision-card">
+        <p class="decision-line"><b>Status:</b> <span id="decisionStatusText">-</span></p>
+        <p class="decision-line"><b>Penjelasan:</b> <span id="decisionMessageText">Memuat data rekomendasi...</span></p>
+        <p class="decision-line"><b>Rekomendasi:</b> <span id="decisionRecommendationText">-</span></p>
+        <button class="decision-approve-btn" id="approveDecisionBtn">Setujui</button>
+        <small id="decisionApproveInfo">Setujui jika Anda ingin kirim saran ini ke teknisi.</small>
       </div>
     </section>
 
-    <!-- 7. KONDISI SISTEM ── -->
+    <!-- 8. KONDISI SISTEM ── -->
     <section class="cs" id="healthSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-shield-check"></i> Kondisi Sistem</div></div>
       <div class="health-grid">
@@ -367,7 +363,7 @@
       </div>
     </section>
 
-    <!-- 8. PANDUAN ── -->
+    <!-- 9. PANDUAN ── -->
     <section class="cs" id="infoSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-circle-info"></i> Informasi &amp; Panduan</div></div>
       <div class="info-layout">

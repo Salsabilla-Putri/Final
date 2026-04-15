@@ -642,11 +642,15 @@ async function loadPublicData() {
   if (btn) btn.classList.add('spinning');
 
   try {
-    const res  = await fetch('/api/engine-data/latest');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const json = await res.json();
+    const [latestRes, decisionRes]  = await Promise.all([
+      fetch('/api/engine-data/latest'),
+      fetch('/api/maintenance/suggestion')
+    ]);
+    if (!latestRes.ok) throw new Error('HTTP ' + latestRes.status);
+    const json = await latestRes.json();
+    const decisionJson = decisionRes.ok ? await decisionRes.json() : null;
     updatePublicView(json?.data || {});
-    await loadMaintenanceDecision();
+    updateDecisionView(decisionJson?.data || null, decisionJson?.suggestion || null);
 
     if (lbEl) { lbEl.style.background='var(--ok-bg)'; lbEl.style.color='var(--ok)'; lbEl.style.borderColor='var(--ok-border)'; }
   } catch(e) {
@@ -663,67 +667,60 @@ async function loadPublicData() {
   }
 }
 
-async function loadMaintenanceDecision() {
-  try {
-    const res = await fetch('/api/maintenance/suggestion');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const data = json?.data || {};
-    latestDecisionPayload = data;
+function updateDecisionView(decision, suggestion) {
+  latestDecisionPayload = decision || null;
+  const status = decision?.status || '-';
+  const statusText = $('decisionStatusText');
+  const messageText = $('decisionMessageText');
+  const recommendationText = $('decisionRecommendationText');
+  const badge = $('decisionBadge');
+  const approveInfo = $('decisionApproveInfo');
+  const approveBtn = $('approveDecisionBtn');
 
-    const status = String(data.status || 'AMAN').toUpperCase();
-    const badge = $('decisionBadge');
-    const statusText = status === 'BAHAYA' ? 'Bahaya' : status === 'WASPADA' ? 'Waspada' : 'Aman';
-    if (badge) badge.textContent = statusText;
+  if (statusText) statusText.textContent = status;
+  if (messageText) messageText.textContent = decision?.message || 'Belum ada data keputusan.';
+  if (recommendationText) recommendationText.textContent = decision?.recommendation || '-';
 
-    if ($('decisionMessage')) $('decisionMessage').textContent = data.message || 'Kondisi mesin stabil.';
-    if ($('decisionRecommendation')) $('decisionRecommendation').textContent = data.recommendation || 'Lanjutkan pemantauan rutin.';
+  if (badge) {
+    badge.className = 'sh-b';
+    badge.textContent = status === '-' ? 'Tidak tersedia' : status;
+    if (status === 'AMAN') badge.classList.add('ok');
+    else if (status === 'WASPADA') badge.classList.add('warn');
+    else if (status === 'BAHAYA') badge.classList.add('err');
+  }
 
-    const navState = status === 'BAHAYA' ? 'err' : status === 'WASPADA' ? 'warn' : 'ok';
-    setNavDot('navDot-decision', navState);
+  const navStatus = status === 'BAHAYA' ? 'err' : (status === 'WASPADA' ? 'warn' : 'ok');
+  setNavDot('navDot-decision', navStatus);
 
-    const btn = $('approveSuggestionBtn');
-    const info = $('decisionApproveInfo');
-    const hasPendingSuggestion = Boolean(data.suggestion && data.suggestion.status === 'pending');
-    if (btn) btn.disabled = hasPendingSuggestion;
-    if (info) {
-      info.textContent = hasPendingSuggestion
-        ? 'Saran sudah dikirim ke teknisi dan menunggu penjadwalan.'
-        : 'Klik Setujui untuk mengirim saran maintenance ke teknisi.';
-    }
-  } catch (error) {
-    console.warn('loadMaintenanceDecision error:', error);
-    if ($('decisionMessage')) $('decisionMessage').textContent = 'Rekomendasi belum tersedia. Coba lagi beberapa saat.';
-    setNavDot('navDot-decision', 'warn');
+  if (!approveBtn) return;
+  const alreadyPending = suggestion?.status === 'pending';
+  approveBtn.disabled = !decision || alreadyPending;
+  approveBtn.textContent = alreadyPending ? 'Sudah Disetujui' : 'Setujui';
+  if (approveInfo) {
+    approveInfo.textContent = alreadyPending
+      ? 'Saran ini sudah masuk ke halaman teknisi.'
+      : 'Setujui jika Anda ingin kirim saran ini ke teknisi.';
   }
 }
 
-async function approveMaintenanceSuggestion() {
+async function approveDecision() {
   if (!latestDecisionPayload) return;
-  const btn = $('approveSuggestionBtn');
-  if (btn) btn.disabled = true;
-
+  const approveBtn = $('approveDecisionBtn');
+  const infoEl = $('decisionApproveInfo');
+  if (approveBtn) approveBtn.disabled = true;
   try {
-    const payload = {
-      source: 'system',
-      status: 'pending',
-      decisionStatus: latestDecisionPayload.status,
-      message: latestDecisionPayload.message,
-      recommendation: latestDecisionPayload.recommendation,
-      suggestedDate: latestDecisionPayload.suggestedDate || null
-    };
-
     const res = await fetch('/api/maintenance/suggestion', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ action: 'approve', decision: latestDecisionPayload })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    if ($('decisionApproveInfo')) $('decisionApproveInfo').textContent = 'Saran berhasil dikirim ke halaman teknisi.';
+    if (infoEl) infoEl.textContent = 'Saran berhasil dikirim ke teknisi.';
+    loadPublicData();
   } catch (error) {
-    console.warn('approveMaintenanceSuggestion error:', error);
-    if ($('decisionApproveInfo')) $('decisionApproveInfo').textContent = 'Gagal mengirim saran. Silakan coba lagi.';
-    if (btn) btn.disabled = false;
+    console.error('Approve decision error:', error);
+    if (infoEl) infoEl.textContent = 'Gagal kirim saran. Coba lagi.';
+    if (approveBtn) approveBtn.disabled = false;
   }
 }
 
@@ -764,7 +761,7 @@ $('logoutPublic')?.addEventListener('click', () => {
 
 /* ── REFRESH BTN ────────────────────────────── */
 $('refreshPublic')?.addEventListener('click', loadPublicData);
-$('approveSuggestionBtn')?.addEventListener('click', approveMaintenanceSuggestion);
+$('approveDecisionBtn')?.addEventListener('click', approveDecision);
 
 /* ── BOOT ────────────────────────────────────── */
 initSidebarUser();

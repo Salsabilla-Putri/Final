@@ -1,4 +1,5 @@
 const API_URL = '/api/maintenance';
+const SUGGESTION_API_URL = '/api/maintenance/suggestion';
 let allTasks = [];
 let currentFilter = 'all';
 let pendingSuggestion = null;
@@ -13,6 +14,39 @@ async function fetchTasks() {
             render();
         }
     } catch (e) { console.error("Fetch error:", e); }
+}
+
+async function fetchMaintenanceSuggestion() {
+    try {
+        const res = await fetch(SUGGESTION_API_URL);
+        const json = await res.json();
+        const suggestion = json?.suggestion;
+        pendingSuggestion = suggestion && suggestion.status === 'pending' ? suggestion : null;
+        renderSuggestionBanner();
+    } catch (error) {
+        console.error('Suggestion fetch error:', error);
+    }
+}
+
+function renderSuggestionBanner() {
+    const banner = document.getElementById('systemSuggestionBanner');
+    const text = document.getElementById('systemSuggestionText');
+    const btn = document.getElementById('useSuggestionBtn');
+    if (!banner || !text || !btn) return;
+
+    if (!pendingSuggestion) {
+        banner.style.display = 'none';
+        btn.style.display = 'none';
+        return;
+    }
+
+    banner.style.display = 'block';
+    btn.style.display = 'inline-flex';
+    text.innerHTML = `
+      <div><b>Status:</b> ${pendingSuggestion.decisionStatus}</div>
+      <div>${pendingSuggestion.message}</div>
+      <div><b>Rekomendasi:</b> ${pendingSuggestion.recommendation}</div>
+    `;
 }
 
 // --- 2. RENDER UI (TABEL & STATUS) ---
@@ -180,33 +214,23 @@ function setFilter(f, btn) {
 function openAddModal() { document.getElementById('addMaintenanceModal').style.display = 'flex'; }
 function closeAddModal() { document.getElementById('addMaintenanceModal').style.display = 'none'; }
 
-async function loadPendingSuggestion() {
-    try {
-        const res = await fetch('/api/maintenance/suggestion');
-        const json = await res.json();
-        pendingSuggestion = json?.data?.suggestion && json.data.suggestion.status === 'pending'
-            ? json.data.suggestion
-            : null;
+function openAddModalFromSuggestion() {
+    if (!pendingSuggestion) return openAddModal();
+    openAddModal();
 
-        if (!pendingSuggestion) return;
-        document.getElementById('taskName').value = pendingSuggestion.recommendation || '';
-        document.getElementById('taskType').value = 'preventive';
-        document.getElementById('priority').value = pendingSuggestion.decisionStatus === 'BAHAYA' ? 'high' : 'medium';
-        if (pendingSuggestion.suggestedDate) {
-            const due = new Date(pendingSuggestion.suggestedDate);
+    document.getElementById('taskName').value = pendingSuggestion.recommendation || '';
+    document.getElementById('taskType').value = 'preventive';
+    document.getElementById('priority').value = pendingSuggestion.priority || (
+        pendingSuggestion.decisionStatus === 'BAHAYA' ? 'high' :
+        pendingSuggestion.decisionStatus === 'WASPADA' ? 'medium' : 'low'
+    );
+    if (pendingSuggestion.suggestedDate) {
+        const due = new Date(pendingSuggestion.suggestedDate);
+        if (!Number.isNaN(due.getTime())) {
             document.getElementById('dueDate').value = due.toISOString().slice(0, 10);
         }
-        showNotif('Form diprefill dari Saran Maintenance sistem', 'success');
-    } catch (error) {
-        console.warn('loadPendingSuggestion error:', error);
     }
 }
-
-const originalOpenAddModal = openAddModal;
-openAddModal = function() {
-    originalOpenAddModal();
-    loadPendingSuggestion();
-};
 
 function showNotif(msg, type) {
     const el = document.getElementById('notification');
@@ -241,4 +265,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load Data Pertama Kali
     fetchTasks();
+    fetchMaintenanceSuggestion();
 });
