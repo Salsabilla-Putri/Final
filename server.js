@@ -435,6 +435,8 @@ const maintenanceSchema = new mongoose.Schema({
     status: { type: String, default: 'scheduled' }, // scheduled, completed, etc.
     dueDate: Date,
     assignedTo: String,
+    source: String,
+    suggestionId: String,
     createdAt: { type: Date, default: Date.now }, // Tanggal dibuat
     completedAt: Date                             // Tanggal selesai
 });
@@ -495,6 +497,102 @@ app.delete('/api/maintenance/:id', async (req, res) => {
     try {
         await Maintenance.findByIdAndDelete(req.params.id);
         res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+async function buildMaintenanceDecisionPayload() {
+    const latestSensor = await GeneratorData.findOne().sort({ timestamp: -1 }).lean();
+    const alertCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentAlerts = await Alert.find({ timestamp: { $gte: alertCutoff } })
+        .sort({ timestamp: -1 })
+        .limit(100)
+        .lean();
+
+    const decision = generateMaintenanceDecision(latestSensor || {}, recentAlerts);
+    const pendingSuggestion = await MaintenanceSuggestion.findOne({ status: 'pending' })
+        .sort({ createdAt: -1 })
+        .lean();
+
+    return {
+        ...decision,
+        suggestion: pendingSuggestion || null
+    };
+}
+
+app.get('/api/maintenance/suggestion', async (req, res) => {
+    try {
+        const payload = await buildMaintenanceDecisionPayload();
+        res.json({ success: true, data: payload });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/maintenance/suggestion', async (req, res) => {
+    try {
+        const payload = await buildMaintenanceDecisionPayload();
+        res.json({ success: true, data: payload });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/maintenance/suggestion', async (req, res) => {
+    try {
+        const { decisionStatus, status, message, recommendation, suggestedDate, source } = req.body || {};
+        if (!decisionStatus || !message || !recommendation) {
+            return res.status(400).json({ success: false, error: 'decisionStatus, message, recommendation are required' });
+        }
+
+        const suggestion = await new MaintenanceSuggestion({
+            source: source || 'system',
+            status: status || 'pending',
+            decisionStatus,
+            message,
+            recommendation,
+            suggestedDate: suggestedDate ? new Date(suggestedDate) : null,
+            approvedAt: new Date()
+        }).save();
+
+        res.json({ success: true, data: suggestion });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/maintenance/suggestion', async (req, res) => {
+    try {
+        const { decisionStatus, status, message, recommendation, suggestedDate, source } = req.body || {};
+        if (!decisionStatus || !message || !recommendation) {
+            return res.status(400).json({ success: false, error: 'decisionStatus, message, recommendation are required' });
+        }
+
+        const suggestion = await new MaintenanceSuggestion({
+            source: source || 'system',
+            status: status || 'pending',
+            decisionStatus,
+            message,
+            recommendation,
+            suggestedDate: suggestedDate ? new Date(suggestedDate) : null,
+            approvedAt: new Date()
+        }).save();
+
+        res.json({ success: true, data: suggestion });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.put('/api/maintenance/suggestion/:id/status', async (req, res) => {
+    try {
+        const updated = await MaintenanceSuggestion.findByIdAndUpdate(
+            req.params.id,
+            { status: req.body?.status || 'scheduled' },
+            { new: true }
+        );
+        res.json({ success: true, data: updated });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

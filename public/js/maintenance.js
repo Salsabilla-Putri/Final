@@ -83,12 +83,15 @@ function render() {
     }
 
     filtered.forEach(t => {
+        const suggestionBadge = t.source === 'system'
+            ? '<div style="margin-top:4px;"><span class="status-badge status-scheduled">Saran dari Sistem</span></div>'
+            : '';
         let displayStatus = t.status;
         if(t.status === 'scheduled' && new Date(t.dueDate) < now) displayStatus = 'overdue';
 
         const row = `
         <tr>
-            <td><b>${t.task}</b></td>
+            <td><b>${t.task}</b>${suggestionBadge}</td>
             <td style="text-transform:capitalize">${t.type || '-'}</td>
             <td class="priority-${t.priority}" style="text-transform:capitalize">${t.priority || '-'}</td>
             <td>${new Date(t.dueDate).toLocaleDateString()}</td>
@@ -150,7 +153,9 @@ async function saveMaintenance() {
         type: document.getElementById('taskType').value,
         priority: document.getElementById('priority').value,
         dueDate: document.getElementById('dueDate').value,
-        assignedTo: document.getElementById('assignedTo').value
+        assignedTo: document.getElementById('assignedTo').value,
+        source: pendingSuggestion ? 'system' : 'manual',
+        suggestionId: pendingSuggestion?._id || null
     };
 
     if(!payload.task || !payload.dueDate) return showNotif('Please fill required fields', 'error');
@@ -161,6 +166,15 @@ async function saveMaintenance() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
+
+    if (pendingSuggestion?._id) {
+        await fetch(`/api/maintenance/suggestion/${pendingSuggestion._id}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'scheduled' })
+        });
+        pendingSuggestion = null;
+    }
 
     closeAddModal();
     fetchTasks(); // Refresh data
