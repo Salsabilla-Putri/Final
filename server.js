@@ -256,9 +256,17 @@ app.get('/api/engine-data/latest', async (req, res) => {
             return res.json({ success: true, data: latestData, source: 'memory' });
         }
 
-        const dbData = await GeneratorData.findOne().sort({ timestamp: -1 });
-        const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
-        res.json({ success: true, data: isDbFresh ? dbData : latestData, source: isDbFresh ? 'database' : 'memory' });
+        const requestedDeviceId = req.query.deviceId;
+        const defaultDeviceId = process.env.DEFAULT_REPORT_DEVICE_ID || null;
+        const effectiveDeviceId = requestedDeviceId || defaultDeviceId;
+        const query = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
+
+        const dbData = await GeneratorData.findOne(query).sort({ timestamp: -1 });
+        if (dbData) {
+            return res.json({ success: true, data: dbData, source: 'database' });
+        }
+
+        res.json({ success: true, data: latestData, source: 'memory' });
     } catch (error) {
         res.json({ success: true, data: latestData, source: 'memory', warning: error.message });
     }
@@ -596,7 +604,8 @@ app.put('/api/maintenance/suggestion/:id/status', async (req, res) => {
 
 
 async function getCurrentMaintenanceDecision(deviceId) {
-    const sensorQuery = deviceId ? { deviceId } : {};
+    const effectiveDeviceId = deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || null;
+    const sensorQuery = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
     const [sensorData, alertHistory] = await Promise.all([
         GeneratorData.find(sensorQuery).sort({ timestamp: -1 }).limit(10).lean(),
         Alert.find(sensorQuery).sort({ timestamp: -1 }).limit(30).lean()
