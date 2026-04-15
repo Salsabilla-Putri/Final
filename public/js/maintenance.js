@@ -1,6 +1,8 @@
 const API_URL = '/api/maintenance';
+const SUGGESTION_API_URL = '/api/maintenance/suggestion';
 let allTasks = [];
 let currentFilter = 'all';
+let pendingSuggestion = null;
 
 // --- 1. LOAD DATA DARI SERVER (MONGODB) ---
 async function fetchTasks() {
@@ -12,6 +14,39 @@ async function fetchTasks() {
             render();
         }
     } catch (e) { console.error("Fetch error:", e); }
+}
+
+async function fetchMaintenanceSuggestion() {
+    try {
+        const res = await fetch(SUGGESTION_API_URL);
+        const json = await res.json();
+        const suggestion = json?.suggestion;
+        pendingSuggestion = suggestion && suggestion.status === 'pending' ? suggestion : null;
+        renderSuggestionBanner();
+    } catch (error) {
+        console.error('Suggestion fetch error:', error);
+    }
+}
+
+function renderSuggestionBanner() {
+    const banner = document.getElementById('systemSuggestionBanner');
+    const text = document.getElementById('systemSuggestionText');
+    const btn = document.getElementById('useSuggestionBtn');
+    if (!banner || !text || !btn) return;
+
+    if (!pendingSuggestion) {
+        banner.style.display = 'none';
+        btn.style.display = 'none';
+        return;
+    }
+
+    banner.style.display = 'block';
+    btn.style.display = 'inline-flex';
+    text.innerHTML = `
+      <div><b>Status:</b> ${pendingSuggestion.decisionStatus}</div>
+      <div>${pendingSuggestion.message}</div>
+      <div><b>Rekomendasi:</b> ${pendingSuggestion.recommendation}</div>
+    `;
 }
 
 // --- 2. RENDER UI (TABEL & STATUS) ---
@@ -165,6 +200,24 @@ function setFilter(f, btn) {
 function openAddModal() { document.getElementById('addMaintenanceModal').style.display = 'flex'; }
 function closeAddModal() { document.getElementById('addMaintenanceModal').style.display = 'none'; }
 
+function openAddModalFromSuggestion() {
+    if (!pendingSuggestion) return openAddModal();
+    openAddModal();
+
+    document.getElementById('taskName').value = pendingSuggestion.recommendation || '';
+    document.getElementById('taskType').value = 'preventive';
+    document.getElementById('priority').value = pendingSuggestion.priority || (
+        pendingSuggestion.decisionStatus === 'BAHAYA' ? 'high' :
+        pendingSuggestion.decisionStatus === 'WASPADA' ? 'medium' : 'low'
+    );
+    if (pendingSuggestion.suggestedDate) {
+        const due = new Date(pendingSuggestion.suggestedDate);
+        if (!Number.isNaN(due.getTime())) {
+            document.getElementById('dueDate').value = due.toISOString().slice(0, 10);
+        }
+    }
+}
+
 function showNotif(msg, type) {
     const el = document.getElementById('notification');
     if(el) {
@@ -198,4 +251,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load Data Pertama Kali
     fetchTasks();
+    fetchMaintenanceSuggestion();
 });

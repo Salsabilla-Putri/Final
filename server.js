@@ -26,6 +26,7 @@ function createDisabledMqttClient() {
 }
 
 const { analyzeReportRows } = require('./lib_report_analysis');
+const { generateMaintenanceDecision, toSuggestionDocument } = require('./maintenance_decision');
 
 const app = express();
 
@@ -431,6 +432,19 @@ const maintenanceSchema = new mongoose.Schema({
 });
 const Maintenance = mongoose.model('Maintenance', maintenanceSchema);
 
+const maintenanceSuggestionSchema = new mongoose.Schema({
+    source: { type: String, default: 'system' },
+    status: { type: String, default: 'pending', enum: ['pending', 'approved', 'consumed'] },
+    decisionStatus: { type: String, enum: ['AMAN', 'WASPADA', 'BAHAYA'], required: true },
+    message: { type: String, required: true },
+    recommendation: { type: String, required: true },
+    priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
+    suggestedDate: Date,
+    createdAt: { type: Date, default: Date.now },
+    approvedAt: Date
+});
+const MaintenanceSuggestion = mongoose.model('MaintenanceSuggestion', maintenanceSuggestionSchema);
+
 // 2. API: Ambil Data Maintenance (Untuk Dashboard & Halaman Maintenance)
 app.get('/api/maintenance', async (req, res) => {
     try {
@@ -480,6 +494,80 @@ app.delete('/api/maintenance/:id', async (req, res) => {
 // Tambahkan kode ini di dalam server.js (sebelum app.listen)
 
 
+
+
+
+async function getCurrentMaintenanceDecision(deviceId) {
+    const sensorQuery = deviceId ? { deviceId } : {};
+    const [sensorData, alertHistory] = await Promise.all([
+        GeneratorData.find(sensorQuery).sort({ timestamp: -1 }).limit(10).lean(),
+        Alert.find(sensorQuery).sort({ timestamp: -1 }).limit(30).lean()
+    ]);
+
+    return generateMaintenanceDecision(sensorData, alertHistory);
+}
+
+app.get('/maintenance/suggestion', async (req, res) => {
+    try {
+        const { deviceId } = req.query;
+        const decision = await getCurrentMaintenanceDecision(deviceId);
+        const latestSuggestion = await MaintenanceSuggestion.findOne({ source: 'system' }).sort({ createdAt: -1 }).lean();
+
+        res.json({ success: true, data: decision, suggestion: latestSuggestion || null });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/maintenance/suggestion', async (req, res) => {
+    try {
+        const { deviceId } = req.query;
+        const decision = await getCurrentMaintenanceDecision(deviceId);
+        const latestSuggestion = await MaintenanceSuggestion.findOne({ source: 'system' }).sort({ createdAt: -1 }).lean();
+
+        res.json({ success: true, data: decision, suggestion: latestSuggestion || null });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/maintenance/suggestion', async (req, res) => {
+    try {
+        const { action = 'approve', decision: clientDecision, deviceId } = req.body || {};
+        if (action !== 'approve') {
+            return res.status(400).json({ success: false, error: 'Unsupported action' });
+        }
+
+        const decision = clientDecision || await getCurrentMaintenanceDecision(deviceId);
+        const suggestionPayload = toSuggestionDocument(decision);
+        suggestionPayload.approvedAt = new Date();
+
+        const saved = await new MaintenanceSuggestion(suggestionPayload).save();
+
+        res.json({ success: true, data: saved });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/maintenance/suggestion', async (req, res) => {
+    try {
+        const { action = 'approve', decision: clientDecision, deviceId } = req.body || {};
+        if (action !== 'approve') {
+            return res.status(400).json({ success: false, error: 'Unsupported action' });
+        }
+
+        const decision = clientDecision || await getCurrentMaintenanceDecision(deviceId);
+        const suggestionPayload = toSuggestionDocument(decision);
+        suggestionPayload.approvedAt = new Date();
+
+        const saved = await new MaintenanceSuggestion(suggestionPayload).save();
+
+        res.json({ success: true, data: saved });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 app.post('/api/reports/analysis', async (req, res) => {
     try {

@@ -632,6 +632,41 @@ button{font-family:inherit;cursor:pointer;background:none;border:none}
   font-size:11.5px;color:var(--t4);
 }
 
+.decision-card{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  padding: 16px;
+  box-shadow: var(--s1);
+  display: grid;
+  gap: 8px;
+}
+.decision-line{
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--t2);
+  line-height: 1.5;
+}
+.decision-approve-btn{
+  margin-top: 8px;
+  width: fit-content;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid #c5d4f5;
+  color: #fff;
+  background: var(--brand);
+  font-weight: 700;
+  cursor: pointer;
+}
+.decision-approve-btn:disabled{
+  opacity: .6;
+  cursor: not-allowed;
+}
+#decisionApproveInfo{
+  color: var(--t4);
+  font-size: 12px;
+}
+
 /* ── ANIMATIONS ──────────────────────────────── */
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 .hero-wrap      {animation:fadeUp .35s ease both}
@@ -640,8 +675,9 @@ button{font-family:inherit;cursor:pointer;background:none;border:none}
 #lifespanSection{animation:fadeUp .4s .12s ease both}
 #fuelSection    {animation:fadeUp .4s .14s ease both}
 #maintenanceSection{animation:fadeUp .4s .16s ease both}
-#healthSection  {animation:fadeUp .4s .18s ease both}
-#infoSection    {animation:fadeUp .4s .20s ease both}
+#decisionSection{animation:fadeUp .4s .18s ease both}
+#healthSection  {animation:fadeUp .4s .20s ease both}
+#infoSection    {animation:fadeUp .4s .22s ease both}
 
 /* ── RESPONSIVE ──────────────────────────────── */
 @media(max-width:1200px){

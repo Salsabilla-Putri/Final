@@ -55,6 +55,10 @@
         <i class="fas fa-screwdriver-wrench"></i><span>Jadwal Perawatan</span>
         <span class="sbl-dot" id="navDot-maintenance"></span>
       </a>
+      <a href="#decisionSection"     class="sb-link" data-section="decisionSection">
+        <i class="fas fa-lightbulb"></i><span>Rekomendasi Mesin</span>
+        <span class="sbl-dot" id="navDot-decision"></span>
+      </a>
       <a href="#healthSection"     class="sb-link" data-section="healthSection">
         <i class="fas fa-shield-check"></i><span>Kondisi Sistem</span>
         <span class="sbl-dot" id="navDot-health"></span>
@@ -334,7 +338,19 @@
       <div class="maint-list" id="maintList"><!-- populated by JS --></div>
     </section>
 
-    <!-- 7. KONDISI SISTEM ── -->
+    <!-- 7. REKOMENDASI KONDISI MESIN ── -->
+    <section class="cs" id="decisionSection">
+      <div class="sh"><div class="sh-t"><i class="fas fa-lightbulb"></i> Rekomendasi Kondisi Mesin</div><div class="sh-b" id="decisionBadge">Memuat...</div></div>
+      <div class="decision-card">
+        <p class="decision-line"><b>Status:</b> <span id="decisionStatusText">-</span></p>
+        <p class="decision-line"><b>Penjelasan:</b> <span id="decisionMessageText">Memuat data rekomendasi...</span></p>
+        <p class="decision-line"><b>Rekomendasi:</b> <span id="decisionRecommendationText">-</span></p>
+        <button class="decision-approve-btn" id="approveDecisionBtn">Setujui</button>
+        <small id="decisionApproveInfo">Setujui jika Anda ingin kirim saran ini ke teknisi.</small>
+      </div>
+    </section>
+
+    <!-- 8. KONDISI SISTEM ── -->
     <section class="cs" id="healthSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-shield-check"></i> Kondisi Sistem</div></div>
       <div class="health-grid">
@@ -347,7 +363,7 @@
       </div>
     </section>
 
-    <!-- 8. PANDUAN ── -->
+    <!-- 9. PANDUAN ── -->
     <section class="cs" id="infoSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-circle-info"></i> Informasi &amp; Panduan</div></div>
       <div class="info-layout">
