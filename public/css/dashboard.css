@@ -136,7 +136,7 @@ body {
 }
 
 .hero-time {
-    font-size: clamp(2.8rem, 6vw, 4.2rem);
+    font-size: clamp(3.5rem, 6vw, 4.2rem);
     font-weight: 800;
     line-height: 1;
     letter-spacing: -0.02em;
@@ -145,7 +145,7 @@ body {
 }
 
 .hero-greeting {
-    font-size: clamp(1rem, 2vw, 1.3rem);
+    font-size: clamp(2.5rem, 2vw, 1.3rem);
     font-weight: 400;
     color: rgba(255,255,255,0.92);
     margin-top: 10px;
@@ -159,7 +159,7 @@ body {
 }
 
 .hero-subtitle {
-    font-size: clamp(0.78rem, 1.2vw, 0.88rem);
+    font-size: clamp(1.25rem, 1.2vw, 0.88rem);
     color: rgba(255,255,255,0.68);
     margin-top: 6px;
     font-style: italic;
@@ -290,7 +290,7 @@ body {
 .icon-wrn { background: linear-gradient(135deg, var(--warning), #fdba74); }
 .icon-dng { background: linear-gradient(135deg, var(--danger), #fca5a5); }
 
-.overview-value { font-size: 20px; font-weight: 700; color: var(--dark); margin-bottom: 2px; }
+.overview-value { font-size: 16px; font-weight: 700; color: var(--dark); margin-bottom: 2px; }
 .overview-label { font-size: var(--text-sm-size); color: var(--black); white-space: nowrap; }
 
 .card {
