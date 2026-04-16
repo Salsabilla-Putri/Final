@@ -19,7 +19,7 @@
     <div id="sidebar-container"></div>
 
     <div class="topbar">
-      <div class="topbar-title">Alarms & Notifications</div>
+      <div class="topbar-title">Alert Management</div>
       <div class="user-info">
         <i class="fas fa-user"></i> <span>Pengguna</span>
       </div>
@@ -30,28 +30,28 @@
       <div class="alarm-stats">
         <div class="stat-card stat-critical">
           <div class="stat-number" id="criticalCount">0</div>
-          <div class="stat-label">Critical Alarms</div>
+          <div class="stat-label">Critical</div>
         </div>
 
         <div class="stat-card stat-warning">
           <div class="stat-number" id="warningCount">0</div>
-          <div class="stat-label">Warning Alarms</div>
+          <div class="stat-label">Warning</div>
         </div>
 
         <div class="stat-card stat-active">
           <div class="stat-number" id="activeCount">0</div>
-          <div class="stat-label">Active Alarms</div>
+          <div class="stat-label">Active</div>
         </div>
 
         <div class="stat-card stat-total">
           <div class="stat-number" id="totalCount">0</div>
-          <div class="stat-label">Total Alarms</div>
+          <div class="stat-label">Total</div>
         </div>
       </div>
 
       <div class="filter-card">
         <div class="filter-header">
-          <div class="filter-title">Alarm Date Filter</div>
+          <div class="filter-title">Alert Date Filter</div>
           <div class="filter-actions">
             <button class="btn btn-outline" onclick="resetDateFilters()">
               <i class="fas fa-sync-alt"></i> Reset
@@ -85,7 +85,7 @@
       </div>
 
       <div class="filter-tabs">
-        <button class="filter-tab active" onclick="filterAlarms('all', this)">All Alarms</button>
+        <button class="filter-tab active" onclick="filterAlarms('all', this)">All Alerts</button>
         <button class="filter-tab" onclick="filterAlarms('active', this)">Active Only</button>
         <button class="filter-tab" onclick="filterAlarms('critical', this)">Critical</button>
         <button class="filter-tab" onclick="filterAlarms('warning', this)">Warning</button>
@@ -93,7 +93,7 @@
 
       <div class="card">
         <div class="card-header">
-          <h3><i class="fas fa-history"></i> Alarm History</h3>
+          <h3><i class="fas fa-history"></i> Alert History</h3>
           <div style="display:flex; gap:10px;">
             <button class="btn btn-outline" onclick="exportAlarmCSV()"><i class="fas fa-file-csv"></i> CSV</button>
             <button class="btn btn-outline" onclick="exportAlarmExcel()"><i class="fas fa-file-excel"></i> Excel</button>

@@ -14,10 +14,10 @@ function setEspConnectionStatus(isConnected) {
 
     if (isConnected) {
         el.className = 'indicator ind-on';
-        el.innerHTML = '<i class="fas fa-microchip"></i> Connected';
+        el.innerHTML = 'Connected';
     } else {
         el.className = 'indicator ind-off';
-        el.innerHTML = '<i class="fas fa-microchip"></i> Disconnected';
+        el.innerHTML = 'Disconnected';
     }
 }
 
