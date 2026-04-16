@@ -1092,22 +1092,20 @@ app.get('/api/reports', async (req, res) => {
                 const collection = mongoose.connection.db.collection(collectionName);
 
                 // Build $or with optional deviceId for raw find()
-                const orTimeConditions = [
-                    buildFieldCondition('timestamp'),
-                    buildFieldCondition('createdAt'),
-                    buildFieldCondition('date')
-                ];
-                const findQuery = deviceId
-                    ? { $and: [{ $or: orTimeConditions }, { deviceId }] }
-                    : { $or: orTimeConditions };
+                // SESUDAH (✅ sort & limit langsung di MongoDB)
+                const matchQuery = buildMatchQuery('timestamp');
 
-                const docs = await collection.find(findQuery).limit(limit * 3).toArray();
-                const merged = mergeUniqueRows(docs)
-                    .sort((a, b) => new Date(b.timestamp || b.createdAt || b.date || 0) - new Date(a.timestamp || a.createdAt || a.date || 0))
-                    .slice(0, limit);
+                const count = await collection.countDocuments(matchQuery);
+                if (!count) continue;
 
-                if (merged.length) {
-                    reports = merged;
+                const docs = await collection
+                    .find(matchQuery)
+                    .sort({ timestamp: -1 })
+                    .limit(limit)
+                    .toArray();
+
+                if (docs.length) {
+                    reports = docs;
                     usedCollection = collection;
                     break;
                 }
@@ -1314,3 +1312,16 @@ if (require.main === module) {
 }
 
 module.exports = app;
+
+.then(async () => {
+    console.log('✅ MongoDB Connected');
+    loadThresholdsFromDB();
+
+    // Pastikan index pada timestamp + deviceId agar query cepat
+    try {
+        const col = mongoose.connection.db.collection('generatordatas');
+        await col.createIndex({ timestamp: -1 });
+        await col.createIndex({ deviceId: 1, timestamp: -1 });
+        console.log('✅ Indexes ensured');
+    } catch(e) { console.warn('Index creation skipped:', e.message); }
+})
