@@ -75,15 +75,7 @@
           <div id="powerVal" class="param-val numeric normal">--</div>
         </div>
 
-        <div class="param-box box-ok" id="box_oil">
-          <h4>Oil Pressure (PSI)</h4>
-          <div class="bar-wrap"><div id="oilBar" class="bar-fill" style="width: 0%"></div></div>
-          <div id="oilVal" class="param-val">--</div>
-          <button class="thr-btn" onclick="openThresholdModal('oil')">Set Threshold</button>
-          <div class="thr-badge" id="thr_oil"></div>
-        </div>
-
-        <div class="param-box box-ok" id="box_coolant">
+                <div class="param-box box-ok" id="box_coolant">
           <h4>Coolant Temp (°C)</h4>
           <div class="bar-wrap"><div id="coolantBar" class="bar-fill" style="width: 0%"></div></div>
           <div id="coolantVal" class="param-val">--</div>
@@ -99,12 +91,11 @@
           <!-- <div class="thr-badge" id="thr_iat"></div> -->
         </div>
 
-        <div class="param-box box-ok" id="box_map">
-          <h4>Manifold Pressure (kPa)</h4>
-          <div class="bar-wrap"><div id="mapBar" class="bar-fill" style="width: 0%"></div></div>
-          <div id="mapVal" class="param-val">--</div>
-          <button class="thr-btn" onclick="openThresholdModal('map')">Set Threshold</button>
-          <!-- <div class="thr-badge" id="thr_map"></div> -->
+        <div class="param-box box-ok" id="box_batt">
+          <h4>Battery Voltage (V)</h4>
+          <div id="battVal" class="param-val numeric normal">--</div>
+          <button class="thr-btn" onclick="openThresholdModal('batt')">Set Threshold</button>
+          <div class="thr-badge" id="thr_batt"></div>
         </div>
 
         <div class="param-box box-ok" id="box_fuel">

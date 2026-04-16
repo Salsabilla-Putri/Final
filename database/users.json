@@ -1,0 +1,22 @@
+[
+  {
+    "email": "admin.gentrack@gmail.com",
+    "password": "admin123",
+    "role": "Admin"
+  },
+  {
+    "email": "teknisi.gentrack@gmail.com",
+    "password": "teknisi123",
+    "role": "Teknisi"
+  },
+  {
+    "email": "operator.gentrack@gmail.com",
+    "password": "operator123",
+    "role": "Teknisi"
+  },
+  {
+    "email": "warga.gentrack@gmail.com",
+    "password": "warga123",
+    "role": "Masyarakat"
+  }
+]

@@ -57,7 +57,7 @@ const generatorDataSchema = new mongoose.Schema({
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, status: String, oil: Number, iat: Number,
-    map: Number, afr: Number, tps: Number
+    map: Number, batt: Number, afr: Number, tps: Number
 });
 const GeneratorData = mongoose.models.GeneratorData || mongoose.model('GeneratorData', generatorDataSchema, 'generatordatas');
 
@@ -76,6 +76,74 @@ const configSchema = new mongoose.Schema({
 });
 const Config = mongoose.models.Config || mongoose.model('Config', configSchema, 'configs');
 
+
+const userSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    password: { type: String, required: true },
+    role: { type: String, required: true, default: 'Masyarakat' }
+});
+const User = mongoose.models.User || mongoose.model('User', userSchema, 'users');
+
+
+let nodemailerModule = null;
+function getNodemailer() {
+    if (nodemailerModule) return nodemailerModule;
+    try {
+        nodemailerModule = require('nodemailer');
+    } catch (error) {
+        nodemailerModule = null;
+    }
+    return nodemailerModule;
+}
+
+
+const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || process.env.SMTP_USER || 'no-reply@gentrack.local';
+const ALERT_EMAIL_COOLDOWN_MS = parseInt(process.env.ALERT_EMAIL_COOLDOWN_MS || '60000', 10);
+let lastCriticalEmailAt = 0;
+
+async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+
+    if (!smtpHost || !smtpUser || !smtpPass) {
+        console.warn('⚠️ SMTP belum dikonfigurasi. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS untuk kirim email alert.');
+        return;
+    }
+
+    const recipients = (await User.find({}, { email: 1, _id: 0 }).lean())
+        .map((u) => String(u.email || '').trim().toLowerCase())
+        .filter(Boolean);
+
+    if (recipients.length === 0) return;
+
+    const uniqueRecipients = [...new Set(recipients)];
+    const rows = alertItems
+        .map((a) => `<li><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} (${a.message})</li>`)
+        .join('');
+
+    const nodemailer = getNodemailer();
+    if (!nodemailer) {
+        console.warn('⚠️ Paket nodemailer belum tersedia. Jalankan npm install untuk mengaktifkan email alert.');
+        return;
+    }
+
+    const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465,
+        auth: { user: smtpUser, pass: smtpPass }
+    });
+
+    await transporter.sendMail({
+        from: EMAIL_NOTIF_FROM,
+        to: uniqueRecipients.join(','),
+        subject: `[CRITICAL ALERT] ${latestSnapshot?.deviceId || 'Generator'}`,
+        html: `<p>Terdeteksi alert <b>CRITICAL</b> pada generator.</p><ul>${rows}</ul><p>Waktu: ${new Date().toISOString()}</p>`
+    });
+}
+
 const maintenanceSchema = new mongoose.Schema({
     task: { type: String, required: true },
     type: String, priority: String,
@@ -90,8 +158,9 @@ const Maintenance = mongoose.models.Maintenance || mongoose.model('Maintenance',
 let ACTIVE_THRESHOLDS = {
     rpm: { max: 3800 }, temp: { max: 95 },
     volt: { min: 180, max: 250 }, fuel: { min: 20 },
-    oil: { min: 20 }, amp: { max: 100 },
-    freq: { min: 48, max: 52 }
+    amp: { max: 100 },
+    freq: { min: 48, max: 52 },
+    batt: { min: 11.8, max: 14.8 }
 };
 
 async function loadThresholdsFromDB() {
@@ -109,7 +178,7 @@ async function loadThresholdsFromDB() {
 let latestData = {
     deviceId: 'GENERATOR #1', timestamp: new Date(),
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, afr: 0, tps: 0
+    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 
 function initMQTT() {
@@ -144,6 +213,7 @@ function initMQTT() {
                 case 'gen/oil': latestData.oil = parseFloat(value) || 0; break;
                 case 'gen/iat': latestData.iat = parseFloat(value) || 0; break;
                 case 'gen/map': latestData.map = parseFloat(value) || 0; break;
+            case 'gen/batt': latestData.batt = parseFloat(value) || 0; break;
                 case 'gen/afr': latestData.afr = parseFloat(value) || 0; break;
                 case 'gen/tps': latestData.tps = parseFloat(value) || 0; break;
                 case 'gen/status':
@@ -173,7 +243,7 @@ async function checkAndSaveAlerts(data) {
         if (T[param].min !== undefined && val < T[param].min)
             alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too Low (< ${T[param].min})`, severity: 'medium' });
     };
-    ['rpm','volt','amp','freq','power','coolant','temp','fuel','oil','iat','map','afr','tps']
+    ['rpm','volt','amp','freq','power','coolant','temp','fuel','iat','afr','tps','batt']
         .forEach(p => check(p, data[p]));
 
     if (alertsToSave.length > 0) {
@@ -182,6 +252,17 @@ async function checkAndSaveAlerts(data) {
         if (timeDiff > 10000) {
             for (const a of alertsToSave)
                 await new Alert({ ...a, deviceId: data.deviceId }).save();
+        }
+
+        const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
+        const now = Date.now();
+        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+            try {
+                await sendCriticalAlertEmail(criticalAlerts, data);
+                lastCriticalEmailAt = now;
+            } catch (emailError) {
+                console.error('❌ Gagal mengirim email alert critical:', emailError.message);
+            }
         }
     }
 }
@@ -198,6 +279,39 @@ app.use(async (req, res, next) => {
 });
 
 // ─── API ROUTES ───────────────────────────────────────────────────────────────
+
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const email = String(req.body?.email || '').trim().toLowerCase();
+        const password = String(req.body?.password || '');
+
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
+        }
+
+        const user = await User.findOne({ email }).lean();
+        if (!user || user.password !== password) {
+            return res.status(401).json({ success: false, message: 'Email atau password tidak valid.' });
+        }
+
+        const role = String(user.role || '').toLowerCase();
+        const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+        const redirectTo = isMasyarakat ? 'public.html' : 'index.html';
+
+        return res.json({
+            success: true,
+            user: {
+                email: user.email,
+                role: user.role || (isMasyarakat ? 'Masyarakat' : 'Teknisi'),
+                redirectTo
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
+    }
+});
+
 
 app.get('/api/health', (req, res) => res.json({
     status: 'healthy',
@@ -511,8 +625,8 @@ app.get('/api/reports', async (req, res) => {
                 amp: normalizeNumeric(row.amp ?? row.current), power: normalizeNumeric(row.power ?? row.kw),
                 freq: normalizeNumeric(row.freq ?? row.frequency), temp: normalizeNumeric(row.temp ?? row.temperature),
                 coolant: normalizeNumeric(row.coolant ?? row.temp), fuel: normalizeNumeric(row.fuel),
-                oil: normalizeNumeric(row.oil), iat: normalizeNumeric(row.iat),
-                map: normalizeNumeric(row.map), afr: normalizeNumeric(row.afr), tps: normalizeNumeric(row.tps)
+                iat: normalizeNumeric(row.iat), batt: normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
+                afr: normalizeNumeric(row.afr), tps: normalizeNumeric(row.tps)
             };
         };
 
@@ -557,12 +671,10 @@ app.get('/api/reports', async (req, res) => {
                     coolantAvg: { $avg: '$coolant' }, coolantMin: { $min: '$coolant' }, coolantMax: { $max: '$coolant' },
                     fuelCount: { $sum: { $cond: [{ $ne: ['$fuel', null] }, 1, 0] } },
                     fuelAvg: { $avg: '$fuel' }, fuelMin: { $min: '$fuel' }, fuelMax: { $max: '$fuel' },
-                    oilCount: { $sum: { $cond: [{ $ne: ['$oil', null] }, 1, 0] } },
-                    oilAvg: { $avg: '$oil' }, oilMin: { $min: '$oil' }, oilMax: { $max: '$oil' },
                     iatCount: { $sum: { $cond: [{ $ne: ['$iat', null] }, 1, 0] } },
                     iatAvg: { $avg: '$iat' }, iatMin: { $min: '$iat' }, iatMax: { $max: '$iat' },
-                    mapCount: { $sum: { $cond: [{ $ne: ['$map', null] }, 1, 0] } },
-                    mapAvg: { $avg: '$map' }, mapMin: { $min: '$map' }, mapMax: { $max: '$map' },
+                    battCount: { $sum: { $cond: [{ $ne: ['$batt', null] }, 1, 0] } },
+                    battAvg: { $avg: '$batt' }, battMin: { $min: '$batt' }, battMax: { $max: '$batt' },
                     afrCount: { $sum: { $cond: [{ $ne: ['$afr', null] }, 1, 0] } },
                     afrAvg: { $avg: '$afr' }, afrMin: { $min: '$afr' }, afrMax: { $max: '$afr' }
                 }
@@ -570,7 +682,7 @@ app.get('/api/reports', async (req, res) => {
         ];
 
         const summary = (await GeneratorData.aggregate(summaryPipeline))[0] || {};
-        const sensorKeys = ['rpm','volt','amp','power','freq','temp','coolant','fuel','oil','iat','map','afr'];
+        const sensorKeys = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','batt','afr','tps'];
         const bySensor = {};
 
         sensorKeys.forEach((key) => {
