@@ -2,6 +2,14 @@
 const API_URL = '/api/alerts';
 let currentFilter = 'all';
 let allAlarms = [];
+const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit'
+});
 
 // --- SETUP FUNCTIONS ---
 fetch('sidebar.html')
@@ -141,8 +149,7 @@ function renderTable() {
   }
 
   filteredAlarms.forEach(alarm => {
-    const date = new Date(alarm.timestamp);
-    const ts = date.toLocaleString('id-ID');
+    const ts = formatReadableTimestamp(alarm.timestamp);
     const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
     const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
 
@@ -172,6 +179,89 @@ function renderTable() {
     `;
     tbody.innerHTML += row;
   });
+}
+
+function formatReadableTimestamp(input) {
+  const dateObj = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(dateObj.getTime())) return '-';
+  return USER_DATETIME_FORMAT.format(dateObj);
+}
+
+function escapeCsvCell(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function downloadBlob(content, type, filename) {
+  const blob = new Blob([content], { type });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  window.URL.revokeObjectURL(url);
+}
+
+window.exportAlarmCSV = function() {
+  const rows = getFilteredAlarms();
+  if (rows.length === 0) return alert('No alarms to export');
+
+  let csv = 'Timestamp,Generator,Parameter,Value,Unit,Status\n';
+  rows.forEach((alarm) => {
+    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
+    const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
+    csv += [
+      escapeCsvCell(formatReadableTimestamp(alarm.timestamp)),
+      escapeCsvCell(alarm.deviceId || 'Gen-01'),
+      escapeCsvCell((alarm.parameter || 'SYS').toUpperCase()),
+      escapeCsvCell(value),
+      escapeCsvCell(getSeverityUnit(alarm.parameter)),
+      escapeCsvCell(mappedStatus.label)
+    ].join(',') + '\n';
+  });
+
+  downloadBlob(csv, 'text/csv;charset=utf-8;', `alarms_${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+window.exportAlarmExcel = function() {
+  const rows = getFilteredAlarms();
+  if (rows.length === 0) return alert('No alarms to export');
+
+  const tableRows = rows.map((alarm) => {
+    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
+    const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
+    return `
+      <tr>
+        <td>${formatReadableTimestamp(alarm.timestamp)}</td>
+        <td>${alarm.deviceId || 'Gen-01'}</td>
+        <td>${(alarm.parameter || 'SYS').toUpperCase()}</td>
+        <td>${value}</td>
+        <td>${getSeverityUnit(alarm.parameter)}</td>
+        <td>${mappedStatus.label}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const htmlTable = `
+    <table border="1">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Generator</th>
+          <th>Parameter</th>
+          <th>Value</th>
+          <th>Unit</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>${tableRows}</tbody>
+    </table>
+  `;
+
+  downloadBlob(
+    `\ufeff${htmlTable}`,
+    'application/vnd.ms-excel;charset=utf-8;',
+    `alarms_${new Date().toISOString().slice(0, 10)}.xls`
+  );
 }
 
 window.acknowledgeAlarm = async function(id) {
