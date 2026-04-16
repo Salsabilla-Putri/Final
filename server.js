@@ -94,6 +94,66 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
+
+let nodemailerModule = null;
+function getNodemailer() {
+    if (nodemailerModule) return nodemailerModule;
+    try {
+        nodemailerModule = require('nodemailer');
+    } catch (error) {
+        nodemailerModule = null;
+    }
+    return nodemailerModule;
+}
+
+
+const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || process.env.SMTP_USER || 'no-reply@gentrack.local';
+const ALERT_EMAIL_COOLDOWN_MS = parseInt(process.env.ALERT_EMAIL_COOLDOWN_MS || '60000', 10);
+let lastCriticalEmailAt = 0;
+
+async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+
+    if (!smtpHost || !smtpUser || !smtpPass) {
+        console.warn('⚠️ SMTP belum dikonfigurasi. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS untuk kirim email alert.');
+        return;
+    }
+
+    const recipients = (await User.find({}, { email: 1, _id: 0 }).lean())
+        .map((u) => String(u.email || '').trim().toLowerCase())
+        .filter(Boolean);
+
+    if (recipients.length === 0) return;
+
+    const uniqueRecipients = [...new Set(recipients)];
+    const rows = alertItems
+        .map((a) => `<li><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} (${a.message})</li>`)
+        .join('');
+
+    const nodemailer = getNodemailer();
+    if (!nodemailer) {
+        console.warn('⚠️ Paket nodemailer belum tersedia. Jalankan npm install untuk mengaktifkan email alert.');
+        return;
+    }
+
+    const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465,
+        auth: { user: smtpUser, pass: smtpPass }
+    });
+
+    await transporter.sendMail({
+        from: EMAIL_NOTIF_FROM,
+        to: uniqueRecipients.join(','),
+        subject: `[CRITICAL ALERT] ${latestSnapshot?.deviceId || 'Generator'}`,
+        html: `<p>Terdeteksi alert <b>CRITICAL</b> pada generator.</p><ul>${rows}</ul><p>Waktu: ${new Date().toISOString()}</p>`
+    });
+}
+
 // --- DYNAMIC THRESHOLDS ---
 // Default values (jika db kosong)
 let ACTIVE_THRESHOLDS = {
@@ -187,17 +247,30 @@ async function checkAndSaveAlerts(data) {
     check('iat', data.iat);
         check('afr', data.afr);
     check('tps', data.tps);
+    check('batt', data.batt);
 
     // Simpan Alert ke Database
     if (alertsToSave.length > 0) {
         // Cek alert terakhir untuk menghindari spam (optional, debounce 10 detik)
         const lastAlert = await Alert.findOne().sort({ timestamp: -1 });
         const timeDiff = lastAlert ? (new Date() - lastAlert.timestamp) : 999999;
-        
-        if (timeDiff > 10000) { 
+
+        if (timeDiff > 10000) {
             for (const a of alertsToSave) {
                 await new Alert({ ...a, deviceId: data.deviceId }).save();
                 console.log(`⚠️ Alert Saved: ${a.message}`);
+            }
+        }
+
+        const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
+        const now = Date.now();
+        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+            try {
+                await sendCriticalAlertEmail(criticalAlerts, data);
+                lastCriticalEmailAt = now;
+                console.log(`📧 Critical alert email sent (${criticalAlerts.length} alert)`);
+            } catch (emailError) {
+                console.error('❌ Gagal mengirim email alert critical:', emailError.message);
             }
         }
     }
@@ -1014,19 +1087,13 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
         }
 
-        const isUserDomain = email.endsWith('@user.unik');
-        const isTechDomain = email.endsWith('@tech.unik');
-        if (!isUserDomain && !isTechDomain) {
-            return res.status(400).json({ success: false, message: 'Email harus berakhiran @user.unik atau @tech.unik.' });
-        }
-
         const user = await User.findOne({ email }).lean();
         if (!user || user.password !== password) {
             return res.status(401).json({ success: false, message: 'Email atau password tidak valid.' });
         }
 
         const role = String(user.role || '').toLowerCase();
-        const isMasyarakat = isUserDomain || role === 'masyarakat' || role === 'user' || role === 'viewer';
+        const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
         const redirectTo = isMasyarakat ? 'public.html' : 'index.html';
 
         return res.json({

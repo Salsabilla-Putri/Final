@@ -422,7 +422,7 @@
         <div class="form-group">
           <label class="form-label" for="email">Email</label>
           <div class="input-group">
-            <input type="email" id="email" class="form-control" placeholder="contoh: nama@user.unik atau nama@tech.unik" required>
+            <input type="email" id="email" class="form-control" placeholder="contoh: nama@gmail.com" required>
             <div class="input-icon">
               <i class="fas fa-user"></i>
             </div>
@@ -473,13 +473,6 @@
       // Reset alert
       alertMessage.style.display = 'none';
       alertMessage.className = 'alert alert-error';
-
-      if (!(email.endsWith('@user.unik') || email.endsWith('@tech.unik'))) {
-        alertMessage.textContent = 'Email harus menggunakan domain @unik dengan akhiran @user.unik atau @tech.unik.';
-        alertMessage.className = 'alert alert-error';
-        alertMessage.style.display = 'block';
-        return;
-      }
 
       try {
         const result = await loginWithDatabase(email, password);
