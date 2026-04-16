@@ -384,7 +384,23 @@ async function fetchFirstAvailable(urls) {
 
     for (const url of urls) {
         const response = await fetch(url);
-        if (response.ok || response.status !== 404) {
+        if (response.ok) {
+            const contentType = (response.headers.get('content-type') || '').toLowerCase();
+            const looksLikeJson = !contentType
+                || contentType.includes('application/json')
+                || contentType.includes('application/problem+json')
+                || contentType.includes('text/json');
+
+            if (looksLikeJson) {
+                return response;
+            }
+
+            console.warn(`Reports endpoint returned non-JSON payload (${url}, content-type: ${contentType || 'unknown'}). Trying next candidate...`);
+            lastResponse = response;
+            continue;
+        }
+
+        if (response.status !== 404) {
             return response;
         }
 
@@ -397,7 +413,19 @@ async function fetchFirstAvailable(urls) {
 
 async function fetchWithFallback(primaryUrls, fallbackUrls = []) {
     const primaryResponse = await fetchFirstAvailable(primaryUrls);
-    if (primaryResponse && (primaryResponse.ok || primaryResponse.status !== 404 || !fallbackUrls.length)) {
+    const primaryContentType = (primaryResponse?.headers?.get('content-type') || '').toLowerCase();
+    const primaryLooksLikeJson = !primaryResponse
+        ? false
+        : !primaryContentType
+            || primaryContentType.includes('application/json')
+            || primaryContentType.includes('application/problem+json')
+            || primaryContentType.includes('text/json');
+
+    if (
+        primaryResponse
+        && (primaryResponse.ok || primaryResponse.status !== 404 || !fallbackUrls.length)
+        && (primaryResponse.status !== 200 || primaryLooksLikeJson || !fallbackUrls.length)
+    ) {
         return primaryResponse;
     }
 
