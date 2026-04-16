@@ -143,6 +143,7 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
 const maintenanceSchema = new mongoose.Schema({
     task: { type: String, required: true },
     type: String, priority: String,
+    cost: { type: Number, default: 0, min: 0 },
     status: { type: String, default: 'scheduled' },
     dueDate: Date, assignedTo: String,
     createdAt: { type: Date, default: Date.now },
