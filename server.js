@@ -64,7 +64,7 @@ const generatorDataSchema = new mongoose.Schema({
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, status: String, oil: Number, iat: Number,
-    map: Number, afr: Number, tps: Number
+    map: Number, batt: Number, afr: Number, tps: Number
 });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
@@ -86,6 +86,14 @@ const configSchema = new mongoose.Schema({
 });
 const Config = mongoose.model('Config', configSchema);
 
+
+const userSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    password: { type: String, required: true },
+    role: { type: String, required: true, default: 'Masyarakat' }
+});
+const User = mongoose.model('User', userSchema);
+
 // --- DYNAMIC THRESHOLDS ---
 // Default values (jika db kosong)
 let ACTIVE_THRESHOLDS = {
@@ -93,9 +101,9 @@ let ACTIVE_THRESHOLDS = {
     temp: { max: 95 },
     volt: { min: 180, max: 250 },
     fuel: { min: 20 },
-    oil: { min: 20 },
     amp: { max: 100 },
-    freq: { min: 48, max: 52 }
+    freq: { min: 48, max: 52 },
+    batt: { min: 11.8, max: 14.8 }
 };
 
 // Fungsi Load dari DB ke Memory Server
@@ -124,7 +132,7 @@ const mqttClient = mqtt
 let latestData = {
     deviceId: 'GENERATOR #1', timestamp: new Date(),
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, afr: 0, tps: 0
+    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 
 mqttClient.on('connect', () => {
@@ -176,10 +184,8 @@ async function checkAndSaveAlerts(data) {
     check('coolant', data.coolant); 
     check('temp', data.temp);
     check('fuel', data.fuel);
-    check('oil', data.oil);
     check('iat', data.iat);
-    check('map', data.map);
-    check('afr', data.afr);
+        check('afr', data.afr);
     check('tps', data.tps);
 
     // Simpan Alert ke Database
@@ -233,6 +239,7 @@ mqttClient.on('message', async (topic, message) => {
             case 'gen/oil': latestData.oil = parseFloat(value) || 0; break;
             case 'gen/iat': latestData.iat = parseFloat(value) || 0; break;
             case 'gen/map': latestData.map = parseFloat(value) || 0; break;
+            case 'gen/batt': latestData.batt = parseFloat(value) || 0; break;
             case 'gen/afr': latestData.afr = parseFloat(value) || 0; break;
             case 'gen/tps': latestData.tps = parseFloat(value) || 0; break;
             
@@ -694,7 +701,7 @@ app.post('/api/reports/analysis', async (req, res) => {
 // ── Helper: build MongoDB aggregation stats (bySensor) ──────────────────────
 //  Runs a single $group pipeline over the given query and returns the same
 //  { totalMatched, bySensor } shape expected by the frontend.
-const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','oil','iat','map','afr'];
+const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','afr','tps','batt'];
 
 async function buildSensorStats(collection, matchQuery) {
     const groupStage = { _id: null, totalMatched: { $sum: 1 } };
@@ -759,9 +766,8 @@ app.get('/api/reports', async (req, res) => {
                 temp:    normalizeNumeric(row.temp    ?? row.temperature),
                 coolant: normalizeNumeric(row.coolant ?? row.temp ?? row.temperature),
                 fuel:    normalizeNumeric(row.fuel),
-                oil:     normalizeNumeric(row.oil),
                 iat:     normalizeNumeric(row.iat),
-                map:     normalizeNumeric(row.map),
+                batt:    normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
                 afr:     normalizeNumeric(row.afr),
                 tps:     normalizeNumeric(row.tps)
             };
@@ -997,6 +1003,45 @@ app.get('/api/reports/stats', async (req, res) => {
 //         res.status(500).json({ success: false, error: error.message });
 //     }
 // });
+
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const email = String(req.body?.email || '').trim().toLowerCase();
+        const password = String(req.body?.password || '');
+
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
+        }
+
+        const isUserDomain = email.endsWith('@user.unik');
+        const isTechDomain = email.endsWith('@tech.unik');
+        if (!isUserDomain && !isTechDomain) {
+            return res.status(400).json({ success: false, message: 'Email harus berakhiran @user.unik atau @tech.unik.' });
+        }
+
+        const user = await User.findOne({ email }).lean();
+        if (!user || user.password !== password) {
+            return res.status(401).json({ success: false, message: 'Email atau password tidak valid.' });
+        }
+
+        const role = String(user.role || '').toLowerCase();
+        const isMasyarakat = isUserDomain || role === 'masyarakat' || role === 'user' || role === 'viewer';
+        const redirectTo = isMasyarakat ? 'public.html' : 'index.html';
+
+        return res.json({
+            success: true,
+            user: {
+                email: user.email,
+                role: user.role || (isMasyarakat ? 'Masyarakat' : 'Teknisi'),
+                redirectTo
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
+    }
+});
+
 
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());

@@ -1,0 +1,22 @@
+[
+  {
+    "email": "admin@tech.unik",
+    "password": "admin123",
+    "role": "Admin"
+  },
+  {
+    "email": "teknisi@tech.unik",
+    "password": "teknisi123",
+    "role": "Teknisi"
+  },
+  {
+    "email": "operator@tech.unik",
+    "password": "operator123",
+    "role": "Teknisi"
+  },
+  {
+    "email": "warga@user.unik",
+    "password": "warga123",
+    "role": "Masyarakat"
+  }
+]

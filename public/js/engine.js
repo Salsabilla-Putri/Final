@@ -1,6 +1,6 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
-const PARAMS = ['volt','amp','power','freq','rpm','oil','coolant','iat','fuel','afr','map','tps'];
+const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','fuel','afr','tps'];
 const ESP_FRESHNESS_MS = 15000;
 
 
@@ -75,26 +75,24 @@ function updateDashboard(data) {
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
     setVal('power', data.power, 0);
-    setVal('oil', data.oil, 0);
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
-    setVal('map', data.map, 0);
     setVal('fuel', data.fuel, 0);
     setVal('rpm', data.rpm, 0);
+    setVal('batt', data.batt ?? data.battery ?? data.battVolt, 1);
     setVal('afr', data.afr, 1);
     setVal('tps', data.tps, 0);
 
     applyVisual('rpm', data.rpm, { type: 'gauge', max: 4500 });
     applyVisual('afr', data.afr, { type: 'gauge', max: 20 });
     applyVisual('tps', data.tps, { type: 'gauge', max: 100 });
-    applyVisual('oil', data.oil, { type: 'bar', max: 100 });
     applyVisual('coolant', data.coolant || data.temp, { type: 'bar', max: 120 });
     applyVisual('iat', data.iat, { type: 'bar', max: 100 });
-    applyVisual('map', data.map, { type: 'bar', max: 250 });
     applyVisual('fuel', data.fuel, { type: 'bar', max: 100 });
     applyVisual('volt', data.volt, { type: 'text' });
     applyVisual('amp', data.amp, { type: 'text' });
     applyVisual('freq', data.freq, { type: 'text' });
+    applyVisual('batt', data.batt ?? data.battery ?? data.battVolt, { type: 'text' });
 }
 
 function applyVisual(param, value, opts) {
