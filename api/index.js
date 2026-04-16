@@ -2,8 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const mqtt = require('mqtt');
 const cors = require('cors');
-const net = require('net');
-const tls = require('tls');
+const https = require('https');
 const {
     transformPublicStatus,
     generateAlerts,
@@ -87,115 +86,38 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.models.User || mongoose.model('User', userSchema, 'users');
 
-
-const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || process.env.SMTP_USER || 'no-reply@gentrack.local';
+const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || 'onboarding@resend.dev';
 const ALERT_EMAIL_COOLDOWN_MS = parseInt(process.env.ALERT_EMAIL_COOLDOWN_MS || '60000', 10);
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 let lastCriticalEmailAt = 0;
 
-function smtpReadLine(socket, timeoutMs = 10000) {
-    return new Promise((resolve, reject) => {
-        let buffer = '';
-        const timer = setTimeout(() => {
-            cleanup();
-            reject(new Error('SMTP timeout waiting response'));
-        }, timeoutMs);
-
-        const onData = (chunk) => {
-            buffer += chunk.toString('utf8');
-            if (buffer.includes('\r\n')) {
-                const lines = buffer.split('\r\n').filter(Boolean);
-                const last = lines[lines.length - 1] || '';
-                if (/^\d{3} /.test(last)) {
-                    cleanup();
-                    resolve(buffer);
-                }
+async function sendViaResend({ from, to, subject, html }) {
+    const payload = JSON.stringify({ from, to, subject, html });
+    return await new Promise((resolve, reject) => {
+        const req = https.request('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload)
             }
-        };
-        const onError = (err) => {
-            cleanup();
-            reject(err);
-        };
-        const onClose = () => {
-            cleanup();
-            reject(new Error('SMTP connection closed unexpectedly'));
-        };
-
-        function cleanup() {
-            clearTimeout(timer);
-            socket.off('data', onData);
-            socket.off('error', onError);
-            socket.off('close', onClose);
-        }
-
-        socket.on('data', onData);
-        socket.on('error', onError);
-        socket.on('close', onClose);
+        }, (res) => {
+            let body = '';
+            res.on('data', (chunk) => { body += chunk; });
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) return resolve(body);
+                reject(new Error(`Resend error ${res.statusCode}: ${body}`));
+            });
+        });
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
     });
-}
-
-async function smtpSend(socket, cmd, expectedCodes = [250]) {
-    socket.write(`${cmd}\r\n`);
-    const response = await smtpReadLine(socket);
-    const status = parseInt(response.slice(0, 3), 10);
-    if (!expectedCodes.includes(status)) {
-        throw new Error(`SMTP command failed (${cmd}) -> ${response.trim()}`);
-    }
-    return response;
-}
-
-async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html }) {
-    const socket = await new Promise((resolve, reject) => {
-        const secure = port === 465;
-        const conn = secure
-            ? tls.connect(port, host, { servername: host }, () => resolve(conn))
-            : net.createConnection(port, host, () => resolve(conn));
-        conn.once('error', reject);
-    });
-
-    try {
-        const banner = await smtpReadLine(socket);
-        if (!banner.startsWith('220')) {
-            throw new Error(`SMTP banner invalid: ${banner.trim()}`);
-        }
-
-        await smtpSend(socket, `EHLO ${host}`, [250]);
-        await smtpSend(socket, 'AUTH LOGIN', [334]);
-        await smtpSend(socket, Buffer.from(user).toString('base64'), [334]);
-        await smtpSend(socket, Buffer.from(pass).toString('base64'), [235]);
-        await smtpSend(socket, `MAIL FROM:<${from}>`, [250]);
-        for (const to of toList) {
-            await smtpSend(socket, `RCPT TO:<${to}>`, [250, 251]);
-        }
-        await smtpSend(socket, 'DATA', [354]);
-
-        const dateValue = new Date().toUTCString();
-        const body = [
-            `From: ${from}`,
-            `To: ${toList.join(', ')}`,
-            `Subject: ${subject}`,
-            'MIME-Version: 1.0',
-            'Content-Type: text/html; charset=UTF-8',
-            `Date: ${dateValue}`,
-            '',
-            html,
-            '.'
-        ].join('\r\n');
-
-        await smtpSend(socket, body, [250]);
-        await smtpSend(socket, 'QUIT', [221]);
-    } finally {
-        socket.end();
-    }
 }
 
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-
-    if (!smtpHost || !smtpUser || !smtpPass) {
-        console.warn('⚠️ SMTP belum dikonfigurasi. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS untuk kirim email alert.');
+    if (!RESEND_API_KEY) {
+        console.warn('⚠️ RESEND_API_KEY belum dikonfigurasi. Email alert critical tidak akan dikirim.');
         return;
     }
 
@@ -210,13 +132,9 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
         .map((a) => `<li><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} (${a.message})</li>`)
         .join('');
 
-    await sendViaSmtp({
-        host: smtpHost,
-        port: smtpPort,
-        user: smtpUser,
-        pass: smtpPass,
+    await sendViaResend({
         from: EMAIL_NOTIF_FROM,
-        toList: uniqueRecipients,
+        to: uniqueRecipients,
         subject: `[CRITICAL ALERT] ${latestSnapshot?.deviceId || 'Generator'}`,
         html: `<p>Terdeteksi alert <b>CRITICAL</b> pada generator.</p><ul>${rows}</ul><p>Waktu: ${new Date().toISOString()}</p>`
     });
@@ -231,6 +149,15 @@ const maintenanceSchema = new mongoose.Schema({
     completedAt: Date
 });
 const Maintenance = mongoose.models.Maintenance || mongoose.model('Maintenance', maintenanceSchema, 'maintenance');
+
+const activeTimeHistorySchema = new mongoose.Schema({
+    deviceId: { type: String, required: true, index: true },
+    startedAt: { type: Date, required: true, index: true },
+    endedAt: { type: Date, default: null, index: true },
+    durationMs: { type: Number, default: 0 },
+    source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' }
+}, { timestamps: true });
+const ActiveTimeHistory = mongoose.models.ActiveTimeHistory || mongoose.model('ActiveTimeHistory', activeTimeHistorySchema, 'active_time_histories');
 
 // ─── THRESHOLDS ───────────────────────────────────────────────────────────────
 let ACTIVE_THRESHOLDS = {
@@ -258,6 +185,38 @@ let latestData = {
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
+
+let activeSessions = new Map();
+
+async function syncActiveTimeHistory(data) {
+    const status = String(data?.status || '').toUpperCase();
+    const rpm = Number(data?.rpm || 0);
+    const isRunning = status === 'RUNNING' || rpm > 0;
+    const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
+    const eventTime = data?.timestamp ? new Date(data.timestamp) : new Date();
+    const activeKey = `${deviceId}`;
+    const existingStartedAt = activeSessions.get(activeKey);
+
+    if (isRunning && !existingStartedAt) {
+        activeSessions.set(activeKey, eventTime);
+        await ActiveTimeHistory.create({
+            deviceId,
+            startedAt: eventTime,
+            source: 'mqtt'
+        });
+        return;
+    }
+
+    if (!isRunning && existingStartedAt) {
+        const durationMs = Math.max(0, eventTime.getTime() - existingStartedAt.getTime());
+        await ActiveTimeHistory.findOneAndUpdate(
+            { deviceId, startedAt: existingStartedAt, endedAt: null },
+            { endedAt: eventTime, durationMs },
+            { sort: { createdAt: -1 } }
+        );
+        activeSessions.delete(activeKey);
+    }
+}
 
 function initMQTT() {
     if (!process.env.MQTT_BROKER) return;
@@ -299,6 +258,7 @@ function initMQTT() {
                     latestData.timestamp = new Date();
                     try {
                         await new GeneratorData(latestData).save();
+                        await syncActiveTimeHistory(latestData);
                         await checkAndSaveAlerts(latestData);
                     } catch (e) { console.error('DB Save Error:', e.message); }
                     break;
@@ -314,12 +274,18 @@ function initMQTT() {
 async function checkAndSaveAlerts(data) {
     const alertsToSave = [];
     const T = ACTIVE_THRESHOLDS;
+    const criticalOnMinViolation = new Set(['volt', 'batt', 'freq']);
+    const criticalOnMaxViolation = new Set(['amp', 'volt', 'batt', 'temp', 'coolant']);
     const check = (param, val) => {
         if (!T[param]) return;
-        if (T[param].max !== undefined && val > T[param].max)
-            alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too High (> ${T[param].max})`, severity: 'critical' });
-        if (T[param].min !== undefined && val < T[param].min)
-            alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too Low (< ${T[param].min})`, severity: 'medium' });
+        if (T[param].max !== undefined && val > T[param].max) {
+            const severity = criticalOnMaxViolation.has(param) ? 'critical' : 'high';
+            alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too High (> ${T[param].max})`, severity });
+        }
+        if (T[param].min !== undefined && val < T[param].min) {
+            const severity = criticalOnMinViolation.has(param) ? 'critical' : 'medium';
+            alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too Low (< ${T[param].min})`, severity });
+        }
     };
     ['rpm','volt','amp','freq','power','coolant','temp','fuel','iat','afr','tps','batt']
         .forEach(p => check(p, data[p]));
@@ -476,6 +442,63 @@ app.get('/api/engine-data/stats', async (req, res) => {
         ]);
         res.json({ success: true, data: stats[0] || { avgPower: 0, totalHours: 0 } });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/generator-active-time/history', async (req, res) => {
+    try {
+        const { limit = 100, startDate, endDate } = req.query;
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const query = {};
+
+        if (effectiveDeviceId) query.deviceId = effectiveDeviceId;
+        if (startDate || endDate) {
+            query.startedAt = {};
+            if (startDate) query.startedAt.$gte = new Date(startDate);
+            if (endDate) query.startedAt.$lte = new Date(endDate);
+        }
+
+        const rows = await ActiveTimeHistory.find(query)
+            .sort({ startedAt: -1 })
+            .limit(parseInt(limit, 10))
+            .lean();
+
+        res.json({ success: true, count: rows.length, data: rows });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/generator-active-time/stats', async (req, res) => {
+    try {
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const hours = parseInt(req.query.hours || '24', 10);
+        const since = new Date(Date.now() - hours * 3600000);
+
+        const query = { startedAt: { $gte: since } };
+        if (effectiveDeviceId) query.deviceId = effectiveDeviceId;
+
+        const rows = await ActiveTimeHistory.find(query).lean();
+        const now = Date.now();
+        const totalDurationMs = rows.reduce((sum, row) => {
+            const started = new Date(row.startedAt).getTime();
+            const ended = row.endedAt ? new Date(row.endedAt).getTime() : now;
+            return sum + Math.max(0, ended - started);
+        }, 0);
+
+        res.json({
+            success: true,
+            data: {
+                hoursWindow: hours,
+                totalDurationMs,
+                totalDurationHours: +(totalDurationMs / 3600000).toFixed(2),
+                totalSessions: rows.length
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 app.get('/api/alerts', async (req, res) => {
