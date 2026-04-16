@@ -88,9 +88,9 @@ const Config = mongoose.model('Config', configSchema);
 
 
 const userSchema = new mongoose.Schema({
-    username: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true },
-    role: { type: String, required: true, default: 'Viewer' }
+    role: { type: String, required: true, default: 'Masyarakat' }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -1007,29 +1007,41 @@ app.get('/api/reports/stats', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
     try {
-        const username = (req.body?.username || '').trim();
+        const email = String(req.body?.email || '').trim().toLowerCase();
         const password = String(req.body?.password || '');
 
-        if (!username || !password) {
-            return res.status(400).json({ success: false, message: 'Username dan password wajib diisi.' });
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
         }
 
-        const user = await User.findOne({ username }).lean();
-        if (!user || user.password !== password) {
-            return res.status(401).json({ success: false, message: 'Username atau password tidak valid.' });
+        const isUserDomain = email.endsWith('@user.unik');
+        const isTechDomain = email.endsWith('@tech.unik');
+        if (!isUserDomain && !isTechDomain) {
+            return res.status(400).json({ success: false, message: 'Email harus berakhiran @user.unik atau @tech.unik.' });
         }
+
+        const user = await User.findOne({ email }).lean();
+        if (!user || user.password !== password) {
+            return res.status(401).json({ success: false, message: 'Email atau password tidak valid.' });
+        }
+
+        const role = String(user.role || '').toLowerCase();
+        const isMasyarakat = isUserDomain || role === 'masyarakat' || role === 'user' || role === 'viewer';
+        const redirectTo = isMasyarakat ? 'public.html' : 'index.html';
 
         return res.json({
             success: true,
             user: {
-                username: user.username,
-                role: user.role || 'Viewer'
+                email: user.email,
+                role: user.role || (isMasyarakat ? 'Masyarakat' : 'Teknisi'),
+                redirectTo
             }
         });
     } catch (error) {
         return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
     }
 });
+
 
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());

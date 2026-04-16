@@ -1,22 +1,22 @@
 [
   {
-    "username": "Admin",
+    "email": "admin@tech.unik",
     "password": "admin123",
-    "role": "Administrator"
+    "role": "Admin"
   },
   {
-    "username": "Operator",
+    "email": "teknisi@tech.unik",
+    "password": "teknisi123",
+    "role": "Teknisi"
+  },
+  {
+    "email": "operator@tech.unik",
     "password": "operator123",
-    "role": "Operator"
+    "role": "Teknisi"
   },
   {
-    "username": "Viewer",
-    "password": "viewer123",
-    "role": "Viewer"
-  },
-  {
-    "username": "masyarakat",
-    "password": "masyarakat123",
+    "email": "warga@user.unik",
+    "password": "warga123",
     "role": "Masyarakat"
   }
 ]
