@@ -159,5 +159,45 @@
 
     </div> </div> <script src="js/sidebar.js"></script> 
   <script src="js/dashboard.js"></script>
+
+  <script>
+    /* ── Hero: Sync username dari topbar & clock AM/PM ── */
+    (function () {
+
+      // --- 1. USERNAME SYNC ---
+      function syncUsername() {
+        const topbarSpan = document.querySelector('#user-btn span');
+        const heroSpan   = document.getElementById('welcome-user');
+        if (topbarSpan && heroSpan) {
+          const name = topbarSpan.textContent.trim();
+          if (name) heroSpan.textContent = name;
+        }
+      }
+
+      // Jalankan sekali, lalu amati setiap perubahan pada span topbar
+      syncUsername();
+      const topbarTarget = document.querySelector('#user-btn span');
+      if (topbarTarget) {
+        new MutationObserver(syncUsername)
+          .observe(topbarTarget, { childList: true, characterData: true, subtree: true });
+      }
+
+      // --- 2. CLOCK 12-JAM + AM/PM ---
+      function tickClock() {
+        const el = document.getElementById('clock');
+        if (!el) return;
+        const now  = new Date();
+        let   h    = now.getHours();
+        const m    = String(now.getMinutes()).padStart(2, '0');
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        el.textContent = `${String(h).padStart(2, '0')}:${m} ${ampm}`;
+      }
+
+      tickClock();
+      setInterval(tickClock, 1000);
+
+    })();
+  </script>
 </body>
 </html>
