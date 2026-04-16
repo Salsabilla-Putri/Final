@@ -4,6 +4,12 @@ let allTasks = [];
 let currentFilter = 'all';
 let pendingSuggestion = null;
 
+function formatIDR(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return '-';
+    return `Rp ${num.toLocaleString('id-ID')}`;
+}
+
 // --- 1. LOAD DATA DARI SERVER (MONGODB) ---
 async function fetchTasks() {
     try {
@@ -94,6 +100,7 @@ function render() {
             <td><b>${t.task}</b>${suggestionBadge}</td>
             <td style="text-transform:capitalize">${t.type || '-'}</td>
             <td class="priority-${t.priority}" style="text-transform:capitalize">${t.priority || '-'}</td>
+            <td>${formatIDR(t.cost)}</td>
             <td>${new Date(t.dueDate).toLocaleDateString()}</td>
             <td><span class="status-badge status-${displayStatus}">${displayStatus}</span></td>
             <td>${t.assignedTo || '-'}</td>
@@ -115,6 +122,7 @@ function render() {
             <tr>
                 <td>${t.task}</td>
                 <td>${t.type}</td>
+                <td>${formatIDR(t.cost)}</td>
                 <td>${t.completedAt ? new Date(t.completedAt).toLocaleDateString() : '-'}</td>
                 <td>${t.assignedTo}</td>
                 <td><span class="status-badge status-completed">Completed</span></td>
@@ -152,6 +160,7 @@ async function saveMaintenance() {
         task: document.getElementById('taskName').value,
         type: document.getElementById('taskType').value,
         priority: document.getElementById('priority').value,
+        cost: Number(document.getElementById('cost').value || 0),
         dueDate: document.getElementById('dueDate').value,
         assignedTo: document.getElementById('assignedTo').value,
         source: pendingSuggestion ? 'system' : 'manual',
@@ -242,9 +251,9 @@ function showNotif(msg, type) {
 }
 
 function exportCSV() {
-    let csv = "Task,Type,Priority,DueDate,Status,Technician\n";
+    let csv = "Task,Type,Priority,Cost,DueDate,Status,Technician\n";
     allTasks.forEach(t => {
-      csv += `"${t.task}",${t.type},${t.priority},${t.dueDate},${t.status},"${t.assignedTo}"\n`;
+      csv += `"${t.task}",${t.type},${t.priority},${t.cost || 0},${t.dueDate},${t.status},"${t.assignedTo}"\n`;
     });
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);

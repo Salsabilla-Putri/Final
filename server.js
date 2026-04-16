@@ -700,6 +700,7 @@ const maintenanceSchema = new mongoose.Schema({
     task: { type: String, required: true },       // Nama Tugas
     type: String,                                 // Tipe: Preventive/Corrective
     priority: String,                             // Priority: High/Med/Low
+    cost: { type: Number, default: 0, min: 0 },  // Estimasi biaya maintenance
     status: { type: String, default: 'scheduled' }, // scheduled, completed, etc.
     dueDate: Date,
     assignedTo: String,
