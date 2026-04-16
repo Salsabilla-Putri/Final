@@ -61,7 +61,7 @@ body { font-family: var(--app-font-family); background:#f1f5f9; color:#0f172a; o
 
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #e2e8f0; }
-th, { background: #f7fbff; font-weight: 700; color: var(--primary); font-size: var(--text-base-size); position: sticky; top: 0; }
+th { background: #f7fbff; font-weight: 700; color: var(--primary); font-size: var(--text-base-size); position: sticky; top: 0; text-transform: uppercase; }
 tr:hover { background: #f8fafc; }
 tr, td { font-size: var(--text-base-size); color: #000000; }
 
@@ -84,6 +84,6 @@ tr, td { font-size: var(--text-base-size); color: #000000; }
 }
 
 .value-cell { font-weight: 700; }
-.value-warning { color: #d97706; background: #fffbeb; }
-.value-critical { color: #b91c1c; background: #fef2f2; }
+.value-warning { color: #d97706; background: #ffffff; }
+.value-critical { color: #b91c1c; background: #ffffff; }
 .value-normal { color: #111827; }
