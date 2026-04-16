@@ -13,11 +13,11 @@ function setEspConnectionStatus(isConnected) {
     if (!el) return;
 
     if (isConnected) {
-        el.className = 'esp-connection status-connected';
-        el.innerHTML = '<i class="fas fa-microchip"></i><span>Connected</span>';
+        el.className = 'indicator ind-on';
+        el.innerHTML = '<i class="fas fa-microchip"></i> Connected';
     } else {
-        el.className = 'esp-connection status-disconnected';
-        el.innerHTML = '<i class="fas fa-microchip"></i><span>Disconnected</span>';
+        el.className = 'indicator ind-off';
+        el.innerHTML = '<i class="fas fa-microchip"></i> Disconnected';
     }
 }
 
@@ -61,7 +61,6 @@ async function fetchAlerts() {
 
 // === UI UPDATE LOGIC ===
 function updateDashboard(data) {
-    document.getElementById('lastUpdate').innerText = new Date().toLocaleTimeString();
     const syncEl = document.getElementById('syncIndicator');
     syncEl.innerText = data.sync || 'UNKNOWN';
     syncEl.className = data.sync === 'ON-GRID' ? 'indicator ind-on' : 'indicator ind-off';

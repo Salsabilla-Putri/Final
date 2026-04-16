@@ -24,10 +24,6 @@
     <div class="topbar">
       <div class="topbar-title">Engine Real-Time Status</div>
       <div style="display:flex; align-items:center; gap:15px;">
-        <div id="espConnection" class="esp-connection status-connecting">
-          <i class="fas fa-microchip"></i>
-          <span>Menghubungkan...</span>
-        </div>
       <div class="user-info" id="userarea">
         <i class="fas fa-user"></i> <span>Pengguna</span>
       </div>
@@ -42,8 +38,8 @@
             <div style="display:flex; gap:12px; align-items:center;">
                 <div style="font-weight:700; color:var(--accent)">Sync Status:</div>
                 <div id="syncIndicator" class="indicator ind-neutral">--</div>
-                <div style="font-weight:700; color:var(--accent)">Last Update:</div>
-                <div id="lastUpdate" class="indicator ind-neutral">--:--:--</div>
+                <div style="font-weight:700; color:var(--accent)">ECU / ESP32:</div>
+                <div id="espConnection" class="indicator ind-neutral"><i class="fas fa-microchip"></i> Menghubungkan...</div>
             </div>
         </div>
       </div>
