@@ -158,60 +158,23 @@
   <script src="js/dashboard.js"></script>
 
   <script>
-    /* ── Hero: Sync username dari topbar & clock AM/PM ── */
+    /* ── Hero: Sync username dari topbar ── */
     (function() {
-
-
-      // --- 1. USERNAME SYNC ---
       function syncUsername() {
         const topbarSpan = document.querySelector('#user-btn span');
-        const heroSpan   = document.getElementById('welcome-user');
+        const heroSpan = document.getElementById('welcome-user');
         if (topbarSpan && heroSpan) {
           const name = topbarSpan.textContent.trim();
           if (name) heroSpan.textContent = name;
         }
       }
 
-      // Jalankan sekali, lalu amati setiap perubahan pada span topbar
       syncUsername();
       const topbarTarget = document.querySelector('#user-btn span');
       if (topbarTarget) {
         new MutationObserver(syncUsername)
           .observe(topbarTarget, { childList: true, characterData: true, subtree: true });
       }
-
-      // --- 2. CLOCK 12-JAM + AM/PM ---
-// --- 2. CLOCK 12-JAM + AM/PM (NO GLITCH VERSION) ---
-function tickClock() {
-  const timeEl = document.getElementById('clock-time');
-  const ampmEl = document.getElementById('clock-ampm');
-  if (!timeEl || !ampmEl) return;
-
-  const now  = new Date();
-  let h      = now.getHours();
-  const m    = String(now.getMinutes()).padStart(2, '0');
-  const ampm = h >= 12 ? 'PM' : 'AM';
-
-  h = h % 12 || 12;
-
-  const newTime = `${String(h).padStart(2, '0')}:${m}`;
-
-  // Update hanya jika berubah
-  if (timeEl.textContent !== newTime) {
-    timeEl.textContent = newTime;
-  }
-
-  if (ampmEl.textContent !== ampm) {
-    ampmEl.textContent = ampm;
-  }
-}
-
-tickClock();
-setInterval(tickClock, 1000);
-
-      tickClock();
-      setInterval(tickClock, 1000);
-
     })();
   </script>
 </body>
