@@ -483,7 +483,7 @@
           alertMessage.style.display = 'block';
 
           localStorage.setItem('userRole', result.user.role);
-          localStorage.setItem('username', result.user.email || email);
+          localStorage.setItem('username', result.user.name || result.user.email || email);
           localStorage.setItem('isLoggedIn', 'true');
 
           setTimeout(() => {
