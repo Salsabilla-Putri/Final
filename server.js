@@ -10,7 +10,8 @@ const { EventEmitter } = require('events');
 require('dotenv').config();
 const { transformPublicStatus } = require('./public_status');
 
-mongoose.set('bufferCommands', false);
+// Dihapus agar Mongoose bisa menunggu koneksi database selesai
+// mongoose.set('bufferCommands', false);
 
 const mqttModulePath = path.join(__dirname, 'node_modules', 'mqtt', 'build', 'index.js');
 const mqtt = fs.existsSync(mqttModulePath) ? require('mqtt') : null;
@@ -1209,62 +1210,6 @@ app.get('/api/reports/stats', async (req, res) => {
     }
 });
 
-// const maintenanceSchema = new mongoose.Schema({
-//     task: { type: String, required: true },
-//     type: String,
-//     priority: String,
-//     status: { type: String, default: 'scheduled' },
-//     dueDate: Date,
-//     assignedTo: String,
-//     createdAt: { type: Date, default: Date.now },
-//     completedAt: Date
-// });
-// const Maintenance = mongoose.model('Maintenance', maintenanceSchema);
-
-// // --- 2. UPDATE API ENDPOINTS ---
-
-// // GET: Ambil semua data (Bisa filter lewat query)
-// app.get('/api/maintenance', async (req, res) => {
-//     try {
-//         const logs = await Maintenance.find().sort({ dueDate: 1 }); // Urutkan berdasarkan tenggat waktu
-//         res.json({ success: true, data: logs });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-// // POST: Tambah data baru dari halaman Maintenance
-// app.post('/api/maintenance', async (req, res) => {
-//     try {
-//         const newTask = new Maintenance(req.body);
-//         await newTask.save();
-//         res.json({ success: true, data: newTask });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-// // PUT: Update status (misal: Complete task)
-// app.put('/api/maintenance/:id', async (req, res) => {
-//     try {
-//         const updated = await Maintenance.findByIdAndUpdate(req.params.id, req.body, { new: true });
-//         res.json({ success: true, data: updated });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-// // DELETE: Hapus task
-// app.delete('/api/maintenance/:id', async (req, res) => {
-//     try {
-//         await Maintenance.findByIdAndDelete(req.params.id);
-//         res.json({ success: true });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-
 app.post('/api/auth/login', async (req, res) => {
     try {
         const email = String(req.body?.email || '').trim().toLowerCase();
@@ -1301,7 +1246,16 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-app.get(/(.*)/, (req, res) => { res.sendFile(path.join(__dirname, 'public', 'login.html')); });
+// ─── PERBAIKAN ROUTING CATCH-ALL ───
+// 1. Tangkap semua route /api/ yang tidak ditemukan dan kembalikan JSON 404 (mencegah error parse JSON di frontend)
+app.all('/api/*', (req, res) => { 
+    res.status(404).json({ success: false, message: 'API endpoint not found' }); 
+});
+
+// 2. Catch-all HANYA untuk route non-API (UI Frontend)
+app.get(/^(?!\/api).*/, (req, res) => { 
+    res.sendFile(path.join(__dirname, 'public', 'login.html')); 
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -1312,4 +1266,3 @@ if (require.main === module) {
 }
 
 module.exports = app;
-
