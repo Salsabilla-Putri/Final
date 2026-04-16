@@ -14,9 +14,8 @@ const SENSORS = {
     temp: { name: 'Engine Temp', unit: '°C', icon: 'fas fa-thermometer-half', color: '#ef4444' },
     coolant: { name: 'Coolant', unit: '°C', icon: 'fas fa-snowflake', color: '#06b6d4' },
     fuel: { name: 'Fuel', unit: '%', icon: 'fas fa-gas-pump', color: '#10b981' },
-    oil: { name: 'Oil Press', unit: 'PSI', icon: 'fas fa-oil-can', color: '#6366f1' },
     iat: { name: 'Intake Air', unit: '°C', icon: 'fas fa-wind', color: '#f59e0b' },
-    map: { name: 'MAP', unit: 'kPa', icon: 'fas fa-compress-arrows-alt', color: '#84cc16' },
+    batt: { name: 'Battery Voltage', unit: 'V', icon: 'fas fa-car-battery', color: '#6366f1' },
     afr: { name: 'AFR', unit: '', icon: 'fas fa-burn', color: '#3b82f6' }
 };
 
@@ -29,9 +28,8 @@ const SENSOR_LIMITS = {
     temp: { min: -20, max: 180 },
     coolant: { min: -20, max: 180 },
     fuel: { min: 0, max: 100 },
-    oil: { min: 0, max: 200 },
     iat: { min: -20, max: 120 },
-    map: { min: 0, max: 300 },
+    batt: { min: 0, max: 24 },
     afr: { min: 0, max: 40 }
 };
 
@@ -503,9 +501,8 @@ function createDemoRows() {
         temp: 76 + index,
         coolant: 76 + index,
         fuel: 68 - index,
-        oil: 42 - (index * 0.5),
         iat: 31 + (index * 0.4),
-        map: 102 + index,
+        batt: 12.4 + (Math.random() * 0.8),
         afr: 14.1 + (index * 0.05),
         tps: 34 + index,
         status: 'DEMO',

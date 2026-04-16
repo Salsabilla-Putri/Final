@@ -453,54 +453,55 @@
   </div>
 
   <script>
-    // Demo user accounts
-    const users = {
-      'Admin': { password: 'admin123', role: 'Administrator' },
-      'Operator': { password: 'operator123', role: 'Operator' },
-      'Viewer': { password: 'viewer123', role: 'Viewer' },
-      'masyarakat': { password: 'masyarakat123', role: 'Masyarakat' }
-    };
+    async function loginWithDatabase(username, password) {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      return await response.json();
+    }
 
     // Form submission handler
-    document.getElementById('loginForm').addEventListener('submit', function(e) {
+    document.getElementById('loginForm').addEventListener('submit', async function(e) {
       e.preventDefault();
-      
+
       const username = document.getElementById('username').value;
       const password = document.getElementById('password').value;
       const alertMessage = document.getElementById('alertMessage');
-      
+
       // Reset alert
       alertMessage.style.display = 'none';
       alertMessage.className = 'alert alert-error';
-      
-      // Validate credentials
-      if (users[username] && users[username].password === password) {
-        // Successful login
-        alertMessage.textContent = 'Login successful! Redirecting...';
-        alertMessage.className = 'alert alert-success';
-        alertMessage.style.display = 'block';
-        
-        // Store user info in localStorage
-        localStorage.setItem('userRole', users[username].role);
-        localStorage.setItem('username', username);
-        localStorage.setItem('isLoggedIn', 'true');
-        
-        // Redirect to dashboard after a short delay
-        setTimeout(() => {
-          const role = users[username].role;
-          window.location.href = role === 'Masyarakat' ? 'public.html' : 'index.html';
-        }, 1000);
-      } else {
-        // Failed login
-        alertMessage.textContent = 'Invalid username or password. Please try again.';
+
+      try {
+        const result = await loginWithDatabase(username, password);
+
+        if (result.success && result.user) {
+          alertMessage.textContent = 'Login successful! Redirecting...';
+          alertMessage.className = 'alert alert-success';
+          alertMessage.style.display = 'block';
+
+          localStorage.setItem('userRole', result.user.role);
+          localStorage.setItem('username', result.user.username);
+          localStorage.setItem('isLoggedIn', 'true');
+
+          setTimeout(() => {
+            window.location.href = result.user.role === 'Masyarakat' ? 'public.html' : 'index.html';
+          }, 1000);
+        } else {
+          alertMessage.textContent = result.message || 'Invalid username or password. Please try again.';
+          alertMessage.className = 'alert alert-error';
+          alertMessage.style.display = 'block';
+          document.getElementById('loginForm').style.animation = 'shake 0.5s';
+          setTimeout(() => {
+            document.getElementById('loginForm').style.animation = '';
+          }, 500);
+        }
+      } catch (error) {
+        alertMessage.textContent = 'Tidak dapat terhubung ke server login.';
         alertMessage.className = 'alert alert-error';
         alertMessage.style.display = 'block';
-        
-        // Shake animation for error
-        document.getElementById('loginForm').style.animation = 'shake 0.5s';
-        setTimeout(() => {
-          document.getElementById('loginForm').style.animation = '';
-        }, 500);
       }
     });
 
