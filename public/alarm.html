@@ -49,35 +49,75 @@
         </div>
       </div>
 
+      <div class="filter-card">
+        <div class="filter-header">
+          <div class="filter-title">Alarm Date Filter</div>
+          <div class="filter-actions">
+            <button class="btn btn-outline" onclick="resetDateFilters()">
+              <i class="fas fa-sync-alt"></i> Reset
+            </button>
+            <button class="btn btn-primary" onclick="applyDateFilters()">
+              <i class="fas fa-filter"></i> Apply
+            </button>
+          </div>
+        </div>
+
+        <div class="filter-grid">
+          <div class="form-group">
+            <label class="form-label">From Date</label>
+            <input type="date" id="dateFrom" class="form-input">
+          </div>
+          <div class="form-group">
+            <label class="form-label">To Date</label>
+            <input type="date" id="dateTo" class="form-input">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Time Range</label>
+            <select id="timeRange" class="form-select" onchange="updateDateInputs(this.value)">
+              <option value="custom">Custom Range</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="today">Today</option>
+              <option value="7">Last 7 Days</option>
+              <option value="30" selected>Last 30 Days</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <div class="filter-tabs">
-        <button class="filter-tab active" onclick="filterAlarms('all')">All Alarms</button>
-        <button class="filter-tab" onclick="filterAlarms('active')">Active Only</button>
-        <button class="filter-tab" onclick="filterAlarms('critical')">Critical</button>
-        <button class="filter-tab" onclick="filterAlarms('warning')">Warning</button>
+        <button class="filter-tab active" onclick="filterAlarms('all', this)">All Alarms</button>
+        <button class="filter-tab" onclick="filterAlarms('active', this)">Active Only</button>
+        <button class="filter-tab" onclick="filterAlarms('critical', this)">Critical</button>
+        <button class="filter-tab" onclick="filterAlarms('warning', this)">Warning</button>
       </div>
 
       <div class="card">
         <div class="card-header">
           <h3><i class="fas fa-history"></i> Alarm History</h3>
-          <button onclick="fetchAlarms()" class="btn btn-refresh">
-            <i class="fas fa-sync-alt"></i> Refresh Data
-          </button>
+          <div style="display:flex; gap:10px;">
+            <button class="btn btn-outline" onclick="exportAlarmCSV()"><i class="fas fa-file-csv"></i> CSV</button>
+            <button class="btn btn-outline" onclick="exportAlarmExcel()"><i class="fas fa-file-excel"></i> Excel</button>
+            <button onclick="fetchAlarms()" class="btn btn-refresh">
+              <i class="fas fa-sync-alt"></i> Refresh Data
+            </button>
+          </div>
         </div>
 
         <div style="overflow-x:auto;">
           <table id="alarmTable">
             <thead>
               <tr>
-                <th style="width:200px">Time</th>
+                <th>Timestamp</th>
+                <th>Generator</th>
                 <th>Parameter</th>
                 <th>Value</th>
-                <th>Severity</th>
+                <th>Unit</th>
                 <th>Status</th>
                 <th style="width:160px; text-align:center;">Actions</th>
               </tr>
             </thead>
             <tbody id="alarmTableBody">
-              <tr><td colspan="6" style="text-align:center; padding:40px; color:#94a3b8;">Loading data...</td></tr>
+              <tr><td colspan="7" style="text-align:center; padding:40px; color:#94a3b8;">Loading data...</td></tr>
             </tbody>
           </table>
         </div>

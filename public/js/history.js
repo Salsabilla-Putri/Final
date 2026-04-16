@@ -25,6 +25,15 @@ const PARAMS = {
     tps: { unit: '%', color: '#a855f7' } // Purple
 };
 
+const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+});
+
 // --- 1. FILTER & DATE INPUT LOGIC ---
 
 function updateDateInputs(val) {
@@ -200,7 +209,7 @@ function renderTable() {
     pageData.forEach(row => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td>${row.rawDate.toLocaleString('id-ID')}</td>
+            <td>${formatReadableTimestamp(row.rawDate)}</td>
             <td>${row.generator}</td>
             <td>${row.label}</td>
             <td class="value-cell value-${row.status}">${Number(row.value).toFixed(1)}</td>
@@ -234,17 +243,77 @@ function resetFilters() {
     applyFilters();
 }
 
-function exportCSV() {
-    if(filteredRows.length === 0) return alert("No data to export");
-    let csv = "Timestamp,Generator,Parameter,Value,Unit,Status\n";
-    filteredRows.forEach(row => {
-        csv += `"${row.rawDate.toISOString()}","${row.generator}","${row.label}",${row.value},${row.unit},${row.status}\n`;
-    });
-    const blob = new Blob([csv], { type: 'text/csv' });
+function formatReadableTimestamp(input) {
+    const dateObj = input instanceof Date ? input : new Date(input);
+    if (Number.isNaN(dateObj.getTime())) return '-';
+    return USER_DATETIME_FORMAT.format(dateObj);
+}
+
+function escapeCsvCell(value) {
+    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function downloadBlob(content, type, filename) {
+    const blob = new Blob([content], { type });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `history_${new Date().toISOString().slice(0,10)}.csv`;
+    a.href = url;
+    a.download = filename;
     a.click();
+    window.URL.revokeObjectURL(url);
+}
+
+function exportCSV() {
+    if (filteredRows.length === 0) return alert('No data to export');
+    let csv = 'Timestamp,Generator,Parameter,Value,Unit,Status\n';
+    filteredRows.forEach(row => {
+        csv += [
+            escapeCsvCell(formatReadableTimestamp(row.rawDate)),
+            escapeCsvCell(row.generator),
+            escapeCsvCell(row.label),
+            escapeCsvCell(Number(row.value).toFixed(1)),
+            escapeCsvCell(row.unit),
+            escapeCsvCell(row.status)
+        ].join(',') + '\n';
+    });
+
+    downloadBlob(csv, 'text/csv;charset=utf-8;', `history_${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function exportExcel() {
+    if (filteredRows.length === 0) return alert('No data to export');
+    const tableRows = filteredRows.map((row) => `
+        <tr>
+            <td>${formatReadableTimestamp(row.rawDate)}</td>
+            <td>${row.generator}</td>
+            <td>${row.label}</td>
+            <td>${Number(row.value).toFixed(1)}</td>
+            <td>${row.unit}</td>
+            <td>${row.status}</td>
+        </tr>
+    `).join('');
+
+    const htmlTable = `
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Generator</th>
+                    <th>Parameter</th>
+                    <th>Value</th>
+                    <th>Unit</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+        </table>
+    `;
+
+    downloadBlob(
+        `\ufeff${htmlTable}`,
+        'application/vnd.ms-excel;charset=utf-8;',
+        `history_${new Date().toISOString().slice(0, 10)}.xls`
+    );
 }
 
 

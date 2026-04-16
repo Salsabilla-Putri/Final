@@ -11,9 +11,7 @@
   --card-bg: #fff;
   --border: #e2e8f0;
 
-  /* Severity */
   --critical: #dc2626;
-  --active: #ef4444;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -27,7 +25,6 @@ body {
 
 .container { display: flex; min-height: 100vh; }
 
-/* LAYOUT (SAMA DENGAN HISTORY) */
 .main-content {
   flex: 1;
   margin-left: 80px;
@@ -37,9 +34,6 @@ body {
 }
 #sidebar-container:hover ~ .main-content { margin-left: 220px; }
 
-/* ===============================
-   SUMMARY / STATS (MATCH HISTORY)
-================================ */
 .alarm-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -61,28 +55,36 @@ body {
   transition: transform 0.2s;
 }
 
-.stat-card:hover {
-  transform: translateY(-5px);
-}
-
-.stat-number {
-  font-size: 28px;
-  font-weight: 700;
-  margin-bottom: 2px;
-}
-.stat-label {
-  font-size: var(--text-base-size);
-  color: var(--muted);
-}
+.stat-card:hover { transform: translateY(-5px); }
+.stat-number { font-size: 28px; font-weight: 700; margin-bottom: 2px; }
+.stat-label { font-size: var(--text-base-size); color: var(--muted); }
 
 .stat-critical { border-left: 4px solid var(--critical); }
 .stat-warning  { border-left: 4px solid var(--warning); }
 .stat-active   { border-left: 4px solid var(--danger); }
 .stat-total    { border-left: 4px solid var(--primary); }
 
-/* ===============================
-   FILTER TABS (SIMPLE & CLEAN)
-================================ */
+.filter-card {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  margin-bottom: 20px;
+}
+
+.filter-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.filter-title { font-size: var(--heading-section-size); font-weight: 700; color: var(--primary); }
+.filter-actions { display: flex; gap: 10px; }
+
+.filter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-label { font-size: var(--text-base-size); font-weight: 600; color: #334155; }
+.form-input, .form-select {
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: var(--text-base-size); color: #334155; width: 100%; outline: none; transition: 0.2s;
+}
+.form-input:focus, .form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(23, 69, 165, 0.1); }
+
 .filter-tabs {
   display: flex;
   gap: 10px;
@@ -106,9 +108,6 @@ body {
   border-bottom-color: var(--primary);
 }
 
-/* ===============================
-   TABLE CARD (MATCH HISTORY)
-================================ */
 .card {
   background: white;
   border-radius: 12px;
@@ -131,14 +130,7 @@ body {
   gap: 8px;
 }
 
-/* ===============================
-   TABLE (MATCH HISTORY)
-================================ */
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
+table { width: 100%; border-collapse: collapse; }
 th, td {
   padding: 12px 15px;
   border-bottom: 1px solid var(--border);
@@ -156,50 +148,28 @@ th {
 
 tr:hover { background: #f8fafc; }
 
-/* LOCK ACTION COLUMN */
 th:last-child,
 td:last-child {
   width: 160px;
   text-align: center;
 }
 
-/* ===============================
-   BADGES (CONSISTENT STYLE)
-================================ */
-.badge {
+.status-badge {
   padding: 4px 10px;
   border-radius: 12px;
   font-size: var(--text-xs-size);
   font-weight: 600;
+  text-transform: capitalize;
 }
+.status-normal { background: #d1fae5; color: #065f46; }
+.status-warning { background: #ffedd5; color: #9a3412; }
+.status-critical { background: #fee2e2; color: #991b1b; }
 
-.sev-critical { background: #fee2e2; color: #991b1b; }
-.sev-warning  { background: #ffedd5; color: #9a3412; }
-.sev-medium   { background: #fef3c7; color: #92400e; }
-.sev-low      { background: #e0f2fe; color: #075985; }
+.value-cell { font-weight: 700; }
+.value-warning { color: #d97706; background: #ffffff; }
+.value-critical { color: #b91c1c; background: #ffffff; }
+.value-normal { color: #111827; }
 
-/* STATUS */
-.st-active {
-  background: #fee2e2;
-  color: #991b1b;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: var(--text-xs-size);
-  font-weight: 600;
-}
-
-.st-confirmed {
-  background: #dcfce7;
-  color: #166534;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: var(--text-xs-size);
-  font-weight: 600;
-}
-
-/* ===============================
-   BUTTONS (MATCH HISTORY)
-================================ */
 .btn {
   padding: 8px 14px;
   border-radius: 6px;
@@ -212,33 +182,22 @@ td:last-child {
   transition: 0.2s;
 }
 
-.btn-ack {
-  background: white;
-  border: 1px solid var(--primary);
-  color: var(--primary);
-}
+.btn-outline { background: white; border: 1px solid var(--primary); color: var(--primary); }
+.btn-outline:hover { background: #eff6ff; }
+.btn-primary { background: var(--primary); border: 1px solid var(--primary); color: white; }
+.btn-primary:hover { background: #1e40af; }
+
+.btn-ack { background: white; border: 1px solid var(--primary); color: var(--primary); }
 .btn-ack:hover { background: #eff6ff; }
-
-.btn-del {
-  background: white;
-  border: 1px solid var(--danger);
-  color: var(--danger);
-}
+.btn-del { background: white; border: 1px solid var(--danger); color: var(--danger); }
 .btn-del:hover { background: #fef2f2; }
+.btn-refresh { background: white; border: 1px solid #cbd5e1; color: var(--muted); }
+.btn-refresh:hover { border-color: var(--primary); color: var(--primary); }
 
-.btn-refresh {
-  background: white;
-  border: 1px solid #cbd5e1;
-  color: var(--muted);
-}
-.btn-refresh:hover {
-  border-color: var(--primary);
-  color: var(--primary);
+@media (max-width: 900px) {
+  .filter-grid { grid-template-columns: 1fr; gap: 15px; }
 }
 
-/* ===============================
-   RESPONSIVE (SAMA DENGAN HISTORY)
-================================ */
 @media (max-width: 768px) {
   .main-content { margin-left: 0; padding: 16px; padding-top: 104px; }
   table { display: block; overflow-x: auto; }
