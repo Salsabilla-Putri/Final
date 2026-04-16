@@ -1313,15 +1313,3 @@ if (require.main === module) {
 
 module.exports = app;
 
-.then(async () => {
-    console.log('✅ MongoDB Connected');
-    loadThresholdsFromDB();
-
-    // Pastikan index pada timestamp + deviceId agar query cepat
-    try {
-        const col = mongoose.connection.db.collection('generatordatas');
-        await col.createIndex({ timestamp: -1 });
-        await col.createIndex({ deviceId: 1, timestamp: -1 });
-        console.log('✅ Indexes ensured');
-    } catch(e) { console.warn('Index creation skipped:', e.message); }
-})
