@@ -10,6 +10,10 @@ const {
     getPublicLabels
 } = require('../public_status');
 
+app.get("/", (req, res) => {
+  res.send("Server Running - Status DB: " + mongoose.connection.readyState);
+});
+
 const app = express();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
