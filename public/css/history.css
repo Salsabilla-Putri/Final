@@ -83,7 +83,7 @@ tr, td { font-size: var(--text-base-size); color: #000000; }
     table { display: block; overflow-x: auto; }
 }
 
-.value-cell { font-weight: 700; }
-.value-warning { color: #d97706; background: #ffffff; }
-.value-critical { color: #b91c1c; background: #ffffff; }
+.value-cell { font-weight: 500; }
+/* .value-warning { color: #d97706; background: #ffffff; }
+.value-critical { color: #b91c1c; background: #ffffff; } */
 .value-normal { color: #111827; }
