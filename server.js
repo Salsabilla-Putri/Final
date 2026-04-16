@@ -49,16 +49,38 @@ function isDbReady() {
     return mongoose.connection.readyState === 1;
 }
 
-// DATABASE
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/generator_monitoring', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-})
-.then(() => {
-    console.log('✅ MongoDB Connected');
-    loadThresholdsFromDB(); // Load threshold saat server nyala
-})
-.catch(err => console.error('❌ MongoDB Connection Error:', err));
+let dbConnectPromise = null;
+
+async function ensureDbReady() {
+    if (isDbReady()) return true;
+
+    if (dbConnectPromise) {
+        await dbConnectPromise;
+        return isDbReady();
+    }
+
+    dbConnectPromise = mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/generator_monitoring', {
+        useNewUrlParser: true,
+        useUnifiedTopology: true
+    })
+    .then(async () => {
+        console.log('✅ MongoDB Connected');
+        await loadThresholdsFromDB(); // Load threshold saat server nyala/reconnect
+    })
+    .catch((err) => {
+        console.error('❌ MongoDB Connection Error:', err);
+        throw err;
+    })
+    .finally(() => {
+        dbConnectPromise = null;
+    });
+
+    await dbConnectPromise;
+    return isDbReady();
+}
+
+// DATABASE (startup connect + auto retry via ensureDbReady saat endpoint dipanggil)
+ensureDbReady().catch(() => undefined);
 
 // --- SCHEMAS ---
 const generatorDataSchema = new mongoose.Schema({
@@ -1002,6 +1024,7 @@ async function buildSensorStats(collection, matchQuery) {
 // API Endpoint untuk mengambil data report dari collection MongoDB yang ditetapkan
 app.get('/api/reports', async (req, res) => {
     try {
+        await ensureDbReady().catch(() => undefined);
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
         // ── FIX: extract deviceId so both data and stats are filtered per device
@@ -1157,6 +1180,7 @@ app.get('/api/reports', async (req, res) => {
 //  the main /api/reports response is slow or partially cached.
 app.get('/api/reports/stats', async (req, res) => {
     try {
+        await ensureDbReady().catch(() => undefined);
         const { hours, startDate, endDate, deviceId } = req.query;
 
         const timeFilter = {};
