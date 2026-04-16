@@ -165,9 +165,9 @@ td:last-child {
 .status-warning { background: #ffedd5; color: #9a3412; }
 .status-critical { background: #fee2e2; color: #991b1b; }
 
-.value-cell { font-weight: 700; }
-.value-warning { color: #d97706; background: #ffffff; }
-.value-critical { color: #b91c1c; background: #ffffff; }
+.value-cell { font-weight: 500; }
+/* .value-warning { color: #d97706; background: #ffffff; }
+.value-critical { color: #b91c1c; background: #ffffff; } */
 .value-normal { color: #111827; }
 
 .btn {

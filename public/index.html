@@ -159,7 +159,8 @@
 
   <script>
     /* ── Hero: Sync username dari topbar & clock AM/PM ── */
-    (function () {
+    (function() {
+
 
       // --- 1. USERNAME SYNC ---
       function syncUsername() {
@@ -180,16 +181,33 @@
       }
 
       // --- 2. CLOCK 12-JAM + AM/PM ---
-      function tickClock() {
-        const el = document.getElementById('clock');
-        if (!el) return;
-        const now  = new Date();
-        let   h    = now.getHours();
-        const m    = String(now.getMinutes()).padStart(2, '0');
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        h = h % 12 || 12;
-        el.textContent = `${String(h).padStart(2, '0')}:${m} ${ampm}`;
-      }
+// --- 2. CLOCK 12-JAM + AM/PM (NO GLITCH VERSION) ---
+function tickClock() {
+  const timeEl = document.getElementById('clock-time');
+  const ampmEl = document.getElementById('clock-ampm');
+  if (!timeEl || !ampmEl) return;
+
+  const now  = new Date();
+  let h      = now.getHours();
+  const m    = String(now.getMinutes()).padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+
+  h = h % 12 || 12;
+
+  const newTime = `${String(h).padStart(2, '0')}:${m}`;
+
+  // Update hanya jika berubah
+  if (timeEl.textContent !== newTime) {
+    timeEl.textContent = newTime;
+  }
+
+  if (ampmEl.textContent !== ampm) {
+    ampmEl.textContent = ampm;
+  }
+}
+
+tickClock();
+setInterval(tickClock, 1000);
 
       tickClock();
       setInterval(tickClock, 1000);
