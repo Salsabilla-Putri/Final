@@ -1,0 +1,22 @@
+[
+  {
+    "username": "Admin",
+    "password": "admin123",
+    "role": "Administrator"
+  },
+  {
+    "username": "Operator",
+    "password": "operator123",
+    "role": "Operator"
+  },
+  {
+    "username": "Viewer",
+    "password": "viewer123",
+    "role": "Viewer"
+  },
+  {
+    "username": "masyarakat",
+    "password": "masyarakat123",
+    "role": "Masyarakat"
+  }
+]
