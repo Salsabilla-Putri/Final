@@ -299,16 +299,16 @@ async function checkAndSaveAlerts(data) {
                 await new Alert({ ...a, deviceId: data.deviceId }).save();
         }
 
-        const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
-        const now = Date.now();
-        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
-            try {
-                await sendCriticalAlertEmail(criticalAlerts, data);
-                lastCriticalEmailAt = now;
-            } catch (emailError) {
-                console.error('❌ Gagal mengirim email alert critical:', emailError.message);
-            }
-        }
+        // const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
+        // const now = Date.now();
+        // if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+        //     try {
+        //         await sendCriticalAlertEmail(criticalAlerts, data);
+        //         lastCriticalEmailAt = now;
+        //     } catch (emailError) {
+        //         console.error('❌ Gagal mengirim email alert critical:', emailError.message);
+        //     }
+        // }
     }
 }
 
