@@ -397,17 +397,17 @@ async function checkAndSaveAlerts(data) {
             }
         }
 
-        const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
-        const now = Date.now();
-        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
-            try {
-                await sendCriticalAlertEmail(criticalAlerts, data);
-                lastCriticalEmailAt = now;
-                console.log(`📧 Critical alert email sent (${criticalAlerts.length} alert)`);
-            } catch (emailError) {
-                console.error('❌ Gagal mengirim email alert critical:', emailError.message);
-            }
-        }
+        // const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
+        // const now = Date.now();
+        // if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+        //     try {
+        //         await sendCriticalAlertEmail(criticalAlerts, data);
+        //         lastCriticalEmailAt = now;
+        //         console.log(`📧 Critical alert email sent (${criticalAlerts.length} alert)`);
+        //     } catch (emailError) {
+        //         console.error('❌ Gagal mengirim email alert critical:', emailError.message);
+        //     }
+        // }
     }
 }
 // --- TAMBAHAN API UNTUK HALAMAN ALARM ---
@@ -700,6 +700,7 @@ const maintenanceSchema = new mongoose.Schema({
     task: { type: String, required: true },       // Nama Tugas
     type: String,                                 // Tipe: Preventive/Corrective
     priority: String,                             // Priority: High/Med/Low
+    cost: { type: Number, default: 0, min: 0 },  // Estimasi biaya maintenance
     status: { type: String, default: 'scheduled' }, // scheduled, completed, etc.
     dueDate: Date,
     assignedTo: String,

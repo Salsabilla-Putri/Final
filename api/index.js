@@ -147,6 +147,7 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
 const maintenanceSchema = new mongoose.Schema({
     task: { type: String, required: true },
     type: String, priority: String,
+    cost: { type: Number, default: 0, min: 0 },
     status: { type: String, default: 'scheduled' },
     dueDate: Date, assignedTo: String,
     createdAt: { type: Date, default: Date.now },
@@ -302,16 +303,16 @@ async function checkAndSaveAlerts(data) {
                 await new Alert({ ...a, deviceId: data.deviceId }).save();
         }
 
-        const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
-        const now = Date.now();
-        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
-            try {
-                await sendCriticalAlertEmail(criticalAlerts, data);
-                lastCriticalEmailAt = now;
-            } catch (emailError) {
-                console.error('❌ Gagal mengirim email alert critical:', emailError.message);
-            }
-        }
+        // const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
+        // const now = Date.now();
+        // if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+        //     try {
+        //         await sendCriticalAlertEmail(criticalAlerts, data);
+        //         lastCriticalEmailAt = now;
+        //     } catch (emailError) {
+        //         console.error('❌ Gagal mengirim email alert critical:', emailError.message);
+        //     }
+        // }
     }
 }
 

@@ -85,6 +85,7 @@
               <th>Task</th>
               <th>Type</th>
               <th>Priority</th>
+              <th>Cost</th>
               <th>Due Date</th>
               <th>Status</th>
               <th>Assigned To</th>
@@ -107,6 +108,7 @@
             <tr>
               <th>Task</th>
               <th>Type</th>
+              <th>Cost</th>
               <th>Completed</th>
               <th>Technician</th>
               <th>Status</th>
@@ -147,6 +149,12 @@
                 <option value="medium">Medium</option>
                 <option value="low">Low</option>
               </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Cost (IDR)</label>
+              <input type="number" id="cost" class="form-control" min="0" step="1000" placeholder="e.g. 250000">
             </div>
           </div>
           <div class="form-row">
