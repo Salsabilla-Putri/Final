@@ -243,11 +243,14 @@ async function initChart() {
 // --- INIT ---
 document.addEventListener('DOMContentLoaded', () => {
     // HAPUS FETCH SIDEBAR DARI SINI, BIARKAN sidebar.js YANG MENANGANI
-    
-    setInterval(() => {
+
+    const renderClock = () => {
         const el = document.getElementById('clock');
         if(el) el.innerText = new Date().toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
-    }, 1000);
+    };
+
+    renderClock();
+    setInterval(renderClock, 1000);
 
     updateDashboard();
     initChart();
