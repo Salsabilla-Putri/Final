@@ -92,6 +92,14 @@ function updateDashboard(data) {
     applyVisual('amp', data.amp, { type: 'text' });
     applyVisual('freq', data.freq, { type: 'text' });
     applyVisual('batt', data.batt ?? data.battery ?? data.battVolt, { type: 'text' });
+
+    if (data._realtime) {
+        const realtimeBadge = document.getElementById('realtimeBadge');
+        if (realtimeBadge) {
+            realtimeBadge.style.display = 'inline-block';
+            realtimeBadge.title = `Last MQTT update: ${data.lastMqttUpdate}`;
+        }
+    }
 }
 
 function applyVisual(param, value, opts) {

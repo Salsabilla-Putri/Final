@@ -308,10 +308,15 @@ async function loadThresholdsFromDB() {
 }
 
 // --- MQTT LOGIC ---
+// [FIX 1] Broker disamakan dengan ESP32 → shiftr.io cloud
 const mqttClient = mqtt
-    ? mqtt.connect(process.env.MQTT_BROKER || 'mqtt://10.21.107.16:1883', {
-        username: process.env.MQTT_USERNAME || '/TA20:TA20',
-        password: process.env.MQTT_PASSWORD || 'TA242501020'
+    ? mqtt.connect(process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883', {
+        clientId:        'server-' + Math.random().toString(16).slice(2, 8),
+        username:        process.env.MQTT_USERNAME || 'generatorta20',
+        password:        process.env.MQTT_PASSWORD || 'TA252601020',
+        keepalive:       60,
+        reconnectPeriod: 3000,
+        connectTimeout:  10000
     })
     : createDisabledMqttClient();
 
@@ -349,13 +354,50 @@ async function syncActiveTimeHistory(data) {
 }
 
 mqttClient.on('connect', () => {
-    console.log('✅ Connected to MQTT Broker');
-    mqttClient.subscribe('gen/#');
+    console.log('✅ Connected to MQTT Broker (shiftr.io)');
+    mqttClient.subscribe('gen/#', (err) => {
+        if (err) console.error('❌ Subscribe error:', err.message);
+        else console.log('📡 Subscribed to gen/#');
+    });
 });
 
+mqttClient.on('reconnect', () => console.log('🔄 MQTT Reconnecting...'));
+mqttClient.on('offline',   () => console.warn('⚠️  MQTT Offline'));
+
 mqttClient.on('error', (error) => {
-    console.warn('⚠️ MQTT unavailable:', error.message);
+    console.warn('⚠️ MQTT Error:', error.message);
 });
+
+// [FIX 2] Auto-save ke DB setiap 10 detik dari data terbaru yang sudah terkumpul
+//          Sebelumnya hanya trigger saat gen/status masuk — topik yang tidak pernah
+//          dikirim ESP32, sehingga data tidak pernah tersimpan.
+let lastSaveAt = 0;
+const SAVE_INTERVAL_MS = 10_000; // simpan tiap 10 detik
+
+async function autoSaveLatestData() {
+    if (!isDbReady()) return;
+    const now = Date.now();
+    if (now - lastSaveAt < SAVE_INTERVAL_MS) return;
+    lastSaveAt = now;
+
+    try {
+        const snapshot = { ...latestData, timestamp: new Date() };
+
+        // Tentukan status dari RPM
+        if (snapshot.rpm > 0) {
+            snapshot.status = snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
+        } else {
+            snapshot.status = 'STOPPED';
+        }
+
+        await new GeneratorData(snapshot).save();
+        await syncActiveTimeHistory(snapshot);
+        await checkAndSaveAlerts(snapshot);
+        console.log(`💾 Auto-saved | rpm=${snapshot.rpm} volt=${snapshot.volt} sync=${snapshot.sync}`);
+    } catch (saveErr) {
+        console.error('❌ Auto-save Error:', saveErr.message);
+    }
+}
 
 // LOGIC ALARM DINAMIS (Menggunakan ACTIVE_THRESHOLDS)
 // --- LOGIC ALARM DINAMIS (UPDATED) ---
@@ -458,55 +500,60 @@ mqttClient.on('message', async (topic, message) => {
     try {
         const value = message.toString();
         switch(topic) {
-            case 'gen/rpm': latestData.rpm = parseInt(value) || 0; break;
-            case 'gen/volt': latestData.volt = parseFloat(value) || 0; break;
-            case 'gen/amp': latestData.amp = parseFloat(value) || 0; break;
-            case 'gen/power': latestData.power = parseFloat(value) || 0; break;
-            case 'gen/freq': latestData.freq = parseFloat(value) || 0; break;
-            case 'gen/temp': latestData.temp = parseFloat(value) || 0; latestData.coolant = latestData.temp; break;
-            case 'gen/fuel': latestData.fuel = parseFloat(value) || 0; break;
-            case 'gen/sync': latestData.sync = value; break;
-            case 'gen/oil': latestData.oil = parseFloat(value) || 0; break;
-            case 'gen/iat': latestData.iat = parseFloat(value) || 0; break;
-            case 'gen/map': latestData.map = parseFloat(value) || 0; break;
-            case 'gen/batt': latestData.batt = parseFloat(value) || 0; break;
-            case 'gen/afr': latestData.afr = parseFloat(value) || 0; break;
-            case 'gen/tps': latestData.tps = parseFloat(value) || 0; break;
-            
-            case 'gen/status': 
-                latestData.status = value;
+            case 'gen/rpm':       latestData.rpm      = parseInt(value)   || 0; break;
+            case 'gen/volt':      latestData.volt      = parseFloat(value) || 0; break;
+            case 'gen/volt_grid': latestData.volt_grid = parseFloat(value) || 0; break;
+            case 'gen/amp':       latestData.amp       = parseFloat(value) || 0; break;
+            case 'gen/power':     latestData.power     = parseFloat(value) || 0; break;
+            case 'gen/freq':      latestData.freq      = parseFloat(value) || 0; break;
+            case 'gen/freq_grid': latestData.freq_grid = parseFloat(value) || 0; break;
+            // [FIX 3] gen/coolant — topik yang dikirim ESP32 tapi tidak ada handler-nya
+            case 'gen/coolant':   latestData.coolant   = parseFloat(value) || 0;
+                                  latestData.temp      = latestData.coolant; break;
+            case 'gen/temp':      latestData.temp      = parseFloat(value) || 0;
+                                  latestData.coolant   = latestData.temp; break;
+            case 'gen/fuel':      latestData.fuel      = parseFloat(value) || 0; break;
+            case 'gen/sync':      latestData.sync      = value; break;
+            case 'gen/oil':       latestData.oil       = parseFloat(value) || 0; break;
+            case 'gen/iat':       latestData.iat       = parseFloat(value) || 0; break;
+            case 'gen/map':       latestData.map       = parseFloat(value) || 0; break;
+            case 'gen/batt':      latestData.batt      = parseFloat(value) || 0; break;
+            case 'gen/afr':       latestData.afr       = parseFloat(value) || 0; break;
+            case 'gen/tps':       latestData.tps       = parseFloat(value) || 0; break;
+
+            // gen/status tetap dipertahankan jika ada publisher lain yang mengirimnya
+            case 'gen/status':
+                latestData.status    = value;
                 latestData.timestamp = new Date();
-                try {
-                    await new GeneratorData(latestData).save();
-                    await syncActiveTimeHistory(latestData);
-                    await checkAndSaveAlerts(latestData);
-                } catch (saveErr) { console.error('❌ DB Save Error:', saveErr.message); }
+                lastSaveAt = 0; // paksa save segera
                 break;
         }
-    } catch (error) { console.error('❌ MQTT Error:', error); }
+
+        // [FIX 2] Trigger auto-save setiap kali ada pesan masuk (throttle 10 detik)
+        await autoSaveLatestData();
+
+    } catch (error) { console.error('❌ MQTT Message Error:', error); }
 });
 
 // --- API ENDPOINTS ---
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        if (!isDbReady()) {
-            return res.json({ success: true, data: latestData, source: 'memory' });
-        }
-
-        const requestedDeviceId = req.query.deviceId;
-        const defaultDeviceId = process.env.DEFAULT_REPORT_DEVICE_ID || null;
-        const effectiveDeviceId = requestedDeviceId || defaultDeviceId;
-        const query = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
-
-        const dbData = await GeneratorData.findOne(query).sort({ timestamp: -1 });
-        if (dbData) {
-            return res.json({ success: true, data: dbData, source: 'database' });
-        }
-
-        res.json({ success: true, data: latestData, source: 'memory' });
+        // Selalu kirim data memory terbaru dari MQTT terlebih dahulu
+        // Tambahkan timestamp agar frontend tahu kapan data terakhir diterima
+        const realtimeData = {
+            ...latestData,
+            _realtime: true,
+            lastMqttUpdate: new Date().toISOString()
+        };
+        
+        // Opsional: jika ingin tetap simpan ke database, tapi tidak untuk tampilan realtime
+        // return langsung tanpa query DB
+        return res.json({ success: true, data: realtimeData, source: 'realtime-memory' });
+        
     } catch (error) {
-        res.json({ success: true, data: latestData, source: 'memory', warning: error.message });
+        // Fallback jika terjadi error
+        res.json({ success: true, data: latestData, source: 'memory-fallback', warning: error.message });
     }
 });
 
@@ -1336,4 +1383,3 @@ if (require.main === module) {
 }
 
 module.exports = app;
-
