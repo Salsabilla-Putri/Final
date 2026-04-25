@@ -129,6 +129,20 @@ const activeTimeHistorySchema = new mongoose.Schema({
 }, { timestamps: true });
 const ActiveTimeHistory = mongoose.model('ActiveTimeHistory', activeTimeHistorySchema);
 
+// ── Schema: Ringkasan waktu aktif harian per device ──────────────────────────
+// Satu dokumen per (deviceId + date). Dihitung ulang tiap tengah malam dan
+// bisa di-trigger manual. Digunakan chart dashboard & analisis historis.
+const dailyActiveTimeSchema = new mongoose.Schema({
+    deviceId:     { type: String, required: true, index: true },
+    date:         { type: String, required: true, index: true }, // "YYYY-MM-DD" WIB
+    dateUtc:      { type: Date,   required: true, index: true }, // UTC midnight of that WIB day
+    activeMs:     { type: Number, default: 0 },   // total milidetik aktif
+    activeHours:  { type: Number, default: 0 },   // jam aktif (2 desimal)
+    sessions:     { type: Number, default: 0 },   // jumlah sesi nyala
+    calculatedAt: { type: Date,   default: Date.now }
+}, { timestamps: true });
+dailyActiveTimeSchema.index({ deviceId: 1, date: 1 }, { unique: true });
+const DailyActiveTime = mongoose.model('DailyActiveTime', dailyActiveTimeSchema);
 
 const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || 'onboarding@resend.dev';
 const ALERT_EMAIL_COOLDOWN_MS = parseInt(process.env.ALERT_EMAIL_COOLDOWN_MS || '60000', 10);
@@ -697,6 +711,210 @@ app.get('/api/generator-active-time/stats', async (req, res) => {
 
 // --- API UNTUK CONFIG THRESHOLD ---
 
+// ── Helper: Hitung & simpan waktu aktif harian untuk satu device + tanggal ──
+// dateStr : "YYYY-MM-DD" dalam WIB (UTC+7)
+// Mengembalikan dokumen DailyActiveTime yang disimpan/diperbarui.
+async function computeAndSaveDailyActiveTime(deviceId, dateStr) {
+    const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+    // Rentang hari dalam UTC: "YYYY-MM-DD WIB" = "YYYY-MM-DD T00:00:00+07:00"
+    const dayStartUtc = new Date(new Date(dateStr + 'T00:00:00.000Z').getTime() - WIB_OFFSET_MS);
+    const dayEndUtc   = new Date(new Date(dateStr + 'T23:59:59.999Z').getTime() - WIB_OFFSET_MS);
+
+    // Ambil semua sesi yang dimulai pada hari ini (WIB)
+    const sessions = await ActiveTimeHistory.find({
+        deviceId,
+        startedAt: { $gte: dayStartUtc, $lte: dayEndUtc }
+    }).lean();
+
+    const now = Date.now();
+    let totalMs = 0;
+
+    for (const s of sessions) {
+        const started = new Date(s.startedAt).getTime();
+        const ended   = s.endedAt ? new Date(s.endedAt).getTime() : now;
+        const capped  = Math.min(ended, dayEndUtc.getTime()); // jangan melebihi akhir hari
+        totalMs      += Math.max(0, capped - started);
+    }
+
+    const doc = await DailyActiveTime.findOneAndUpdate(
+        { deviceId, date: dateStr },
+        {
+            deviceId,
+            date:         dateStr,
+            dateUtc:      dayStartUtc,
+            activeMs:     totalMs,
+            activeHours:  +(totalMs / 3600000).toFixed(4),
+            sessions:     sessions.length,
+            calculatedAt: new Date()
+        },
+        { upsert: true, new: true }
+    );
+
+    return doc;
+}
+
+// ── Scheduler: hitung ulang hari kemarin (WIB) setiap tengah malam UTC+7 ──
+function scheduleDailyActiveTimeJob() {
+    function msUntilNextWibMidnight() {
+        const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+        const nowWib = Date.now() + WIB_OFFSET_MS;
+        const msInDay = 24 * 60 * 60 * 1000;
+        return msInDay - (nowWib % msInDay) + 60_000; // +1 menit buffer
+    }
+
+    function toWibDateStr(date) {
+        const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+        return wib.toISOString().slice(0, 10);
+    }
+
+    async function runJob() {
+        if (!isDbReady()) { scheduleNext(); return; }
+        try {
+            // Hitung hari kemarin WIB (sesi sudah pasti selesai semua)
+            const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const dateStr   = toWibDateStr(yesterday);
+
+            // Ambil semua deviceId yang punya sesi kemarin
+            const deviceIds = await ActiveTimeHistory.distinct('deviceId', {
+                startedAt: {
+                    $gte: new Date(new Date(dateStr + 'T00:00:00.000Z').getTime() - 7 * 60 * 60 * 1000),
+                    $lte: new Date(new Date(dateStr + 'T23:59:59.999Z').getTime() - 7 * 60 * 60 * 1000)
+                }
+            });
+
+            for (const did of deviceIds) {
+                const doc = await computeAndSaveDailyActiveTime(did, dateStr);
+                console.log(`📊 DailyActiveTime saved | device=${did} date=${dateStr} hours=${doc.activeHours}`);
+            }
+        } catch (err) {
+            console.error('❌ DailyActiveTime job error:', err.message);
+        }
+        scheduleNext();
+    }
+
+    function scheduleNext() {
+        setTimeout(runJob, msUntilNextWibMidnight());
+    }
+
+    scheduleNext();
+    console.log('⏰ DailyActiveTime scheduler registered');
+}
+
+// Jalankan scheduler saat server pertama kali siap
+ensureDbReady()
+    .then(() => scheduleDailyActiveTimeJob())
+    .catch(() => undefined);
+
+// ── GET /api/daily-active-time — ambil ringkasan harian (default: 30 hari) ──
+app.get('/api/daily-active-time', async (req, res) => {
+    try {
+        await ensureDbReady().catch(() => undefined);
+        if (!isDbReady()) return res.status(503).json({ success: false, error: 'Database not ready' });
+
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId
+            || process.env.DEFAULT_REPORT_DEVICE_ID
+            || 'ESP32_GENERATOR_01';
+        const days = Math.min(parseInt(req.query.days || '30', 10), 365);
+
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const rows  = await DailyActiveTime.find({
+            deviceId: effectiveDeviceId,
+            dateUtc:  { $gte: since }
+        }).sort({ date: 1 }).lean();
+
+        // Hitung total & rata-rata
+        const totalHours = rows.reduce((s, r) => s + r.activeHours, 0);
+        const avgHours   = rows.length ? +(totalHours / rows.length).toFixed(2) : 0;
+
+        res.json({
+            success: true,
+            deviceId: effectiveDeviceId,
+            days,
+            totalHours:  +totalHours.toFixed(2),
+            avgHours,
+            count: rows.length,
+            data: rows
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── POST /api/daily-active-time/recalculate — hitung ulang hari tertentu ──
+// Body: { deviceId?, date? }  (date = "YYYY-MM-DD" WIB, default = hari ini WIB)
+app.post('/api/daily-active-time/recalculate', async (req, res) => {
+    try {
+        await ensureDbReady().catch(() => undefined);
+        if (!isDbReady()) return res.status(503).json({ success: false, error: 'Database not ready' });
+
+        const requestedDeviceId = req.body?.deviceId || req.query?.deviceId;
+        const effectiveDeviceId = requestedDeviceId
+            || process.env.DEFAULT_REPORT_DEVICE_ID
+            || 'ESP32_GENERATOR_01';
+
+        // Tentukan tanggal yang mau dihitung (WIB)
+        let dateStr = req.body?.date || req.query?.date;
+        if (!dateStr) {
+            const wib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+            dateStr = wib.toISOString().slice(0, 10);
+        }
+
+        const doc = await computeAndSaveDailyActiveTime(effectiveDeviceId, dateStr);
+        console.log(`🔄 Manual recalc | device=${effectiveDeviceId} date=${dateStr} hours=${doc.activeHours}`);
+
+        res.json({ success: true, data: doc });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── GET /api/daily-active-time/today — data hari ini (real-time, dari sesi aktif) ──
+app.get('/api/daily-active-time/today', async (req, res) => {
+    try {
+        await ensureDbReady().catch(() => undefined);
+        if (!isDbReady()) return res.status(503).json({ success: false, error: 'Database not ready' });
+
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId
+            || process.env.DEFAULT_REPORT_DEVICE_ID
+            || 'ESP32_GENERATOR_01';
+
+        const wib     = new Date(Date.now() + 7 * 60 * 60 * 1000);
+        const dateStr = wib.toISOString().slice(0, 10);
+
+        // Hitung real-time (tidak disimpan, karena hari belum selesai)
+        const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+        const dayStartUtc = new Date(new Date(dateStr + 'T00:00:00.000Z').getTime() - WIB_OFFSET_MS);
+
+        const sessions = await ActiveTimeHistory.find({
+            deviceId:  effectiveDeviceId,
+            startedAt: { $gte: dayStartUtc }
+        }).lean();
+
+        const now = Date.now();
+        let totalMs = 0;
+        for (const s of sessions) {
+            const started = new Date(s.startedAt).getTime();
+            const ended   = s.endedAt ? new Date(s.endedAt).getTime() : now;
+            totalMs      += Math.max(0, ended - started);
+        }
+
+        res.json({
+            success: true,
+            deviceId:    effectiveDeviceId,
+            date:        dateStr,
+            activeMs:    totalMs,
+            activeHours: +(totalMs / 3600000).toFixed(4),
+            sessions:    sessions.length,
+            isLive:      true
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // 1. GET Thresholds (Untuk ditampilkan di Modal Frontend)
 app.get('/api/thresholds', (req, res) => {
     res.json({ success: true, data: ACTIVE_THRESHOLDS });
@@ -1071,25 +1289,7 @@ async function buildSensorStats(collection, matchQuery) {
 // API Endpoint untuk mengambil data report dari collection MongoDB yang ditetapkan
 app.get('/api/reports', async (req, res) => {
     try {
-        // ── FIX: tunggu DB benar-benar siap; jika gagal setelah retry, return error
-        //    jelas (bukan diam-diam fallback ke 1 data dari memory).
-        try {
-            await ensureDbReady();
-        } catch (dbErr) {
-            return res.status(503).json({
-                success: false,
-                error: 'Database not ready. Please retry in a moment.',
-                data: [], count: 0, stats: { totalMatched: 0, bySensor: {} }
-            });
-        }
-
-        if (!isDbReady()) {
-            return res.status(503).json({
-                success: false,
-                error: 'Database connection unavailable.',
-                data: [], count: 0, stats: { totalMatched: 0, bySensor: {} }
-            });
-        }
+        await ensureDbReady().catch(() => undefined);
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
         // ── FIX: extract deviceId so both data and stats are filtered per device
@@ -1390,14 +1590,6 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// ── CRITICAL: Semua route /api/* yang tidak cocok harus return JSON, BUKAN HTML.
-// Tanpa ini, catch-all di bawah akan mengembalikan login.html untuk endpoint
-// yang tidak ditemukan, menyebabkan error "Unexpected token '<'" di frontend.
-app.use('/api', (req, res) => {
-    res.status(404).json({ success: false, error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
-});
-
-// Catch-all untuk halaman frontend — HARUS di bawah semua route API
 app.get(/(.*)/, (req, res) => { res.sendFile(path.join(__dirname, 'public', 'login.html')); });
 
 const PORT = process.env.PORT || 3000;
