@@ -587,23 +587,24 @@ app.get('/api/public-status', async (req, res) => {
 // 2. GET History Data (Updated for Date Filter)
 app.get('/api/engine-data/history', async (req, res) => {
     try {
-        const { limit = 1000, hours, startDate, endDate } = req.query;
+        const { hours, startDate, endDate } = req.query;
+        // ── FIX: gunakan limit dari query (dikirim frontend), bukan hardcode 1000
+        const parsedLimit = parseInt(req.query.limit, 10);
+        const limit = Number.isNaN(parsedLimit) ? 10000 : Math.max(1, Math.min(parsedLimit, 100000));
+
         let query = {};
 
         // Jika ada filter tanggal spesifik dari Frontend
         if (startDate && endDate) {
-            // ── FIX: frontend mengirim ISO string UTC (Date.UTC) — cukup parse langsung,
-            //    JANGAN setHours() karena itu mengubah ke local timezone server
+            // Frontend mengirim ISO string UTC yang sudah digeser ke WIB —
+            // cukup parse langsung tanpa modifikasi timezone server.
             const start = new Date(startDate);
             const end   = new Date(endDate);
 
-            query.timestamp = {
-                $gte: start,
-                $lte: end
-            };
-        } 
-        // Fallback ke filter jam (default logic)
-        else {
+            if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+                query.timestamp = { $gte: start, $lte: end };
+            }
+        } else {
             const h = parseInt(hours) || 24;
             const cutoff = new Date(Date.now() - (h * 60 * 60 * 1000));
             query.timestamp = { $gte: cutoff };
@@ -615,7 +616,7 @@ app.get('/api/engine-data/history', async (req, res) => {
 
         const data = await GeneratorData.find(query)
             .sort({ timestamp: -1 })
-            .limit(parseInt(limit));
+            .limit(limit);
             
         res.json({ success: true, count: data.length, data, source: 'database' });
     } catch (error) {
@@ -1105,12 +1106,26 @@ app.get('/api/reports', async (req, res) => {
             };
         };
 
-        // ── FIX: parse dates as UTC (not local time) so the range matches
-        //    MongoDB's UTC-stored timestamps exactly
+        // ── FIX: parse dates sebagai UTC ISO — frontend sudah mengirim ISO string
+        //    yang telah digeser ke WIB (UTC+7) di sisi browser/reports.js.
+        //    Jika string masih dalam format "YYYY-MM-DD" (tanpa waktu), paksa
+        //    ke full-day WIB range agar tidak ada data yang terpotong.
         const timeFilter = {};
         if (startDate && endDate) {
-            const start = new Date(startDate);   // ISO string from frontend → already UTC
-            const end   = new Date(endDate);
+            let start = new Date(startDate);
+            let end   = new Date(endDate);
+
+            // Guard: jika frontend mengirim "YYYY-MM-DD" tanpa komponen waktu,
+            // tafsirkan sebagai WIB midnight–end-of-day (offset UTC+7).
+            if (startDate.length === 10) {
+                // "2026-04-24" → 2026-04-23T17:00:00Z (WIB midnight)
+                start = new Date(startDate + 'T00:00:00.000+07:00');
+            }
+            if (endDate.length === 10) {
+                // "2026-04-25" → 2026-04-25T16:59:59Z (WIB end-of-day)
+                end = new Date(endDate + 'T23:59:59.999+07:00');
+            }
+
             if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
                 timeFilter.$gte = start;
                 timeFilter.$lte = end;
@@ -1232,8 +1247,12 @@ app.get('/api/reports/stats', async (req, res) => {
 
         const timeFilter = {};
         if (startDate && endDate) {
-            const start = new Date(startDate);
-            const end   = new Date(endDate);
+            let start = new Date(startDate);
+            let end   = new Date(endDate);
+
+            if (startDate.length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
+            if (endDate.length === 10)   end   = new Date(endDate   + 'T23:59:59.999+07:00');
+
             if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
                 timeFilter.$gte = start;
                 timeFilter.$lte = end;
