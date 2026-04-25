@@ -74,11 +74,16 @@ document.addEventListener('DOMContentLoaded', () => {
 // --- 3. DATE PICKER FUNCTIONS ---
 function initDatePickers() {
     const now = new Date();
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    // Gunakan formatDateWIB agar tanggal default sesuai WIB,
-    // bukan UTC (yang berbeda 7 jam di production Render).
-    const formatDate = formatDateWIB;
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    
+    // Format untuk input type="date"
+    const formatDate = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
     
     // Cari atau buat date picker
     const dateRangeDiv = document.querySelector('.date-range');
@@ -210,21 +215,16 @@ function setupEventListeners() {
     document.getElementById('recalculateFft')?.addEventListener('click', () => renderFftAnalysis(currentData));
 }
 
-// Format tanggal dalam WIB (UTC+7) agar input date picker selalu
-// menampilkan tanggal yang benar, terlepas dari timezone server/browser.
-function formatDateWIB(date) {
-    const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-    const year  = wib.getUTCFullYear();
-    const month = String(wib.getUTCMonth() + 1).padStart(2, '0');
-    const day   = String(wib.getUTCDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-}
-
 function updateDateFromHours(hours) {
     const now = new Date();
     const past = new Date(now.getTime() - (hours * 60 * 60 * 1000));
     
-    const formatDate = formatDateWIB;
+    const formatDate = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
     
     const dateFrom = document.getElementById('dateFrom');
     const dateTo = document.getElementById('dateTo');
@@ -383,20 +383,45 @@ async function fetchFirstAvailable(urls) {
     let lastResponse = null;
 
     for (const url of urls) {
-        const response = await fetch(url);
-        if (response.ok) {
-            const contentType = (response.headers.get('content-type') || '').toLowerCase();
-            const looksLikeJson = !contentType
-                || contentType.includes('application/json')
-                || contentType.includes('application/problem+json')
-                || contentType.includes('text/json');
+        let response;
+        try {
+            response = await fetch(url);
+        } catch (networkErr) {
+            console.warn(`Network error fetching ${url}:`, networkErr.message);
+            continue;
+        }
 
+        // ── CRITICAL: Jika server mengembalikan HTML (mis. login redirect atau
+        //    error page), JANGAN diteruskan ke caller — ini akan menyebabkan
+        //    "Unexpected token '<'" saat di-parse sebagai JSON.
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        const looksLikeJson = contentType.includes('application/json')
+            || contentType.includes('text/json')
+            || contentType.includes('application/problem+json');
+        const looksLikeHtml = contentType.includes('text/html');
+
+        if (response.ok) {
             if (looksLikeJson) {
+                return response; // ✅ Valid JSON response
+            }
+            if (looksLikeHtml) {
+                console.warn(`[fetchFirstAvailable] ${url} returned HTML (${response.status}) — kemungkinan redirect ke login atau error page. Skipping.`);
+                lastResponse = response;
+                continue;
+            }
+            // Content-type tidak diketahui tapi response OK — coba saja
+            if (!contentType) {
                 return response;
             }
-
-            console.warn(`Reports endpoint returned non-JSON payload (${url}, content-type: ${contentType || 'unknown'}). Trying next candidate...`);
+            console.warn(`Reports endpoint returned non-JSON payload (${url}, content-type: ${contentType}). Trying next candidate...`);
             lastResponse = response;
+            continue;
+        }
+
+        // 503 = server/DB belum siap — simpan sebagai lastResponse (bukan skip)
+        if (response.status === 503) {
+            lastResponse = response;
+            console.warn(`[fetchFirstAvailable] ${url} returned 503 (DB not ready).`);
             continue;
         }
 
@@ -669,27 +694,18 @@ async function loadReportData() {
 
         // Build URL with date parameters
         if (dateFrom && dateTo && dateFrom.value && dateTo.value) {
-            // ── TIMEZONE FIX ──────────────────────────────────────────────────
-            // Input type="date" menghasilkan "YYYY-MM-DD".
-            // new Date("YYYY-MM-DD") + setHours() menggunakan LOCAL timezone
-            // browser. Di production (Render/server UTC), hasilnya BERBEDA
-            // dengan browser user di WIB (UTC+7) → data meleset 7 jam.
-            //
-            // Solusi: parse secara eksplisit sebagai UTC midnight dengan
-            // menyambung "T00:00:00.000Z" / "T23:59:59.999Z" langsung,
-            // lalu GESER ke WIB (+7 jam) agar cocok dengan data yang
-            // tersimpan di MongoDB (yang masuk dari ESP32 dalam WIB).
-            //
-            // startDate = YYYY-MM-DDT00:00:00 WIB = YYYY-MM-DDT00:00:00+07:00
-            //           = YYYY-MM-DD sebelumnya T17:00:00Z (UTC)
-            // endDate   = YYYY-MM-DDT23:59:59 WIB = YYYY-MM-DDT16:59:59Z (UTC)
-            const WIB_OFFSET_MS = 7 * 60 * 60 * 1000; // UTC+7
+            // Input type="date" menghasilkan string "YYYY-MM-DD".
+            // new Date("YYYY-MM-DD") diparsing browser sebagai UTC midnight.
+            // setHours(0,0,0,0) lalu mengubahnya ke LOCAL midnight (WIB = UTC+7),
+            // sehingga "2025-12-01" → 2025-11-30T17:00:00Z — persis sama dengan
+            // query MongoDB Compass saat user memilih tanggal dalam WIB.
+            // JANGAN ganti ke Date.UTC: itu akan mengunci ke UTC midnight dan
+            // menggeser range 7 jam untuk user WIB.
+            const startDate = new Date(dateFrom.value);
+            startDate.setHours(0, 0, 0, 0);      // → local (WIB) midnight
 
-            const startDate = new Date(dateFrom.value + 'T00:00:00.000Z');
-            startDate.setTime(startDate.getTime() - WIB_OFFSET_MS); // geser ke WIB midnight
-
-            const endDate = new Date(dateTo.value + 'T23:59:59.999Z');
-            endDate.setTime(endDate.getTime() - WIB_OFFSET_MS);     // geser ke WIB end-of-day
+            const endDate = new Date(dateTo.value);
+            endDate.setHours(23, 59, 59, 999);    // → local (WIB) end-of-day
 
             // Validate date range
             if (endDate < startDate) {
@@ -728,6 +744,16 @@ async function loadReportData() {
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
         }
+
+        // ── CRITICAL FIX: Pastikan response adalah JSON, bukan HTML (login page).
+        // Jika server mengembalikan HTML (misal login redirect atau error page),
+        // parse JSON akan gagal dengan "Unexpected token '<'".
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('application/json') && !contentType.includes('text/json')) {
+            const raw = await response.text();
+            console.error('Non-JSON response received:', raw.substring(0, 200));
+            throw new Error(`Server returned non-JSON response (${contentType || 'unknown content-type'}). Pastikan endpoint /api/reports terdaftar dengan benar di server.`);
+        }
         
         const result = await response.json();
         const rows = Array.isArray(result) ? result : (result.data || []);
@@ -758,6 +784,25 @@ async function loadReportData() {
         
     } catch (error) {
         console.error('Error loading data:', error);
+
+        // Tampilkan pesan spesifik berdasarkan jenis error
+        const isDbNotReady = error.message?.includes('503') || error.message?.includes('not ready');
+        const isHtmlResponse = error.message?.includes('non-JSON') || error.message?.includes('text/html');
+
+        if (isHtmlResponse) {
+            renderDataSourceNotice({
+                source: null,
+                mode: 'warning',
+                message: '⚠️ Server mengembalikan halaman HTML bukan data. Periksa koneksi ke server atau coba refresh halaman.'
+            });
+        } else if (isDbNotReady) {
+            renderDataSourceNotice({
+                source: null,
+                mode: 'warning',
+                message: '⏳ Database belum siap. Coba klik "Apply" dalam beberapa detik...'
+            });
+        }
+
         try {
             const snapshot = await fetchLatestSnapshotRows();
             if (!applyRowsToReports(snapshot.rows, { ...snapshot.result, source: 'memory', warning: error.message })) {

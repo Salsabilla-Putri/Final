@@ -587,24 +587,23 @@ app.get('/api/public-status', async (req, res) => {
 // 2. GET History Data (Updated for Date Filter)
 app.get('/api/engine-data/history', async (req, res) => {
     try {
-        const { hours, startDate, endDate } = req.query;
-        // ── FIX: gunakan limit dari query (dikirim frontend), bukan hardcode 1000
-        const parsedLimit = parseInt(req.query.limit, 10);
-        const limit = Number.isNaN(parsedLimit) ? 10000 : Math.max(1, Math.min(parsedLimit, 100000));
-
+        const { limit = 1000, hours, startDate, endDate } = req.query;
         let query = {};
 
         // Jika ada filter tanggal spesifik dari Frontend
         if (startDate && endDate) {
-            // Frontend mengirim ISO string UTC yang sudah digeser ke WIB —
-            // cukup parse langsung tanpa modifikasi timezone server.
+            // ── FIX: frontend mengirim ISO string UTC (Date.UTC) — cukup parse langsung,
+            //    JANGAN setHours() karena itu mengubah ke local timezone server
             const start = new Date(startDate);
             const end   = new Date(endDate);
 
-            if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-                query.timestamp = { $gte: start, $lte: end };
-            }
-        } else {
+            query.timestamp = {
+                $gte: start,
+                $lte: end
+            };
+        } 
+        // Fallback ke filter jam (default logic)
+        else {
             const h = parseInt(hours) || 24;
             const cutoff = new Date(Date.now() - (h * 60 * 60 * 1000));
             query.timestamp = { $gte: cutoff };
@@ -616,7 +615,7 @@ app.get('/api/engine-data/history', async (req, res) => {
 
         const data = await GeneratorData.find(query)
             .sort({ timestamp: -1 })
-            .limit(limit);
+            .limit(parseInt(limit));
             
         res.json({ success: true, count: data.length, data, source: 'database' });
     } catch (error) {
@@ -1072,7 +1071,25 @@ async function buildSensorStats(collection, matchQuery) {
 // API Endpoint untuk mengambil data report dari collection MongoDB yang ditetapkan
 app.get('/api/reports', async (req, res) => {
     try {
-        await ensureDbReady().catch(() => undefined);
+        // ── FIX: tunggu DB benar-benar siap; jika gagal setelah retry, return error
+        //    jelas (bukan diam-diam fallback ke 1 data dari memory).
+        try {
+            await ensureDbReady();
+        } catch (dbErr) {
+            return res.status(503).json({
+                success: false,
+                error: 'Database not ready. Please retry in a moment.',
+                data: [], count: 0, stats: { totalMatched: 0, bySensor: {} }
+            });
+        }
+
+        if (!isDbReady()) {
+            return res.status(503).json({
+                success: false,
+                error: 'Database connection unavailable.',
+                data: [], count: 0, stats: { totalMatched: 0, bySensor: {} }
+            });
+        }
         const parsedLimit = parseInt(req.query.limit, 10);
         const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
         // ── FIX: extract deviceId so both data and stats are filtered per device
@@ -1106,26 +1123,12 @@ app.get('/api/reports', async (req, res) => {
             };
         };
 
-        // ── FIX: parse dates sebagai UTC ISO — frontend sudah mengirim ISO string
-        //    yang telah digeser ke WIB (UTC+7) di sisi browser/reports.js.
-        //    Jika string masih dalam format "YYYY-MM-DD" (tanpa waktu), paksa
-        //    ke full-day WIB range agar tidak ada data yang terpotong.
+        // ── FIX: parse dates as UTC (not local time) so the range matches
+        //    MongoDB's UTC-stored timestamps exactly
         const timeFilter = {};
         if (startDate && endDate) {
-            let start = new Date(startDate);
-            let end   = new Date(endDate);
-
-            // Guard: jika frontend mengirim "YYYY-MM-DD" tanpa komponen waktu,
-            // tafsirkan sebagai WIB midnight–end-of-day (offset UTC+7).
-            if (startDate.length === 10) {
-                // "2026-04-24" → 2026-04-23T17:00:00Z (WIB midnight)
-                start = new Date(startDate + 'T00:00:00.000+07:00');
-            }
-            if (endDate.length === 10) {
-                // "2026-04-25" → 2026-04-25T16:59:59Z (WIB end-of-day)
-                end = new Date(endDate + 'T23:59:59.999+07:00');
-            }
-
+            const start = new Date(startDate);   // ISO string from frontend → already UTC
+            const end   = new Date(endDate);
             if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
                 timeFilter.$gte = start;
                 timeFilter.$lte = end;
@@ -1247,12 +1250,8 @@ app.get('/api/reports/stats', async (req, res) => {
 
         const timeFilter = {};
         if (startDate && endDate) {
-            let start = new Date(startDate);
-            let end   = new Date(endDate);
-
-            if (startDate.length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
-            if (endDate.length === 10)   end   = new Date(endDate   + 'T23:59:59.999+07:00');
-
+            const start = new Date(startDate);
+            const end   = new Date(endDate);
             if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
                 timeFilter.$gte = start;
                 timeFilter.$lte = end;
@@ -1391,6 +1390,14 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
+// ── CRITICAL: Semua route /api/* yang tidak cocok harus return JSON, BUKAN HTML.
+// Tanpa ini, catch-all di bawah akan mengembalikan login.html untuk endpoint
+// yang tidak ditemukan, menyebabkan error "Unexpected token '<'" di frontend.
+app.use('/api', (req, res) => {
+    res.status(404).json({ success: false, error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
+});
+
+// Catch-all untuk halaman frontend — HARUS di bawah semua route API
 app.get(/(.*)/, (req, res) => { res.sendFile(path.join(__dirname, 'public', 'login.html')); });
 
 const PORT = process.env.PORT || 3000;
