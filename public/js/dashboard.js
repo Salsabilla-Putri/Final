@@ -322,7 +322,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderClock = () => {
         const el = document.getElementById('clock');
-        if(el) el.innerText = new Date().toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
+        if(!el) return;
+
+        const now = new Date();
+        let hour = now.getHours();
+        const minute = String(now.getMinutes()).padStart(2, '0');
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+
+        hour = hour % 12 || 12;
+        el.innerText = `${String(hour).padStart(2, '0')}:${minute} ${ampm}`;
     };
 
     renderClock();
