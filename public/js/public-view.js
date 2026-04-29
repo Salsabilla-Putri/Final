@@ -3,7 +3,8 @@
  * Features: power source detection, engine gauges (RPM/temp),
  * generator lifespan donut + weekly uptime bar chart,
  * maintenance schedule from /api/maintenance/status,
- * dynamic sidebar dots, trend line chart.
+ * dynamic sidebar dots, trend line chart,
+ * NEW: summary status card, estimated runtime, event log.
  */
 'use strict';
 
@@ -22,6 +23,10 @@ const COOLANT_INTERVAL = 1000;
 const BATTERY_INTERVAL = 2000;
 const MAJOR_INTERVAL  = 2500;
 
+/* Simulasi kapasitas tangki & konsumsi */
+const TANK_CAPACITY_L = 50;    // liter
+const AVG_CONSUMPTION_LPH = 2.5; // liter per jam rata-rata
+
 /* ── STATE ─────────────────────────────────── */
 let trendData   = { labels: [], volt: [], freq: [] };
 let uptimeData  = [];   // [{label, hours}] last 7 days from API or simulated
@@ -30,6 +35,8 @@ let donutChart  = null;
 let uptimeChart = null;
 let chartsReady = false;
 let latestDecisionPayload = null;
+let previousSource = 'PLN';         // untuk mendeteksi perubahan sumber
+let eventLog = [];                  // simpan riwayat peristiwa
 
 /* ── UTILS ─────────────────────────────────── */
 const $ = id => document.getElementById(id);
@@ -94,6 +101,30 @@ const SOURCE_META = {
   HYBRID: { label:'Hybrid (PLN + Generator)',   sub:'Kedua sumber aktif bersamaan',   icon:'fas fa-rotate',cls:'hyb', flowCls:'active',            genState:'Menyala ✓',  plnState:'Aktif ✓', sysLabel:'Mode Hybrid',  genFlow:'PLN + Gen' },
   OFF:    { label:'Tidak Ada Sumber Daya',      sub:'Sistem mendeteksi gangguan',      icon:'fas fa-power-off',cls:'', flowCls:'',                 genState:'Mati',       plnState:'Tidak Aktif', sysLabel:'Offline',      genFlow:'--' },
 };
+
+/* ── EVENT LOG ──────────────────────────────── */
+function addEvent(type, text, status = 'ok') {
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  eventLog.unshift({ time: timeStr, type, text, status }); // terbaru di atas
+  if (eventLog.length > 20) eventLog.pop(); // batasi jumlah
+  renderEventLog();
+}
+
+function renderEventLog() {
+  const list = $('eventLogList');
+  if (!list) return;
+  if (eventLog.length === 0) {
+    list.innerHTML = '<div class="event-item"><i class="fas fa-circle-notch fa-spin"></i><span>Belum ada kejadian tercatat.</span></div>';
+    return;
+  }
+  list.innerHTML = eventLog.map(ev => `
+    <div class="event-item ${ev.status}">
+      <span class="event-time">${ev.time}</span>
+      <i class="fas fa-${ev.type === 'source' ? 'bolt' : ev.type === 'fuel' ? 'gas-pump' : 'circle-info'}"></i>
+      <span>${ev.text}</span>
+    </div>`).join('');
+}
 
 /* ── CHART INIT ────────────────────────────── */
 function initCharts() {
@@ -246,14 +277,12 @@ const MAINT_ITEMS = [
 ];
 
 function buildMaintenanceSection(data, engineHours) {
-  // maintData from API or inferred from engineHours
   const mData = data.maintenance || {};
 
   let okCount = 0, warnCount = 0, errCount = 0;
   let nextServiceHoursAway = Infinity;
 
   const rows = MAINT_ITEMS.map(item => {
-    // hoursAtLastService: from API field or fallback calculation
     const lastH = mData[item.id + 'LastHours'] != null
                   ? Number(mData[item.id + 'LastHours'])
                   : Math.max(0, engineHours - (engineHours % item.interval));
@@ -277,7 +306,6 @@ function buildMaintenanceSection(data, engineHours) {
     return { status, badge, pct, pctDisp, detail, item };
   });
 
-  // Render list
   const list = $('maintList');
   if (list) {
     list.innerHTML = rows.map(r => `
@@ -295,12 +323,10 @@ function buildMaintenanceSection(data, engineHours) {
       </div>`).join('');
   }
 
-  // Summary counts
   if ($('maintOkCount'))   $('maintOkCount').textContent   = okCount;
   if ($('maintWarnCount')) $('maintWarnCount').textContent = warnCount;
   if ($('maintErrCount'))  $('maintErrCount').textContent  = errCount;
 
-  // Next service date
   const nextServiceDate = mData.nextScheduledDate || null;
   if ($('maintNextDate')) {
     if (nextServiceDate) {
@@ -312,7 +338,6 @@ function buildMaintenanceSection(data, engineHours) {
     }
   }
 
-  // Maintenance section badge
   const mb = $('maintenanceBadge');
   let maintStatus;
   if (errCount > 0)       { mb && (mb.className='sh-b err',  mb.textContent=`${errCount} Perlu Servis`);   maintStatus='err';  }
@@ -320,7 +345,6 @@ function buildMaintenanceSection(data, engineHours) {
   else                    { mb && (mb.className='sh-b ok',   mb.textContent='Semua OK');                   maintStatus='ok';   }
   setNavDot('navDot-maintenance', maintStatus);
 
-  // Next service banner
   const nsb = $('nextServiceBanner');
   if (nsb && nextServiceHoursAway < Infinity) {
     nsb.className = 'nsb ' + (nextServiceHoursAway <= 0 ? 'err' : nextServiceHoursAway <= 30 ? 'warn' : '');
@@ -347,6 +371,21 @@ function initSidebarUser() {
   const name = localStorage.getItem('username') || 'Pengguna';
   if ($('sbAvatar'))   $('sbAvatar').textContent   = initials(name);
   if ($('sbUsername')) $('sbUsername').textContent = name;
+}
+
+/* ── ESTIMATE RUNTIME ───────────────────────── */
+function calcRuntime(fuelPct, loadKw) {
+  if (fuelPct <= 0) return '--';
+  // estimasi konsumsi lebih tinggi pada beban >70%
+  const loadFactor = loadKw > 0.9 ? 1.3 : 1.0;
+  const consumption = AVG_CONSUMPTION_LPH * loadFactor;
+  const remainingLiters = (fuelPct / 100) * TANK_CAPACITY_L;
+  const hours = remainingLiters / consumption;
+  if (hours < 0.5) return 'Kurang dari 30 mnt';
+  if (hours < 1)   return `${(hours*60).toFixed(0)} menit`;
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  return `${h} jam ${m} menit`;
 }
 
 /* ── MAIN VIEW UPDATE ───────────────────────── */
@@ -376,6 +415,67 @@ function updatePublicView(data) {
   const source = detectSource(data, isOn);
   const sm     = SOURCE_META[source] || SOURCE_META.OFF;
 
+  // Mendeteksi perubahan sumber untuk event log
+  if (source !== previousSource) {
+    const prevLabel = SOURCE_META[previousSource]?.label || previousSource;
+    const newLabel = sm.label;
+    addEvent('source', `${prevLabel} → ${newLabel}`, source === 'GEN' ? 'warn' : source === 'OFF' ? 'err' : 'ok');
+    previousSource = source;
+  }
+
+  // Notifikasi bahan bakar rendah (hanya sekali ketika turun di bawah threshold)
+  if (fuel < 25 && !window._fuelLowWarned) {
+    addEvent('fuel', 'Bahan bakar rendah (< 25%)', 'warn');
+    window._fuelLowWarned = true;
+  } else if (fuel >= 25) {
+    window._fuelLowWarned = false;
+  }
+
+  /* — SUMMARY CARD (NEW) — */
+  let summaryClass, summaryIconClass, summaryTitle, summaryDesc, summaryBadge;
+  if (source === 'OFF') {
+    summaryClass = 'err';
+    summaryIconClass = 'fas fa-power-off';
+    summaryTitle = 'Tidak Ada Sumber Listrik';
+    summaryDesc = 'PLN padam & generator belum menyala. Sistem otomatis sedang bekerja.';
+    summaryBadge = 'Gangguan';
+  } else if (source === 'GEN') {
+    summaryClass = fuel < 25 ? 'warn' : 'warn';
+    summaryIconClass = 'fas fa-bolt';
+    summaryTitle = fuel < 25 ? 'Generator Aktif – Bahan Bakar Rendah' : 'Generator Sedang Menyala';
+    summaryDesc = fuel < 25 ? 'Listrik tetap tersuplai, namun sisa bahan bakar terbatas.' : 'Listrik disuplai oleh generator cadangan.';
+    summaryBadge = fuel < 25 ? 'BBM Rendah' : 'Generator';
+  } else if (source === 'HYBRID') {
+    summaryClass = 'ok';
+    summaryIconClass = 'fas fa-check-circle';
+    summaryTitle = 'Listrik Normal (Hybrid)';
+    summaryDesc = 'PLN dan generator bekerja bersama. Kualitas maksimal.';
+    summaryBadge = 'Optimal';
+  } else if (elecOk) {
+    summaryClass = 'ok';
+    summaryIconClass = 'fas fa-check-circle';
+    summaryTitle = 'Listrik Normal';
+    summaryDesc = 'PLN stabil, generator siaga otomatis.';
+    summaryBadge = 'Normal';
+  } else {
+    summaryClass = 'warn';
+    summaryIconClass = 'fas fa-triangle-exclamation';
+    summaryTitle = 'Kualitas Listrik Kurang Baik';
+    summaryDesc = 'PLN berfluktuasi. Sistem mungkin akan mengaktifkan generator.';
+    summaryBadge = 'Fluktuasi';
+  }
+
+  const sc = $('summaryCard');
+  if (sc) sc.className = 'summary-card ' + summaryClass;
+  const si = $('summaryIcon');
+  if (si) si.className = summaryIconClass + ' summary-icon';
+  if ($('summaryTitle')) $('summaryTitle').textContent = summaryTitle;
+  if ($('summaryDesc'))  $('summaryDesc').textContent  = summaryDesc;
+  if ($('summaryBadge')) {
+    $('summaryBadge').textContent = summaryBadge;
+    $('summaryBadge').className = 'summary-badge ' + summaryClass;
+  }
+
   /* — HERO — */
   const heroCard = $('heroCard');
   if (heroCard) heroCard.className = 'hero-card ' + sm.cls;
@@ -385,6 +485,10 @@ function updatePublicView(data) {
   if ($('htGen'))  $('htGen').textContent  = sm.genState;
   if ($('htPLN'))  $('htPLN').textContent  = sm.plnState;
   if ($('htCond')) $('htCond').textContent = sm.sysLabel;
+
+  /* Estimasi runtime di hero */
+  const runtimeEst = calcRuntime(fuel, powerKw);
+  if ($('heroEstRuntime')) $('heroEstRuntime').textContent = runtimeEst;
 
   /* — Power flow — */
   const pf = $('powerFlow');
@@ -478,7 +582,7 @@ function updatePublicView(data) {
   /* — Lifespan donut — */
   updateDonut(engH);
 
-  /* — Weekly uptime (use API data or simulate) — */
+  /* — Weekly uptime — */
   const weeklyHours = data.weeklyUptime || simulateWeekly(isOn);
   if (uptimeChart && weeklyHours.length === 7) {
     uptimeChart.data.datasets[0].data = weeklyHours;
@@ -486,10 +590,6 @@ function updatePublicView(data) {
   }
   const weekTotal = weeklyHours.reduce((a,b)=>a+b,0);
   if ($('weeklyTotal')) $('weeklyTotal').textContent = weekTotal.toFixed(1)+' jam';
-
-  /* — Next service hours — */
-  const hoursToOil = OIL_INTERVAL - (engH % OIL_INTERVAL);
-  const nsbStatus  = hoursToOil <= 0 ? 'err' : hoursToOil <= 30 ? 'warn' : '';
 
   /* — Fuel — */
   const fuelEl = $('fuelBarFill');
@@ -726,7 +826,7 @@ async function approveDecision() {
 
 /* ── SCROLL SPY ─────────────────────────────── */
 function initScrollSpy() {
-  const sectionIds = ['heroSection','electricSection','engineSection','lifespanSection','fuelSection','maintenanceSection','decisionSection','healthSection','infoSection'];
+  const sectionIds = ['summarySection','heroSection','electricSection','engineSection','lifespanSection','fuelSection','maintenanceSection','decisionSection','healthSection','eventLogSection','infoSection'];
   const links = document.querySelectorAll('.sb-link');
   const obs = new IntersectionObserver(entries => {
     entries.forEach(e => {
@@ -753,9 +853,7 @@ function initSidebar() {
 
 /* ── LOGOUT ─────────────────────────────────── */
 $('logoutPublic')?.addEventListener('click', () => {
-  localStorage.removeItem('isLoggedIn');
-  localStorage.removeItem('userRole');
-  localStorage.removeItem('username');
+  localStorage.clear();
   window.location.replace('login.html');
 });
 
@@ -772,7 +870,6 @@ initScrollSpy();
 if (typeof Chart !== 'undefined') {
   initCharts();
 } else {
-  // Wait for Chart.js script to load
   window.addEventListener('load', initCharts);
 }
 

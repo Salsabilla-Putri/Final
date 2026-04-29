@@ -5,19 +5,16 @@
   <title>Gen-Track — Status Listrik</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="js/auth-guard.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="css/public-view.css">
-  <link rel="stylesheet" href="sidebar.css">
-  <link rel="stylesheet" href="css/topbar.css">
 </head>
 <body>
   <div id="sidebar-container"></div>
   <div class="main-content">
     <div class="topbar">
-      <div class="topbar-title">Public Monitoring</div>
+      <div class="topbar-title">Pemantauan Listrik Publik</div>
       <div style="display: flex; align-items: center; gap: 10px;">
         <div class="live-badge" id="liveBadge"><span class="live-dot"></span><span>LIVE</span></div>
         <button class="tb-btn" id="refreshPublic" title="Perbarui">
@@ -30,7 +27,21 @@
     </div>
     <main class="main" id="mainContent">
 
-    <!-- 1. HERO ── -->
+    <!-- 0. RINGKASAN STATUS (baru) -->
+    <section class="summary-wrap" id="summarySection">
+      <div class="summary-card" id="summaryCard">
+        <div class="summary-icon">
+          <i class="fas fa-check-circle" id="summaryIcon"></i>
+        </div>
+        <div class="summary-text">
+          <div class="summary-title" id="summaryTitle">Semua Sistem Normal</div>
+          <div class="summary-desc" id="summaryDesc">Listrik PLN stabil, generator siaga.</div>
+        </div>
+        <div class="summary-badge" id="summaryBadge">Normal</div>
+      </div>
+    </section>
+
+    <!-- 1. HERO ── (ditambah estimasi jam operasi) -->
     <section class="hero-wrap" id="heroSection">
       <div class="hero-card" id="heroCard">
         <div class="hero-left">
@@ -43,24 +54,14 @@
             <div class="hero-sub" id="heroSourceSub">Menghubungkan ke sistem</div>
           </div>
         </div>
-        <div class="hero-trio">
-          <div class="ht-item">
-            <span class="ht-lbl">Generator</span>
-            <span class="ht-val" id="htGen">--</span>
-          </div>
-          <div class="ht-sep"></div>
-          <div class="ht-item">
-            <span class="ht-lbl">PLN</span>
-            <span class="ht-val" id="htPLN">--</span>
-          </div>
-          <div class="ht-sep"></div>
-          <div class="ht-item">
-            <span class="ht-lbl">Sistem</span>
-            <span class="ht-val" id="htCond">--</span>
+        <div class="hero-right">
+          <div class="hero-estimate">
+            <div class="hero-est-lbl">Perkiraan Operasi Generator</div>
+            <div class="hero-est-val" id="heroEstRuntime">--</div>
           </div>
         </div>
       </div>
-
+      <!-- flow bar tidak berubah -->
       <div class="flow-bar" id="powerFlow">
         <div class="fn fn-src" id="fnSrc">
           <div class="fn-ico"><i id="fnSrcIcon" class="fas fa-plug"></i></div>
@@ -80,7 +81,7 @@
       </div>
     </section>
 
-    <!-- 2. OUTPUT LISTRIK ── -->
+    <!-- 2. OUTPUT LISTRIK ── (sama) -->
     <section class="cs" id="electricSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-bolt-lightning"></i> Output Listrik Generator</div><div class="sh-b" id="electricBadge">--</div></div>
       <div class="m4">
@@ -123,7 +124,7 @@
       </div>
     </section>
 
-    <!-- 3. MESIN MOTOR BAKAR ── -->
+    <!-- 3. MESIN MOTOR BAKAR ── (tidak berubah) -->
     <section class="cs" id="engineSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-gears"></i> Mesin Motor Bakar</div><div class="sh-b" id="engineBadge">--</div></div>
       <div class="engine-layout">
@@ -155,7 +156,7 @@
           </svg>
           <div class="gc-status" id="tempStatus">Normal</div>
         </div>
-        <!-- Engine sub-stats -->
+        <!-- Engine sub-stats (tetap) -->
         <div class="engine-stats">
           <div class="es" id="esCoolant">
             <div class="es-ico"><i class="fas fa-droplet"></i></div>
@@ -188,7 +189,7 @@
       </div>
     </section>
 
-    <!-- 4. MASA HIDUP ── -->
+    <!-- 4. MASA HIDUP (donut & uptime) -->
     <section class="cs" id="lifespanSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-chart-line"></i> Masa Hidup &amp; Jam Operasi</div><div class="sh-b" id="lifespanBadge">--</div></div>
       <div class="lifespan-layout">
@@ -226,7 +227,7 @@
       </div>
     </section>
 
-    <!-- 5. BAHAN BAKAR ── -->
+    <!-- 5. BAHAN BAKAR ── (tetap) -->
     <section class="cs" id="fuelSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-gas-pump"></i> Bahan Bakar</div><div class="sh-b" id="fuelBadge">--</div></div>
       <div class="fuel-layout">
@@ -249,7 +250,7 @@
       </div>
     </section>
 
-    <!-- 6. JADWAL PERAWATAN ── -->
+    <!-- 6. JADWAL PERAWATAN ── (tetap) -->
     <section class="cs" id="maintenanceSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-screwdriver-wrench"></i> Jadwal Perawatan</div><div class="sh-b" id="maintenanceBadge">--</div></div>
       <div class="maint-summary">
@@ -261,7 +262,7 @@
       <div class="maint-list" id="maintList"><!-- populated by JS --></div>
     </section>
 
-    <!-- 7. REKOMENDASI KONDISI MESIN ── -->
+    <!-- 7. REKOMENDASI KONDISI MESIN (decision) ── (tetap) -->
     <section class="cs" id="decisionSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-lightbulb"></i> Rekomendasi Kondisi Mesin</div><div class="sh-b" id="decisionBadge">Memuat...</div></div>
       <div class="decision-card">
@@ -273,7 +274,7 @@
       </div>
     </section>
 
-    <!-- 8. KONDISI SISTEM ── -->
+    <!-- 8. KONDISI SISTEM (tetap) -->
     <section class="cs" id="healthSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-shield-check"></i> Kondisi Sistem</div></div>
       <div class="health-grid">
@@ -286,7 +287,18 @@
       </div>
     </section>
 
-    <!-- 9. PANDUAN ── -->
+    <!-- 9. RIWAYAT PERISTIWA (baru) -->
+    <section class="cs" id="eventLogSection">
+      <div class="sh"><div class="sh-t"><i class="fas fa-history"></i> Riwayat Peristiwa</div></div>
+      <div class="event-log" id="eventLogList">
+        <div class="event-item">
+          <i class="fas fa-circle-notch fa-spin"></i>
+          <span>Memuat catatan kejadian...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10. PANDUAN (info) ── tetap -->
     <section class="cs" id="infoSection">
       <div class="sh"><div class="sh-t"><i class="fas fa-circle-info"></i> Informasi &amp; Panduan</div></div>
       <div class="info-layout">
@@ -310,6 +322,5 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <script src="js/sidebar.js"></script>
   <script src="js/public-view.js"></script>
-  </div>
 </body>
 </html>
