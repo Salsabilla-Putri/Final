@@ -1056,6 +1056,21 @@
                             <div class="overview-label">Next OR Charge</div>
                             <div class="overview-sub">Calibrated to 3 months</div>
                         </div>
+                        <div style="margin-top:14px; border-top:1px solid #e2e8f0; padding-top:12px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                <h3 style="font-size:0.95rem;color:#0f172a;">Maintenance Real-Time</h3>
+                                <span id="maintenanceCostTotal" style="font-size:0.82rem;color:#1745a5;font-weight:700;">Total biaya: Rp 0</span>
+                            </div>
+                            <div id="maintenancePublicList" style="display:grid;gap:8px;">
+                                <div class="alert-card ac-info">
+                                    <div class="ac-icon">🛠️</div>
+                                    <div class="ac-content">
+                                        <div class="ac-title">Memuat jadwal maintenance...</div>
+                                        <div class="ac-desc">Mengambil data dari konfigurasi halaman teknisi.</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1387,19 +1402,84 @@
                 });
             });
 
-            // ========== OVERVIEW CARD CLICK (subtle feedback) ==========
-            document.querySelectorAll('.overview-card').forEach(card => {
-                card.addEventListener('click', function() {
-                    this.style.transform = 'scale(0.97)';
-                    setTimeout(() => {
-                        this.style.transform = '';
-                    }, 150);
-                });
+            // ========== REAL ALERT + MAINTENANCE ==========
+            function formatRupiah(value) {
+                return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value || 0));
+            }
+
+            function alertClass(severity = '') {
+                const s = String(severity).toLowerCase();
+                if (s === 'critical' || s === 'high') return 'ac-critical';
+                if (s === 'medium') return 'ac-warning';
+                return 'ac-info';
+            }
+
+            async function loadPublicAlertAndMaintenance() {
+                try {
+                    const [alertRes, maintenanceRes] = await Promise.all([
+                        fetch('/api/alerts?limit=5'),
+                        fetch('/api/maintenance')
+                    ]);
+
+                    const alertJson = alertRes.ok ? await alertRes.json() : { data: [] };
+                    const maintenanceJson = maintenanceRes.ok ? await maintenanceRes.json() : { data: [] };
+
+                    const alerts = Array.isArray(alertJson.data) ? alertJson.data : [];
+                    const maints = Array.isArray(maintenanceJson.data) ? maintenanceJson.data : [];
+
+                    const alertContainer = document.getElementById('alertContainer');
+                    if (alertContainer) {
+                        alertContainer.innerHTML = alerts.length ? alerts.map(a => `
+                            <div class="alert-card ${alertClass(a.severity)}">
+                                <div class="ac-icon">${a.severity === 'critical' ? '❗' : a.severity === 'medium' ? '⚠️' : 'ℹ️'}</div>
+                                <div class="ac-content">
+                                    <div class="ac-title">${a.parameter ? String(a.parameter).toUpperCase() : 'Alert Sistem'}</div>
+                                    <div class="ac-desc">${a.message || 'Notifikasi sistem generator.'}</div>
+                                </div>
+                                <span class="ac-date">${a.timestamp ? new Date(a.timestamp).toLocaleDateString('id-ID', { day:'2-digit', month:'short' }) : '-'}</span>
+                            </div>
+                        `).join('') : '<div class="alert-card ac-info"><div class="ac-icon">✅</div><div class="ac-content"><div class="ac-title">Tidak Ada Alert Aktif</div><div class="ac-desc">Belum ada alert terbaru dari database.</div></div></div>';
+                    }
+
+                    const maintenanceList = document.getElementById('maintenancePublicList');
+                    const maintenanceCostTotal = document.getElementById('maintenanceCostTotal');
+                    const pendingMaint = maints.filter(m => String(m.status || 'scheduled').toLowerCase() !== 'completed').slice(0, 5);
+                    const totalCost = pendingMaint.reduce((sum, m) => sum + Number(m.cost || 0), 0);
+                    if (maintenanceCostTotal) maintenanceCostTotal.textContent = `Total biaya: ${formatRupiah(totalCost)}`;
+
+                    if (maintenanceList) {
+                        maintenanceList.innerHTML = pendingMaint.length ? pendingMaint.map(m => `
+                            <div class="alert-card ${String(m.priority || '').toLowerCase() === 'high' ? 'ac-critical' : 'ac-warning'}">
+                                <div class="ac-icon">🛠️</div>
+                                <div class="ac-content">
+                                    <div class="ac-title">${m.task || 'Maintenance Task'}</div>
+                                    <div class="ac-desc">${m.type || 'Preventive'} • Status: ${m.status || 'scheduled'} • Biaya: ${formatRupiah(m.cost || 0)}</div>
+                                </div>
+                                <span class="ac-date">${m.dueDate ? new Date(m.dueDate).toLocaleDateString('id-ID', { day:'2-digit', month:'short' }) : '-'}</span>
+                            </div>
+                        `).join('') : '<div class="alert-card ac-info"><div class="ac-icon">✅</div><div class="ac-content"><div class="ac-title">Tidak Ada Maintenance Pending</div><div class="ac-desc">Semua jadwal maintenance sudah selesai.</div></div></div>';
+                    }
+                } catch (error) {
+                    console.warn('Gagal memuat alert/maintenance public:', error);
+                }
+            }
+
+            document.getElementById('alertContainer')?.addEventListener('click', function(e) {
+                const card = e.target.closest('.alert-card');
+                if (!card) return;
+                const title = card.querySelector('.ac-title')?.textContent || 'Informasi';
+                const desc = card.querySelector('.ac-desc')?.textContent || '';
+                alert(`📢 ${title}
+
+${desc}`);
             });
+
+            loadPublicAlertAndMaintenance();
+            setInterval(loadPublicAlertAndMaintenance, 30000);
 
             console.log('🏠 Home Base Dashboard — All systems ready.');
             console.log('📊 Chart initialized | 🕐 Live clock running | 💬 Chat modal ready');
-        })();.
+        })();
     </script>
 </body>
 </html>
