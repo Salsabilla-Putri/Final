@@ -583,7 +583,9 @@ function updatePublicView(data) {
   updateDonut(engH);
 
   /* — Weekly uptime — */
-  const weeklyHours = data.weeklyUptime || simulateWeekly(isOn);
+  const weeklyHours = Array.isArray(data.weeklyUptime) && data.weeklyUptime.length === 7
+    ? data.weeklyUptime
+    : (Array.isArray(data.weeklyUptimeHistory) ? computeWeeklyFromHistory(data.weeklyUptimeHistory) : [0,0,0,0,0,0,0]);
   if (uptimeChart && weeklyHours.length === 7) {
     uptimeChart.data.datasets[0].data = weeklyHours;
     uptimeChart.update('none');
@@ -730,8 +732,28 @@ function buildMessageTips({ source, elecOk, volt, fuel, isOn, engineOk, maintSta
 }
 
 /* ── SIMULATE WEEKLY (fallback) ─────────────── */
-function simulateWeekly(isOn) {
-  return Array.from({length:7}, (_,i) => i===1||i===5 ? 0 : parseFloat((Math.random()*8+2).toFixed(1)));
+function computeWeeklyFromHistory(rows = []) {
+  const now = new Date();
+  const map = new Map();
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    map.set(d.toISOString().slice(0, 10), 0);
+  }
+
+  for (const row of rows) {
+    const started = row?.startedAt ? new Date(row.startedAt) : null;
+    if (!started || Number.isNaN(started.getTime())) continue;
+    const dayKey = new Date(started.getFullYear(), started.getMonth(), started.getDate()).toISOString().slice(0, 10);
+    if (!map.has(dayKey)) continue;
+
+    const ended = row?.endedAt ? new Date(row.endedAt) : new Date();
+    const durationMs = Number(row?.durationMs || (ended.getTime() - started.getTime()) || 0);
+    map.set(dayKey, map.get(dayKey) + Math.max(0, durationMs) / 3600000);
+  }
+
+  return Array.from(map.values()).map((v) => +v.toFixed(1));
 }
 
 /* ── FETCH DATA ─────────────────────────────── */
@@ -742,14 +764,20 @@ async function loadPublicData() {
   if (btn) btn.classList.add('spinning');
 
   try {
-    const [latestRes, decisionRes]  = await Promise.all([
+    const [latestRes, decisionRes, activeTimeRes]  = await Promise.all([
       fetch('/api/engine-data/latest'),
-      fetch('/api/maintenance/suggestion')
+      fetch('/api/maintenance/suggestion'),
+      fetch('/api/generator-active-time/history?limit=400')
     ]);
     if (!latestRes.ok) throw new Error('HTTP ' + latestRes.status);
     const json = await latestRes.json();
     const decisionJson = decisionRes.ok ? await decisionRes.json() : null;
-    updatePublicView(json?.data || {});
+    const activeTimeJson = activeTimeRes.ok ? await activeTimeRes.json() : null;
+    const mergedData = {
+      ...(json?.data || {}),
+      weeklyUptimeHistory: activeTimeJson?.data || []
+    };
+    updatePublicView(mergedData);
     updateDecisionView(decisionJson?.data || null, decisionJson?.suggestion || null);
 
     if (lbEl) { lbEl.style.background='var(--ok-bg)'; lbEl.style.color='var(--ok)'; lbEl.style.borderColor='var(--ok-border)'; }
