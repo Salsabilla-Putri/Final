@@ -236,9 +236,9 @@ function updateDashboard(data) {
     currentData.rpm = Number(data.rpm) || currentData.rpm;
     currentData.coolant = Number(data.coolant_temp || data.temp) || currentData.coolant;
     currentData.fuel = Number(data.fuel) || currentData.fuel;
-    currentData.iat = Number(data.iat) || (currentData.rpm > 0 ? 30 + Math.random() * 5 : 25);
-    currentData.afr = Number(data.afr) || (currentData.rpm > 0 ? 14.2 + (Math.random() * 1 - 0.5) : 0);
-    currentData.throttle = Number(data.throttle) || (currentData.rpm > 0 ? 35 + (currentData.rpm / 3600) * 30 : 0);
+    currentData.iat = Number(data.iat ?? data.intake_temp ?? 0);
+    currentData.afr = Number(data.afr ?? 0);
+    currentData.throttle = Number(data.throttle ?? data.tps ?? 0);
     currentData.engineHours = Number(data.engineHours) || currentData.engineHours;
     currentData.isRunning = String(data.status || '').toLowerCase() === 'on' || currentData.rpm > 50;
     const sync = String(data.sync || '').toUpperCase();
@@ -305,7 +305,8 @@ function updateDashboard(data) {
     const allGood = elecOk && engineOk && fuelOk && maintOk;
     const sysDot = $('#sbSysDot');
     if (sysDot) sysDot.className = `ssb-dot ${allGood ? 'ok' : (currentData.fuel < 10 ? 'err' : 'warn')}`;
-    $('#sbSysLabel').innerText = allGood ? 'Semua Sistem Normal' : 'Ada yang perlu diperiksa';
+    const sysLabel = $('#sbSysLabel');
+    if (sysLabel) sysLabel.innerText = allGood ? 'Semua Sistem Normal' : 'Ada yang perlu diperiksa';
     
     // Last update time
     $('#lastUpdate').innerHTML = `<i class="fas fa-clock"></i> Diperbarui: ${new Date().toLocaleString('id-ID')}`;
@@ -339,17 +340,95 @@ function markRealtimeStatus(isLive) {
 }
 
 // ---------- Data Fetching (API & MQTT) ----------
+function buildWeeklyUptimeFromSessions(sessions) {
+    const labels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const totals = [0,0,0,0,0,0,0];
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() - 6);
+    start.setHours(0,0,0,0);
+
+    (sessions || []).forEach((row) => {
+        const started = new Date(row.startedAt);
+        const ended = row.endedAt ? new Date(row.endedAt) : new Date();
+        if (Number.isNaN(started.getTime()) || Number.isNaN(ended.getTime())) return;
+        const cursor = new Date(Math.max(started.getTime(), start.getTime()));
+        while (cursor < ended) {
+            const dayEnd = new Date(cursor);
+            dayEnd.setHours(23,59,59,999);
+            const segEnd = new Date(Math.min(dayEnd.getTime(), ended.getTime()));
+            const durH = Math.max(0, (segEnd - cursor) / 3600000);
+            const dayIndex = cursor.getDay();
+            totals[dayIndex] += durH;
+            cursor.setTime(segEnd.getTime() + 1);
+        }
+    });
+
+    return { labels, data: totals.map(v => +v.toFixed(2)) };
+}
+
+function renderAlertsFromDb(alertRows) {
+    const container = $('#recentAlertsList');
+    if (!container) return;
+    const rows = (alertRows || []).slice(0, 5);
+    if (!rows.length) {
+        container.innerHTML = '<div class="alert-item info"><i class="fas fa-check-circle"></i> Tidak ada alert dari database</div>';
+        return;
+    }
+    container.innerHTML = rows.map((a) => {
+        const sev = String(a.severity || '').toLowerCase();
+        const cls = sev === 'critical' || sev === 'high' ? 'err' : (sev === 'medium' ? 'warn' : 'info');
+        const label = a.message || `${String(a.parameter || 'sys').toUpperCase()} : ${a.value ?? '-'}`;
+        const tm = a.timestamp ? new Date(a.timestamp).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) : '--:--';
+        return `<div class="alert-item ${cls}"><i class="fas fa-triangle-exclamation"></i> ${label}<span style="margin-left:auto; font-size:0.65rem;">${tm}</span></div>`;
+    }).join('');
+}
+
+function updateDataSourceBadge(enginePayload) {
+    const badge = $('#dataSourceBadge');
+    if (!badge) return;
+    const ts = new Date(enginePayload?.timestamp || 0);
+    const ageMs = Date.now() - ts.getTime();
+    if (!Number.isFinite(ageMs) || ageMs > 60000) {
+        badge.className = 'data-source err';
+        badge.textContent = 'DB: stale data';
+        return;
+    }
+    if (ageMs > 15000) {
+        badge.className = 'data-source warn';
+        badge.textContent = 'DB: delayed';
+        return;
+    }
+    badge.className = 'data-source';
+    badge.textContent = 'DB: realtime';
+}
+
 async function loadData() {
     try {
-        const res = await fetch('/api/engine-data/latest');
-        const json = await res.json();
-        const activeRes = await fetch('/api/generator-active-time/history?limit=7');
-        const activeJson = await activeRes.json();
-        const merged = { ...(json?.data || {}), weeklyUptimeHistory: activeJson?.data || [] };
+        const [engineRes, activeRes, alertsRes] = await Promise.all([
+            fetch('/api/engine-data/latest'),
+            fetch('/api/generator-active-time/history?limit=60'),
+            fetch('/api/alerts?limit=5')
+        ]);
+        const [engineJson, activeJson, alertsJson] = await Promise.all([
+            engineRes.json(), activeRes.json(), alertsRes.json()
+        ]);
+
+        const weekly = buildWeeklyUptimeFromSessions(activeJson?.data || []);
+        const merged = { ...(engineJson?.data || {}), weeklyUptimeHistory: weekly.data };
+        if (uptimeChart) uptimeChart.data.labels = weekly.labels;
+
         updateDashboard(merged);
+        renderAlertsFromDb(alertsJson?.data || []);
+        updateDataSourceBadge(engineJson?.data || {});
         markRealtimeStatus(true);
     } catch (e) {
         markRealtimeStatus(false);
+        const badge = $('#dataSourceBadge');
+        if (badge) {
+            badge.className = 'data-source err';
+            badge.textContent = 'DB: offline';
+        }
         console.warn('Fetch error:', e);
     }
 }
@@ -381,20 +460,18 @@ function callTechnician() {
 
 // ---------- Sidebar & Logout (mobile toggle) ----------
 function initSidebar() {
-    const btn = $('#menuBtn');
-    const overlay = $('#sbOverlay');
-    const sidebar = $('#sidebar');
-    const toggle = () => document.body.classList.toggle('sb-open');
-    btn?.addEventListener('click', toggle);
-    overlay?.addEventListener('click', toggle);
-    document.querySelectorAll('.sb-link').forEach(link => link.addEventListener('click', () => document.body.classList.remove('sb-open')));
-    
     const name = localStorage.getItem('username') || 'Pengguna';
-    $('#sbUsername').innerText = name;
-    $('#welcomeText').innerHTML = `👋 Welcome, ${name.split(' ')[0]}!`;
-    $('#sbAvatar').innerText = name.charAt(0).toUpperCase();
-    
-    $('#logoutPublic')?.addEventListener('click', () => { localStorage.clear(); window.location.href = 'login.html'; });
+    const userEl = document.querySelector('#user-btn span');
+    if (userEl) userEl.innerText = name;
+
+    fetch('sidebar.html')
+        .then(r => r.text())
+        .then(h => {
+            const container = document.getElementById('sidebar-container');
+            if (container) container.innerHTML = h;
+        })
+        .catch(err => console.warn('Sidebar load failed:', err));
+
     $('#callTechnicianBtn')?.addEventListener('click', callTechnician);
     $('#refreshPublic')?.addEventListener('click', loadData);
 }
@@ -406,7 +483,7 @@ window.addEventListener('DOMContentLoaded', () => {
     initCharts();
     loadData();
     connectMQTT();
-    setInterval(loadData, 5000);
+    setInterval(loadData, 800);
     // Event dummy awal
     setTimeout(() => {
         addEvent('system', 'Sistem siap dipantau', 'ok');

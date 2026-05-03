@@ -12,60 +12,27 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <!-- MQTT.js -->
     <script src="https://unpkg.com/mqtt@5.10.3/dist/mqtt.min.js"></script>
-    <!-- Stylesheet -->
     <link rel="stylesheet" href="css/public-view.css">
+    <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="css/topbar.css">
+    <link rel="stylesheet" href="css/typography.css">
 </head>
 <body>
 
-<!-- SIDEBAR OVERLAY (mobile) -->
-<div class="sb-overlay" id="sbOverlay"></div>
-
-<!-- SIDEBAR DINAMIS (hover expand di desktop, toggle di mobile) -->
-<aside class="sidebar" id="sidebar">
-    <div class="sb-header">
-        <div class="sb-avatar" id="sbAvatar">U</div>
-        <div class="sb-user-info">
-            <span class="sb-username" id="sbUsername">Pengguna</span>
-            <span class="sb-role">Public Monitor</span>
-        </div>
-    </div>
-    <nav class="sb-nav">
-        <a class="sb-link active" data-section="dashboardMain" href="#dashboardMain">
-            <i class="fas fa-chart-line"></i> <span class="nav-text">Dashboard</span>
-        </a>
-        <a class="sb-link" data-section="healthSection" href="#healthSection">
-            <i class="fas fa-heartbeat"></i> <span class="nav-text">Kesehatan</span>
-        </a>
-        <a class="sb-link" data-section="maintenanceSection" href="#maintenanceSection">
-            <i class="fas fa-tools"></i> <span class="nav-text">Perawatan & Biaya</span>
-        </a>
-        <a class="sb-link" data-section="infoSection" href="#infoSection">
-            <i class="fas fa-info-circle"></i> <span class="nav-text">Info & Teknisi</span>
-        </a>
-    </nav>
-    <div class="sb-footer">
-        <div class="sb-sys-status">
-            <span class="ssb-dot ok" id="sbSysDot"></span>
-            <span class="sb-sys-label" id="sbSysLabel">Semua Sistem Normal</span>
-        </div>
-        <button class="sb-logout" id="logoutPublic">
-            <i class="fas fa-right-from-bracket"></i> <span class="nav-text">Keluar</span>
-        </button>
-    </div>
-</aside>
+<div id="sidebar-container"></div>
 
 <!-- MAIN CONTENT -->
 <main class="main-content" id="mainContent">
     <!-- TOPBAR -->
     <div class="topbar">
-        <div class="topbar-left">
-            <button class="menu-btn" id="menuBtn"><i class="fas fa-bars"></i></button>
-            <h1 class="page-title">Dashboard Publik</h1>
-        </div>
-        <div class="topbar-actions">
-            <span class="welcome-text" id="welcomeText">Selamat datang</span>
+        <div class="topbar-title">Dashboard Publik</div>
+        <div style="display:flex; align-items:center; gap:12px;">
             <span class="live-badge" id="liveBadge"><i class="fas fa-circle"></i> Live</span>
+                        <span class="data-source" id="dataSourceBadge">DB: checking...</span>
             <button class="refresh-btn" id="refreshPublic"><i class="fas fa-rotate"></i></button>
+            <div class="user-info" id="user-btn">
+                <i class="fas fa-user"></i> <span>Pengguna</span>
+            </div>
         </div>
     </div>
 
