@@ -3,33 +3,21 @@
 const AVG_CONSUMPTION_LPH = 2.5; 
 const TANK_CAPACITY_L = 50;      
 const FUEL_PRICE_PER_LITER = 12000;
-const AVG_HOURS_PER_DAY = 2; // Asumsi genset rata-rata menyala 2 jam/hari
-
-// Database Komponen Maintenance
-const MAINTENANCE_PARTS = [
-    { name: 'Oli Mesin', interval: 250, cost: 450000 },
-    { name: 'Filter Udara', interval: 500, cost: 150000 },
-    { name: 'Filter Solar', interval: 500, cost: 200000 },
-    { name: 'Air Radiator (Coolant)', interval: 1000, cost: 300000 }
-];
 
 let uptimeChart = null;
 const $ = id => document.getElementById(id);
+
+// Format Rupiah
 const formatRupiah = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
 
-// --- REALTIME CLOCK WIB ---
-function updateClock() {
-    const now = new Date();
-    // Konversi waktu lokal browser ke string, ini akan otomatis mencerminkan WIB jika client di Indonesia
-    const timeString = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    if($('realtimeClock')) $('realtimeClock').innerText = `${timeString} WIB`;
-}
-setInterval(updateClock, 1000);
-
-// --- INIT CHART ---
 function initUptimeChart() {
     const ctx = $('uptimeChart');
     if (ctx && !uptimeChart) {
+        // Efek gradient untuk chart
+        let gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 400);
+        gradient.addColorStop(0, 'rgba(59, 130, 246, 0.5)'); // Blue
+        gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
         uptimeChart = new Chart(ctx, {
             type: 'bar',
             data: { 
@@ -37,15 +25,18 @@ function initUptimeChart() {
                 datasets: [{ 
                     label: 'Jam Aktif', 
                     data: [0, 0, 0, 0, 0, 0, 0], 
-                    backgroundColor: '#1745a5', // Gen-Track Primary Blue
-                    borderRadius: 6
+                    backgroundColor: gradient,
+                    borderColor: '#3b82f6',
+                    borderWidth: 2,
+                    borderRadius: {topLeft: 8, topRight: 8},
+                    barPercentage: 0.6
                 }] 
             },
             options: { 
                 responsive: true, maintainAspectRatio: false, 
                 plugins: { legend: { display: false } },
                 scales: { 
-                    y: { beginAtZero: true, suggestedMax: 10, title: { display: true, text: 'Jam' } },
+                    y: { beginAtZero: true, suggestedMax: 10, grid: { borderDash: [5, 5] } },
                     x: { grid: { display: false } }
                 }
             }
@@ -53,82 +44,39 @@ function initUptimeChart() {
     }
 }
 
-// --- UPDATE MAINTENANCE PREDICTION ---
-function updateMaintenanceTable(currentEngineHours) {
-    const tbody = $('maintenanceList');
-    let html = '';
+// Menghitung Kesehatan Sistem (Skala 0 - 100%)
+function calculateHealthScore(temp, fuel, isRunning, volt) {
+    let score = 100;
     
-    // Sort agar komponen yang paling dekat jadwal gantinya ada di atas
-    const partsWithStatus = MAINTENANCE_PARTS.map(part => {
-        const hoursUsed = currentEngineHours % part.interval;
-        const hoursLeft = part.interval - hoursUsed;
-        const daysLeft = Math.ceil(hoursLeft / AVG_HOURS_PER_DAY);
-        return { ...part, hoursLeft, daysLeft };
-    }).sort((a, b) => a.hoursLeft - b.hoursLeft);
+    // Penalti Suhu
+    if (temp > 95) score -= 40;
+    else if (temp > 85) score -= 15;
+    
+    // Penalti Bahan Bakar
+    if (fuel < 10) score -= 30;
+    else if (fuel < 25) score -= 15;
+    
+    // Penalti Listrik (Jika PLN tapi voltase ngedrop ekstrim)
+    if (!isRunning && volt > 0 && volt < 180) score -= 20;
 
-    partsWithStatus.forEach(part => {
-        let conditionClass = 'cond-good';
-        let conditionText = 'Bagus';
-        
-        if (part.hoursLeft < 50) {
-            conditionClass = 'cond-bad';
-            conditionText = 'Segera Ganti';
-        } else if (part.hoursLeft < 100) {
-            conditionClass = 'cond-warn';
-            conditionText = 'Mulai Aus';
-        }
-
-        html += `
-            <tr>
-                <td style="font-weight: 600; color: var(--dark);">${part.name}</td>
-                <td>${part.hoursLeft.toFixed(0)} Jam <br><span style="font-size: 11px; color: var(--muted);">~${part.daysLeft} Hari</span></td>
-                <td><span class="cond-badge ${conditionClass}">${conditionText}</span></td>
-                <td>${formatRupiah(part.cost)}</td>
-            </tr>
-        `;
-    });
-
-    tbody.innerHTML = html;
+    return Math.max(0, score);
 }
 
-// --- UPDATE MAIN DASHBOARD ---
 function updatePublicDashboard(data) {
     const rpm = Number(data.rpm) || 0;
     const volt = Number(data.volt) || 0;
+    const freq = Number(data.freq) || 0;
     const current = Number(data.current || data.amp) || 0;
     const fuel = Number(data.fuel) || 0;
     const temp = Number(data.coolant_temp || data.temp || data.coolant) || 0;
-    const engineHours = Number(data.engineHours) || 1250; // Fallback untuk testing prediksi maintenance
+    
     const powerKw = (volt * current) / 1000;
     
     const isRunning = String(data.status || '').toLowerCase() === 'on' || rpm > 50;
     const syncText = String(data.sync || '').toUpperCase();
     const isPLN = syncText.includes('ON-GRID') || syncText.includes('PLN') || (volt > 200 && !isRunning);
 
-    // 1. ECU & SYNC BADGES
-    const ecuBadge = $('badgeEcu');
-    const syncBadge = $('badgeSync');
-    
-    const ts = Date.parse(data.timestamp || new Date().toISOString());
-    const isFresh = (Date.now() - ts <= 20000); // 20 detik
-    
-    if (isFresh || isRunning) {
-        ecuBadge.className = 'badge-item badge-online';
-        $('ecuStatusText').innerText = 'Online';
-    } else {
-        ecuBadge.className = 'badge-item badge-offline';
-        $('ecuStatusText').innerText = 'Terputus';
-    }
-
-    if (isPLN) {
-        syncBadge.className = 'badge-item badge-online';
-        $('syncStatusText').innerText = 'Tersinkron (ON-GRID)';
-    } else {
-        syncBadge.className = 'badge-item badge-offline';
-        $('syncStatusText').innerText = 'Terputus dari PLN';
-    }
-
-    // 2. HERO CARD
+    // 1. HERO CARD
     const heroCard = $('heroCard');
     const heroIcon = $('heroIcon');
     const powerSourceText = $('powerSourceText');
@@ -137,54 +85,82 @@ function updatePublicDashboard(data) {
     heroCard.classList.remove('pln', 'genset', 'off', 'loading');
     if (isRunning) {
         heroCard.classList.add('genset');
-        heroIcon.className = 'fas fa-industry hero-bg-icon';
-        powerSourceText.innerText = 'Pasokan Listrik GENSET';
-        powerDescText.innerText = 'Genset beroperasi menyuplai daya ke infrastruktur publik.';
+        heroIcon.className = 'fas fa-industry';
+        powerSourceText.innerText = 'Pasokan GENSET';
+        powerDescText.innerText = 'Genset beroperasi menyuplai daya area.';
     } else if (isPLN) {
         heroCard.classList.add('pln');
-        heroIcon.className = 'fas fa-plug-circle-check hero-bg-icon';
-        powerSourceText.innerText = 'Pasokan Listrik PLN';
-        powerDescText.innerText = 'Jaringan utama kelistrikan beroperasi normal.';
+        heroIcon.className = 'fas fa-plug-circle-check';
+        powerSourceText.innerText = 'Pasokan PLN';
+        powerDescText.innerText = 'Jaringan utama beroperasi normal.';
     } else {
         heroCard.classList.add('off');
-        heroIcon.className = 'fas fa-power-off hero-bg-icon';
-        powerSourceText.innerText = 'PEMADAMAN LISTRIK';
-        powerDescText.innerText = 'Listrik padam. Menunggu sistem otomatis menyalakan genset.';
+        heroIcon.className = 'fas fa-power-off';
+        powerSourceText.innerText = 'PEMADAMAN';
+        powerDescText.innerText = 'Aliran listrik terputus total.';
     }
+
+    // 2. HEALTH SCORE
+    const healthScore = calculateHealthScore(temp, fuel, isRunning, volt);
+    $('healthScoreTxt').innerText = `${healthScore}%`;
+    const circle = $('healthCircle');
+    circle.setAttribute('stroke-dasharray', `${healthScore}, 100`);
+    
+    let healthColor = '#10b981'; // Green
+    let healthDesc = 'Sistem Prima';
+    if (healthScore < 50) { healthColor = '#ef4444'; healthDesc = 'Perlu Perbaikan'; }
+    else if (healthScore < 80) { healthColor = '#f59e0b'; healthDesc = 'Perhatian Khusus'; }
+    
+    circle.style.stroke = healthColor;
+    $('healthScoreTxt').style.fill = healthColor;
+    $('healthDescTxt').innerText = healthDesc;
+    $('healthDescTxt').style.color = healthColor;
 
     // 3. FUEL & POWER
     $('fuelPct').innerText = fuel.toFixed(0);
     const fuelBar = $('fuelBar');
     fuelBar.style.width = `${fuel}%`;
-    fuelBar.style.backgroundColor = fuel > 25 ? 'var(--secondary)' : 'var(--danger)';
+    fuelBar.style.backgroundColor = fuel > 25 ? 'var(--emerald)' : 'var(--rose)';
 
     const estConsumption = powerKw > 0.9 ? AVG_CONSUMPTION_LPH * 1.3 : AVG_CONSUMPTION_LPH; 
     const litersLeft = (fuel / 100) * TANK_CAPACITY_L;
     const hoursLeft = estConsumption > 0 ? (litersLeft / estConsumption).toFixed(1) : 0;
     $('fuelEstText').innerText = isRunning ? `${hoursLeft} jam` : 'Siaga Penuh';
 
-    $('powerKw').innerText = powerKw.toFixed(1);
+    $('powerKw').innerText = powerKw.toFixed(2);
     const powerPill = $('powerStatusText');
     if (powerKw > 15) {
-        powerPill.innerText = 'Beban Kritis (Kurangi Pemakaian)'; 
-        powerPill.style.background = '#fef2f2'; powerPill.style.color = '#ef4444';
+        powerPill.innerText = 'Beban Kritis'; powerPill.style.background = '#fef2f2'; powerPill.style.color = '#ef4444';
     } else if (powerKw > 0) {
-        powerPill.innerText = 'Beban Wajar'; 
-        powerPill.style.background = '#eff6ff'; powerPill.style.color = '#1e40af';
+        powerPill.innerText = 'Beban Wajar'; powerPill.style.background = '#eff6ff'; powerPill.style.color = '#3b82f6';
     } else {
-        powerPill.innerText = 'Sistem Standby'; 
-        powerPill.style.background = 'var(--bg-light)'; powerPill.style.color = 'var(--muted)';
+        powerPill.innerText = 'Tanpa Beban'; powerPill.style.background = '#f1f5f9'; powerPill.style.color = '#64748b';
     }
 
-    // 4. MAINTENANCE & COST
-    updateMaintenanceTable(engineHours);
-    const todayActiveHours = (data.todayActiveHours) || (isRunning ? 0.5 : 0); 
-    $('dailyCost').innerText = formatRupiah(todayActiveHours * AVG_CONSUMPTION_LPH * FUEL_PRICE_PER_LITER);
+    // 4. MICRO METRICS (Bars & Text)
+    const setMiniMetric = (id, val, strVal, maxVal, isErr) => {
+        $(`val${id}`).innerText = strVal;
+        const fill = $(`bar${id}`);
+        let pct = Math.min((val / maxVal) * 100, 100);
+        fill.style.width = `${pct}%`;
+        fill.style.backgroundColor = isErr ? 'var(--rose)' : ''; // overrides default CSS color if error
+    };
 
-    // 5. ALERTS
+    setMiniMetric('Volt', volt, `${volt.toFixed(0)} V`, 250, volt > 0 && (volt < 200 || volt > 240));
+    setMiniMetric('Freq', freq, `${freq.toFixed(1)} Hz`, 60, freq > 0 && (freq < 49 || freq > 51));
+    setMiniMetric('Temp', temp, `${temp.toFixed(0)} °C`, 120, temp > 95);
+    setMiniMetric('Rpm', rpm, `${rpm.toFixed(0)} RPM`, 2000, rpm > 1600);
+
+    // 5. COST
+    const costPerHour = isRunning ? estConsumption * FUEL_PRICE_PER_LITER : 0;
+    $('costPerHour').innerText = formatRupiah(costPerHour);
+    const todayActiveHours = (data.todayActiveHours) || (isRunning ? 0.5 : 0); 
+    $('costDaily').innerText = formatRupiah(todayActiveHours * AVG_CONSUMPTION_LPH * FUEL_PRICE_PER_LITER);
+
+    // 6. ALERTS
     renderAlerts(isRunning, fuel, temp, powerKw);
 
-    // 6. CHART
+    // 7. CHART
     if(data.weeklyUptimeHistory && uptimeChart) {
         uptimeChart.data.datasets[0].data = data.weeklyUptimeHistory;
         uptimeChart.update();
@@ -196,18 +172,18 @@ function renderAlerts(isRunning, fuel, temp, powerKw) {
     let alertsHtml = '';
 
     if (temp > 95) {
-        alertsHtml += `<div class="alert-box danger"><i class="fas fa-fire"></i> <div><strong>Mesin Overheat:</strong> Suhu sangat panas (${temp.toFixed(0)}°C). Sistem mungkin dihentikan otomatis.</div></div>`;
+        alertsHtml += `<div class="alert-box danger"><i class="fas fa-fire"></i> <div><strong>Mesin Panas (Overheat):</strong> Operasi mungkin dihentikan sementara untuk pendinginan.</div></div>`;
     }
     if (fuel < 20) {
-        alertsHtml += `<div class="alert-box warn"><i class="fas fa-gas-pump"></i> <div><strong>BBM Menipis:</strong> Solar di bawah 20%. Teknisi harap segera mengisi ulang tangki.</div></div>`;
+        alertsHtml += `<div class="alert-box warn"><i class="fas fa-gas-pump"></i> <div><strong>BBM Menipis:</strong> Persediaan solar di bawah 20%. Tim teknisi sedang menjadwalkan pengisian.</div></div>`;
     }
     if (powerKw > 15) {
-        alertsHtml += `<div class="alert-box warn"><i class="fas fa-bolt"></i> <div><strong>Beban Puncak:</strong> Pemakaian tinggi. Warga diimbau mematikan AC / alat berat jika tidak perlu.</div></div>`;
+        alertsHtml += `<div class="alert-box warn"><i class="fas fa-bolt"></i> <div><strong>Beban Listrik Tinggi:</strong> Dimohon mematikan AC atau alat elektronik berat agar listrik tidak anjlok.</div></div>`;
     }
     
     if (alertsHtml === '') {
-        alertsHtml = `<div class="alert-box info"><i class="fas fa-check-circle"></i> <div><strong>Kondisi Aman:</strong> Tidak terdeteksi masalah pada komponen mesin dan kelistrikan.</div></div>`;
-        if (isRunning) alertsHtml += `<div class="alert-box info"><i class="fas fa-cog fa-spin"></i> <div><strong>Genset Berjalan:</strong> Menyuplai listrik area selama gangguan PLN.</div></div>`;
+        alertsHtml = `<div class="alert-box info"><i class="fas fa-shield-check"></i> <div><strong>Kondisi Ideal:</strong> Tidak ada anomali terdeteksi. Sistem berjalan lancar.</div></div>`;
+        if (isRunning) alertsHtml += `<div class="alert-box info"><i class="fas fa-cog fa-spin"></i> <div><strong>Genset Aktif:</strong> Mengamankan pasokan listrik selama PLN padam.</div></div>`;
     }
 
     container.innerHTML = alertsHtml;
@@ -237,35 +213,31 @@ async function fetchDashboardData() {
 
 function setupMQTT() {
     if (typeof mqtt === 'undefined') return;
-    const client = mqtt.connect('wss://broker.shiftr.io', { clientId: 'pub-' + Math.random().toString(16).slice(2) });
+    const client = mqtt.connect('wss://broker.shiftr.io', { clientId: 'pub-bento-' + Math.random().toString(16).slice(2) });
     
     let liveData = {};
     client.on('connect', () => {
-        client.subscribe(['genset/voltage','genset/current','genset/fuel','genset/temp','genset/rpm','genset/status', 'genset/sync']);
+        client.subscribe(['genset/voltage','genset/current','genset/fuel','genset/temp','genset/rpm','genset/status']);
     });
 
     client.on('message', (topic, payload) => {
         let val = parseFloat(payload.toString());
-        if (topic.includes('status') || topic.includes('sync')) {
-            if(topic.includes('status')) liveData.status = payload.toString();
-            if(topic.includes('sync')) liveData.sync = payload.toString();
-        } else {
-            if (isNaN(val)) return;
-            if (topic.includes('voltage')) liveData.volt = val;
-            if (topic.includes('current')) liveData.current = val;
-            if (topic.includes('fuel')) liveData.fuel = val;
-            if (topic.includes('temp')) liveData.temp = val;
-            if (topic.includes('rpm')) liveData.rpm = val;
-        }
-        liveData.timestamp = new Date().toISOString();
+        if (isNaN(val)) return;
+        
+        if (topic.includes('voltage')) liveData.volt = val;
+        if (topic.includes('current')) liveData.current = val;
+        if (topic.includes('fuel')) liveData.fuel = val;
+        if (topic.includes('temp')) liveData.temp = val;
+        if (topic.includes('rpm')) liveData.rpm = val;
+        if (topic.includes('status')) liveData.status = payload.toString();
+
         updatePublicDashboard(liveData);
     });
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-    updateClock();
     initUptimeChart();
     fetchDashboardData(); 
     setupMQTT(); 
-    setInterval(fetchDashboardData, 30000); 
+    setInterval(fetchDashboardData, 60000); // Sinkronisasi database
 });

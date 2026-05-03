@@ -2,167 +2,177 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gen-Track | Portal Warga</title>
-    
-    <!-- Menggunakan CSS Bawaan Teknisi Gen-Track agar Seragam -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Gen-Track | Portal Informasi Warga</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="css/typography.css">
-    <link rel="stylesheet" href="sidebar.css">
-    <link rel="stylesheet" href="css/topbar.css">
-    <link rel="stylesheet" href="css/public-view.css">
-
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script src="https://unpkg.com/mqtt@5.10.3/dist/mqtt.min.js"></script>
+    <link rel="stylesheet" href="css/public-view.css">
 </head>
 <body>
-    <div class="container">
-        <!-- SIDEBAR KHUSUS PUBLIK (Style Senada Teknisi) -->
-        <div class="sidebar" id="sidebar">
-            <div style="text-align: center; padding: 20px 0;">
-                <i class="fas fa-bolt" style="font-size: 32px; color: white;"></i>
-            </div>
-            <div class="nav-items-wrapper">
-                <a href="#dashboard" class="nav-item active">
-                    <span class="nav-icon"><i class="fas fa-home"></i></span>
-                    <span class="nav-text">Beranda</span>
-                </a>
-                <a href="#maintenance" class="nav-item">
-                    <span class="nav-icon"><i class="fas fa-tools"></i></span>
-                    <span class="nav-text">Perawatan</span>
-                </a>
-                <a href="#alerts" class="nav-item">
-                    <span class="nav-icon"><i class="fas fa-bell"></i></span>
-                    <span class="nav-text">Peringatan</span>
-                </a>
-                <a href="login.html" class="nav-item" style="margin-top: auto;">
-                    <span class="nav-icon"><i class="fas fa-sign-in-alt"></i></span>
-                    <span class="nav-text">Login Teknisi</span>
-                </a>
+    <!-- TOP NAVBAR -->
+    <nav class="glass-nav">
+        <div class="nav-brand">
+            <div class="brand-icon"><i class="fas fa-bolt"></i></div>
+            <div class="brand-text">
+                <h1>Gen-Track</h1>
+                <p>Public Monitoring</p>
             </div>
         </div>
-
-        <div class="main-content">
-            <!-- TOPBAR -->
-            <div class="topbar">
-                <div class="topbar-title">
-                    Selamat Datang, Warga!
-                </div>
-                <div style="display:flex; align-items:center; gap:15px;">
-                    <!-- Realtime Clock -->
-                    <div style="font-weight: 600; color: var(--primary); display: flex; align-items: center; gap: 8px;">
-                        <i class="fas fa-clock"></i> <span id="realtimeClock">00:00:00 WIB</span>
-                    </div>
-                    <div class="user-info">
-                        <i class="fas fa-users"></i> <span>Akses Publik</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- DASHBOARD CONTENT -->
-            <div class="dashboard-wrapper">
-                <!-- ECU & SYNC STATUS BADGES -->
-                <div class="system-badges">
-                    <div class="badge-item" id="badgeEcu">
-                        <i class="fas fa-microchip"></i> Koneksi ECU: <strong id="ecuStatusText">Menghubungkan...</strong>
-                    </div>
-                    <div class="badge-item" id="badgeSync">
-                        <i class="fas fa-network-wired"></i> PLN Sync: <strong id="syncStatusText">Mengecek...</strong>
-                    </div>
-                </div>
-
-                <div class="bento-grid">
-                    <!-- MAIN STATUS HERO -->
-                    <div class="bento-card card-hero" id="heroCard">
-                        <div class="hero-content">
-                            <h2 class="section-subtitle">Status Listrik Area</h2>
-                            <h1 class="hero-title" id="powerSourceText">Memuat Data...</h1>
-                            <p class="hero-desc" id="powerDescText">Sistem sedang menyinkronkan data dengan mesin.</p>
-                        </div>
-                        <i class="fas fa-power-off hero-bg-icon" id="heroIcon"></i>
-                    </div>
-
-                    <!-- FUEL CARD -->
-                    <div class="bento-card card-fuel">
-                        <div class="card-header">
-                            <h3 class="card-title"><i class="fas fa-gas-pump text-green"></i> Bahan Bakar</h3>
-                        </div>
-                        <div class="fuel-content">
-                            <h2 class="big-number"><span id="fuelPct">0</span>%</h2>
-                            <div class="progress-track"><div class="progress-fill" id="fuelBar" style="width: 0%;"></div></div>
-                            <p class="estimate-text"><i class="fas fa-hourglass-half"></i> Sisa Waktu Nyala: <strong id="fuelEstText">-- jam</strong></p>
-                        </div>
-                    </div>
-
-                    <!-- POWER LOAD CARD -->
-                    <div class="bento-card card-power">
-                        <div class="card-header">
-                            <h3 class="card-title"><i class="fas fa-bolt text-yellow"></i> Beban Daya</h3>
-                        </div>
-                        <div class="power-content">
-                            <h2 class="big-number"><span id="powerKw">0.0</span> <span class="unit">kW</span></h2>
-                            <div class="status-pill" id="powerStatusText">Stabil</div>
-                        </div>
-                    </div>
-
-                    <!-- PREDICTIVE MAINTENANCE & COST -->
-                    <div class="bento-card card-maintenance" id="maintenance">
-                        <div class="card-header">
-                            <h3 class="card-title"><i class="fas fa-clipboard-check text-blue"></i> Jadwal Ganti Komponen & Biaya</h3>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="maint-table">
-                                <thead>
-                                    <tr>
-                                        <th>Komponen</th>
-                                        <th>Sisa Waktu</th>
-                                        <th>Kondisi</th>
-                                        <th>Estimasi Biaya</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="maintenanceList">
-                                    <!-- Diisi oleh JS -->
-                                    <tr><td colspan="4" style="text-align:center;">Menghitung umur komponen...</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div class="cost-summary">
-                            <span>Estimasi Biaya Operasional Hari Ini: <strong class="text-blue" id="dailyCost">Rp 0</strong></span>
-                        </div>
-                    </div>
-
-                    <!-- ACTIVE TIME HISTORY CHART -->
-                    <div class="bento-card card-chart">
-                        <div class="card-header">
-                            <h3 class="card-title"><i class="fas fa-chart-line text-blue"></i> Riwayat Pemakaian Genset (7 Hari)</h3>
-                        </div>
-                        <div class="chart-container">
-                            <canvas id="uptimeChart"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- ALERTS FEED -->
-                    <div class="bento-card card-alerts" id="alerts">
-                        <div class="card-header">
-                            <h3 class="card-title"><i class="fas fa-bell text-red"></i> Pusat Peringatan Warga</h3>
-                        </div>
-                        <div class="alerts-feed" id="publicAlerts">
-                            <!-- Diisi oleh JS -->
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="nav-status">
+            <span class="live-indicator"><span class="pulse"></span> Live Sync</span>
         </div>
-    </div>
+    </nav>
 
-    <!-- QUICK CALL TEKNISI (Floating Action Button) -->
-    <a href="tel:08123456789" class="fab-call" title="Telepon Darurat Teknisi">
+    <main class="dashboard-wrapper">
+        <div class="bento-grid">
+            
+            <!-- 1. MAIN HERO STATUS -->
+            <div class="bento-card card-hero" id="heroCard">
+                <div class="hero-content">
+                    <h2 class="section-subtitle">Status Pasokan Listrik</h2>
+                    <h1 class="hero-title" id="powerSourceText">Memuat...</h1>
+                    <p class="hero-desc" id="powerDescText">Menghubungkan ke sistem Gen-Track.</p>
+                </div>
+                <div class="hero-icon-wrapper">
+                    <i class="fas fa-power-off" id="heroIcon"></i>
+                </div>
+            </div>
+
+            <!-- 2. SYSTEM HEALTH SCORE -->
+            <div class="bento-card card-health">
+                <h3 class="card-title">Kesehatan Sistem</h3>
+                <div class="health-score-container">
+                    <svg class="circular-chart" viewBox="0 0 36 36">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        <path class="circle" id="healthCircle" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        <text x="18" y="20.35" class="percentage" id="healthScoreTxt">0%</text>
+                    </svg>
+                </div>
+                <p class="health-desc" id="healthDescTxt">Menghitung data...</p>
+            </div>
+
+            <!-- 3. FUEL CAPACITY -->
+            <div class="bento-card card-fuel">
+                <div class="card-header">
+                    <i class="fas fa-gas-pump icon-fuel"></i>
+                    <h3 class="card-title">Kapasitas Bahan Bakar</h3>
+                </div>
+                <div class="fuel-info">
+                    <h2 class="big-number"><span id="fuelPct">0</span><span class="unit">%</span></h2>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="fuelBar" style="width: 0%;"></div>
+                    </div>
+                    <p class="estimate-text"><i class="fas fa-clock"></i> Estimasi: <strong id="fuelEstText">-- jam</strong> operasi</p>
+                </div>
+            </div>
+
+            <!-- 4. POWER LOAD -->
+            <div class="bento-card card-power">
+                <div class="card-header">
+                    <i class="fas fa-bolt icon-power"></i>
+                    <h3 class="card-title">Beban Daya (PLN/Genset)</h3>
+                </div>
+                <div class="power-info">
+                    <h2 class="big-number"><span id="powerKw">0.00</span><span class="unit">kW</span></h2>
+                    <p class="status-pill" id="powerStatusText">Aman</p>
+                </div>
+            </div>
+
+            <!-- 5. TECHNICAL DETAILS (Electrical & Engine) -->
+            <div class="bento-card card-details">
+                <h3 class="card-title">Detail Kelistrikan & Mesin</h3>
+                <div class="metrics-list">
+                    <div class="metric-row">
+                        <div class="metric-label">Tegangan (Voltase)</div>
+                        <div class="metric-value-group">
+                            <span class="m-val" id="valVolt">0 V</span>
+                            <div class="mini-bar-track"><div class="mini-bar-fill" id="barVolt" style="width: 0%; background: #3b82f6;"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">Frekuensi Arus</div>
+                        <div class="metric-value-group">
+                            <span class="m-val" id="valFreq">0 Hz</span>
+                            <div class="mini-bar-track"><div class="mini-bar-fill" id="barFreq" style="width: 0%; background: #8b5cf6;"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">Suhu Mesin</div>
+                        <div class="metric-value-group">
+                            <span class="m-val" id="valTemp">0 °C</span>
+                            <div class="mini-bar-track"><div class="mini-bar-fill" id="barTemp" style="width: 0%; background: #10b981;"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">Putaran Mesin (RPM)</div>
+                        <div class="metric-value-group">
+                            <span class="m-val" id="valRpm">0 RPM</span>
+                            <div class="mini-bar-track"><div class="mini-bar-fill" id="barRpm" style="width: 0%; background: #f59e0b;"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6. OPERATIONAL & COST -->
+            <div class="bento-card card-ops">
+                <h3 class="card-title">Operasional & Perawatan</h3>
+                <div class="ops-grid">
+                    <div class="ops-box">
+                        <i class="fas fa-coins text-yellow"></i>
+                        <span class="ops-label">Biaya / Jam</span>
+                        <span class="ops-val" id="costPerHour">Rp 0</span>
+                    </div>
+                    <div class="ops-box">
+                        <i class="fas fa-calendar-day text-blue"></i>
+                        <span class="ops-label">Biaya Hari Ini</span>
+                        <span class="ops-val" id="costDaily">Rp 0</span>
+                    </div>
+                    <div class="ops-box full-width warning-box">
+                        <i class="fas fa-wrench"></i>
+                        <div class="ops-text">
+                            <strong>Servis Rutin Berikutnya</strong>
+                            <p id="nextServiceText">Dalam 50 jam operasi</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 7. UPTIME CHART -->
+            <div class="bento-card card-chart">
+                <div class="card-header">
+                    <h3 class="card-title">Riwayat Waktu Aktif Genset (7 Hari)</h3>
+                </div>
+                <div class="chart-container">
+                    <canvas id="uptimeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 8. ALERTS BOARD -->
+            <div class="bento-card card-alerts">
+                <div class="card-header">
+                    <h3 class="card-title">Papan Peringatan Warga</h3>
+                </div>
+                <div class="alerts-feed" id="publicAlerts">
+                    <div class="alert-box info">
+                        <i class="fas fa-spinner fa-spin"></i> Memeriksa status sistem...
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- FLOATING ACTION BUTTON (CALL TECH) -->
+    <a href="tel:08123456789" class="fab-call">
         <div class="fab-icon"><i class="fas fa-headset"></i></div>
-        <div class="fab-content">
-            <span class="fab-title">Darurat?</span>
-            <span class="fab-desc">Panggil Teknisi</span>
-        </div>
+        <span class="fab-text">Darurat? Hubungi Teknisi</span>
     </a>
+
+    <footer>
+        <p>Gen-Track Monitoring System © 2026. Diperbarui otomatis secara real-time.</p>
+    </footer>
 
     <script src="js/public-view.js"></script>
 </body>
