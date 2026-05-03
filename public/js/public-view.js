@@ -99,296 +99,115 @@ function updatePublicDashboard(data) {
         powerSourceText.innerText = 'PEMADAMAN';
         powerDescText.innerText = 'Aliran listrik terputus total.';
     }
-    lastRuntimeUpdate = now;
-    $('#costDaily').innerText = formatRupiah(dailyTotalCost);
+
+    // 2. HEALTH SCORE
+    const healthScore = calculateHealthScore(temp, fuel, isRunning, volt);
+    $('healthScoreTxt').innerText = `${healthScore}%`;
+    const circle = $('healthCircle');
+    circle.setAttribute('stroke-dasharray', `${healthScore}, 100`);
     
-    if (fuelPct > 0 && isRunning) {
-        const liters = (fuelPct / 100) * TANK_CAPACITY_L;
-        const hoursLeft = liters / consumption;
-        $('#nextServiceText').innerHTML = `${hoursLeft.toFixed(1)} jam (BBM)`;
-    } else if (!isRunning) {
-        $('#nextServiceText').innerHTML = '--';
+    let healthColor = '#10b981'; // Green
+    let healthDesc = 'Sistem Prima';
+    if (healthScore < 50) { healthColor = '#ef4444'; healthDesc = 'Perlu Perbaikan'; }
+    else if (healthScore < 80) { healthColor = '#f59e0b'; healthDesc = 'Perhatian Khusus'; }
+    
+    circle.style.stroke = healthColor;
+    $('healthScoreTxt').style.fill = healthColor;
+    $('healthDescTxt').innerText = healthDesc;
+    $('healthDescTxt').style.color = healthColor;
+
+    // 3. FUEL & POWER
+    $('fuelPct').innerText = fuel.toFixed(0);
+    const fuelBar = $('fuelBar');
+    fuelBar.style.width = `${fuel}%`;
+    fuelBar.style.backgroundColor = fuel > 25 ? 'var(--emerald)' : 'var(--rose)';
+
+    const estConsumption = powerKw > 0.9 ? AVG_CONSUMPTION_LPH * 1.3 : AVG_CONSUMPTION_LPH; 
+    const litersLeft = (fuel / 100) * TANK_CAPACITY_L;
+    const hoursLeft = estConsumption > 0 ? (litersLeft / estConsumption).toFixed(1) : 0;
+    $('fuelEstText').innerText = isRunning ? `${hoursLeft} jam` : 'Siaga Penuh';
+
+    $('powerKw').innerText = powerKw.toFixed(2);
+    const powerPill = $('powerStatusText');
+    if (powerKw > 15) {
+        powerPill.innerText = 'Beban Kritis'; powerPill.style.background = '#fef2f2'; powerPill.style.color = '#ef4444';
+    } else if (powerKw > 0) {
+        powerPill.innerText = 'Beban Wajar'; powerPill.style.background = '#eff6ff'; powerPill.style.color = '#3b82f6';
+    } else {
+        powerPill.innerText = 'Tanpa Beban'; powerPill.style.background = '#f1f5f9'; powerPill.style.color = '#64748b';
     }
-}
 
-// ---------- Maintenance ----------
-function renderMaintenance(engineHours) {
-    let nextServiceHour = Infinity;
-    const rows = MAINT_ITEMS.map(item => {
-        const last = Math.floor(engineHours / item.interval) * item.interval;
-        const dueAt = last + item.interval;
-        const hoursLeft = dueAt - engineHours;
-        let status = 'ok', badge = 'OK';
-        if (hoursLeft <= 0) { status = 'err'; badge = 'Terlambat'; }
-        else if (hoursLeft <= 50) { status = 'warn'; badge = 'Segera'; }
-        if (hoursLeft > 0 && hoursLeft < nextServiceHour) nextServiceHour = hoursLeft;
-        return `<div class="mi-compact">
-                    <span class="mi-name">${item.name}</span>
-                    <span class="mi-status ${status}">${badge}</span>
-                    <span style="font-size:0.7rem;">${hoursLeft > 0 ? hoursLeft.toFixed(0)+' jam' : 'segera'}</span>
-                </div>`;
-    }).join('');
-    $('#maintList').innerHTML = rows;
-    if (nextServiceHour !== Infinity) {
-        $('#nextServiceText').innerHTML = nextServiceHour <= 0 ? 'Segera servis!' : `${Math.round(nextServiceHour)} jam lagi`;
-    }
-    return nextServiceHour;
-}
+    // 4. MICRO METRICS (Bars & Text)
+    const setMiniMetric = (id, val, strVal, maxVal, isErr) => {
+        $(`val${id}`).innerText = strVal;
+        const fill = $(`bar${id}`);
+        let pct = Math.min((val / maxVal) * 100, 100);
+        fill.style.width = `${pct}%`;
+        fill.style.backgroundColor = isErr ? 'var(--rose)' : ''; // overrides default CSS color if error
+    };
 
-// ---------- System Health (Voltage, Current, Freq, Fuel, AFR) ----------
-function updateSystemHealth(volt, freq, current, fuel, afr) {
-    const container = $('#sysHealthList');
-    if (!container) return;
-    const voltStatus = (volt >= VOLT_LO && volt <= VOLT_HI) ? 'ok' : (volt > 0 ? 'warn' : 'err');
-    const freqStatus = (freq >= FREQ_LO && freq <= FREQ_HI) ? 'ok' : (freq > 0 ? 'warn' : 'err');
-    const fuelStatus = fuel >= 25 ? 'ok' : (fuel > 0 ? 'warn' : 'err');
-    const afrStatus = (afr > 13 && afr < 16) ? 'ok' : 'warn';
-    container.innerHTML = `
-        <div class="health-row"><span class="health-label">Voltage</span><span class="health-badge ${voltStatus}">${volt > 0 ? volt.toFixed(0)+'V' : 'N/A'}</span></div>
-        <div class="health-row"><span class="health-label">Current</span><span class="health-badge ${current>0?'ok':''}">${current>0 ? current.toFixed(1)+'A' : '0A'}</span></div>
-        <div class="health-row"><span class="health-label">Frequency</span><span class="health-badge ${freqStatus}">${freq>0 ? freq.toFixed(1)+'Hz' : '--'}</span></div>
-        <div class="health-row"><span class="health-label">Fuel Level</span><span class="health-badge ${fuelStatus}">${fuel.toFixed(0)}%</span></div>
-        <div class="health-row"><span class="health-label">AFR</span><span class="health-badge ${afrStatus}">${afr.toFixed(1)}</span></div>
-    `;
-}
+    setMiniMetric('Volt', volt, `${volt.toFixed(0)} V`, 250, volt > 0 && (volt < 200 || volt > 240));
+    setMiniMetric('Freq', freq, `${freq.toFixed(1)} Hz`, 60, freq > 0 && (freq < 49 || freq > 51));
+    setMiniMetric('Temp', temp, `${temp.toFixed(0)} °C`, 120, temp > 95);
+    setMiniMetric('Rpm', rpm, `${rpm.toFixed(0)} RPM`, 2000, rpm > 1600);
 
-// ---------- Diagnostik ----------
-function renderDiagnostik(elecOk, engineOk, fuelOk, maintOk, syncOk, source) {
-    const container = $('#healthCheckContainer');
-    if (!container) return;
-    const items = [
-        { label: 'Jaringan PLN', status: elecOk ? 'ok' : (currentData.volt>0 ? 'warn' : 'err'), desc: elecOk ? 'Stabil' : (currentData.volt>0 ? 'Fluktuasi' : 'Padam') },
-        { label: 'Generator', status: (engineOk && source !== 'OFF') ? 'ok' : (source==='GEN' ? 'warn' : 'ok'), desc: source==='GEN' ? 'Menyuplai' : (source==='OFF' ? 'Tidak aktif' : 'Siaga') },
-        { label: 'Sinkronisasi', status: syncOk ? 'ok' : (source==='HYBRID' ? 'warn' : 'ok'), desc: syncOk ? 'Tersinkron' : 'Tidak sync' },
-        { label: 'Bahan Bakar', status: fuelOk ? 'ok' : (currentData.fuel<25 ? 'warn' : 'err'), desc: currentData.fuel>0 ? `${currentData.fuel}%` : 'Kosong' },
-        { label: 'Perawatan', status: maintOk ? 'ok' : 'warn', desc: maintOk ? 'Terjadwal' : 'Perlu perhatian' }
-    ];
-    container.innerHTML = items.map(i => `<div class="health-check-item"><span>${i.label}</span><span class="health-badge ${i.status}">${i.desc}</span></div>`).join('');
-}
+    // 5. COST
+    const costPerHour = isRunning ? estConsumption * FUEL_PRICE_PER_LITER : 0;
+    $('costPerHour').innerText = formatRupiah(costPerHour);
+    const todayActiveHours = (data.todayActiveHours) || (isRunning ? 0.5 : 0); 
+    $('costDaily').innerText = formatRupiah(todayActiveHours * AVG_CONSUMPTION_LPH * FUEL_PRICE_PER_LITER);
 
-// ---------- Info & Tips dinamis ----------
-function updateInfoTips(elecOk, fuelOk, source, maintNear) {
-    let msg = 'Semua sistem normal.';
-    const tips = [];
-    if (source === 'GEN') msg = 'Generator aktif, listrik dari genset.';
-    if (source === 'OFF') msg = 'Gangguan listrik total.';
-    if (!elecOk && source !== 'OFF') msg = 'Kualitas listrik kurang stabil.';
-    if (!fuelOk) msg = 'Bahan bakar rendah, segera isi ulang.';
-    
-    if (!elecOk) tips.push('Cek kestabilan tegangan PLN');
-    if (!fuelOk) tips.push('Hubungi teknisi untuk pengisian BBM');
-    if (maintNear) tips.push('Jadwal servis rutin sudah dekat');
-    if (tips.length === 0) {
-        tips.push('Pantau level BBM setiap hari');
-        tips.push('Matikan peralatan tidak penting saat genset menyala');
-    }
-    $('#publicMessage').innerHTML = msg;
-    $('#publicTips').innerHTML = tips.map(t => `<li><i class="fas fa-circle-check"></i> ${t}</li>`).join('');
-}
+    // 6. ALERTS
+    renderAlerts(isRunning, fuel, temp, powerKw);
 
-// ---------- UPDATE UTAMA (dipanggil dari API / MQTT) ----------
-function updateDashboard(data) {
-    // Update nilai dari data (API atau MQTT)
-    currentData.volt = Number(data.volt) || currentData.volt;
-    currentData.freq = Number(data.freq) || currentData.freq;
-    currentData.current = Number(data.current || data.amp) || currentData.current;
-    currentData.rpm = Number(data.rpm) || currentData.rpm;
-    currentData.coolant = Number(data.coolant_temp || data.temp) || currentData.coolant;
-    currentData.fuel = Number(data.fuel) || currentData.fuel;
-    currentData.iat = Number(data.iat ?? data.intake_temp ?? 0);
-    currentData.afr = Number(data.afr ?? 0);
-    currentData.throttle = Number(data.throttle ?? data.tps ?? 0);
-    currentData.engineHours = Number(data.engineHours) || currentData.engineHours;
-    currentData.isRunning = String(data.status || '').toLowerCase() === 'on' || currentData.rpm > 50;
-    const sync = String(data.sync || '').toUpperCase();
-    currentData.syncOk = sync.includes('ON-GRID') || sync.includes('SYNC') || sync.includes('PLN');
-    currentData.source = (!currentData.isRunning && !currentData.syncOk) ? 'OFF' :
-                          (currentData.isRunning && currentData.syncOk ? 'HYBRID' :
-                          (currentData.isRunning ? 'GEN' : 'PLN'));
-    
-    // Hitung daya (kW)
-    currentData.power = (currentData.volt * currentData.current) / 1000;
-    
-    // Update UI elemen
-    $('#ovRPM').innerText = currentData.rpm.toFixed(0);
-    $('#ovTemp').innerText = currentData.coolant.toFixed(1);
-    $('#ovVoltage').innerText = currentData.volt.toFixed(0);
-    
-    // Parameter kelistrikan
-    $('#genVolt').innerText = currentData.volt.toFixed(0) + ' V';
-    $('#genFreq').innerText = currentData.freq.toFixed(1) + ' Hz';
-    $('#genCurr').innerText = currentData.current.toFixed(1) + ' A';
-    $('#genPow').innerText = currentData.power.toFixed(2) + ' kW';
-    
-    // Parameter motor bakar
-    $('#motorRpm').innerText = currentData.rpm.toFixed(0);
-    $('#motorIat').innerText = currentData.iat.toFixed(1) + ' °C';
-    $('#motorCoolant').innerText = currentData.coolant.toFixed(1) + ' °C';
-    $('#motorFuel').innerText = currentData.fuel.toFixed(0) + ' %';
-    $('#motorAfr').innerText = currentData.afr.toFixed(1);
-    $('#motorThrottle').innerText = currentData.throttle.toFixed(0) + ' %';
-    
-    // Engine status
-    $('#engSync').innerText = currentData.syncOk ? 'Sync' : 'Not Sync';
-    $('#engState').innerText = currentData.isRunning ? (currentData.source==='GEN' ? 'Running (Gen)' : 'Running (Hybrid)') : 'Stopped';
-    $('#engFuel').innerText = currentData.fuel.toFixed(0) + '%';
-    
-    // System Health
-    updateSystemHealth(currentData.volt, currentData.freq, currentData.current, currentData.fuel, currentData.afr);
-    
-    // Active time chart (weekly uptime)
-    if (uptimeChart && data.weeklyUptimeHistory && data.weeklyUptimeHistory.length === 7) {
+    // 7. CHART
+    if(data.weeklyUptimeHistory && uptimeChart) {
         uptimeChart.data.datasets[0].data = data.weeklyUptimeHistory;
         uptimeChart.update();
-        const total = data.weeklyUptimeHistory.reduce((a,b)=>a+b,0);
-        $('#weeklyTotal').innerText = total.toFixed(1) + ' jam';
+    }
+}
+
+function renderAlerts(isRunning, fuel, temp, powerKw) {
+    const container = $('publicAlerts');
+    let alertsHtml = '';
+
+    if (temp > 95) {
+        alertsHtml += `<div class="alert-box danger"><i class="fas fa-fire"></i> <div><strong>Mesin Panas (Overheat):</strong> Operasi mungkin dihentikan sementara untuk pendinginan.</div></div>`;
+    }
+    if (fuel < 20) {
+        alertsHtml += `<div class="alert-box warn"><i class="fas fa-gas-pump"></i> <div><strong>BBM Menipis:</strong> Persediaan solar di bawah 20%. Tim teknisi sedang menjadwalkan pengisian.</div></div>`;
+    }
+    if (powerKw > 15) {
+        alertsHtml += `<div class="alert-box warn"><i class="fas fa-bolt"></i> <div><strong>Beban Listrik Tinggi:</strong> Dimohon mematikan AC atau alat elektronik berat agar listrik tidak anjlok.</div></div>`;
     }
     
-    // Maintenance & lifespan
-    const elecOk = (currentData.volt >= VOLT_LO && currentData.volt <= VOLT_HI && currentData.volt > 0);
-    const engineOk = (currentData.coolant <= 95 || currentData.coolant === 0);
-    const fuelOk = currentData.fuel >= 25;
-    const nextMaint = renderMaintenance(currentData.engineHours);
-    updateLifespan(currentData.engineHours);
-    updateCostAndRuntime(currentData.fuel, currentData.power, currentData.isRunning);
-    updateTodayActive(currentData.isRunning);
-    const maintOk = (nextMaint === Infinity || nextMaint > 50);
-    renderDiagnostik(elecOk, engineOk, fuelOk, maintOk, currentData.syncOk, currentData.source);
-    updateInfoTips(elecOk, fuelOk, currentData.source, !maintOk);
-    
-    // Update jumlah alert di overview
-    const activeAlertCount = eventLog.filter(e => e.status !== 'ok').length;
-    $('#ovAlerts').innerText = activeAlertCount;
-    
-    // System status dot
-    const allGood = elecOk && engineOk && fuelOk && maintOk;
-    const sysDot = $('#sbSysDot');
-    if (sysDot) sysDot.className = `ssb-dot ${allGood ? 'ok' : (currentData.fuel < 10 ? 'err' : 'warn')}`;
-    const sysLabel = $('#sbSysLabel');
-    if (sysLabel) sysLabel.innerText = allGood ? 'Semua Sistem Normal' : 'Ada yang perlu diperiksa';
-    
-    // Last update time
-    $('#lastUpdate').innerHTML = `<i class="fas fa-clock"></i> Diperbarui: ${new Date().toLocaleString('id-ID')}`;
-    
-    // Trigger event jika sumber berubah (opsional)
-    // ...
-}
-
-
-function enforcePublicAccess() {
-    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-    const role = (localStorage.getItem('userRole') || '').toLowerCase();
-    if (!isLoggedIn) {
-        window.location.replace('login.html');
-        return false;
+    if (alertsHtml === '') {
+        alertsHtml = `<div class="alert-box info"><i class="fas fa-shield-check"></i> <div><strong>Kondisi Ideal:</strong> Tidak ada anomali terdeteksi. Sistem berjalan lancar.</div></div>`;
+        if (isRunning) alertsHtml += `<div class="alert-box info"><i class="fas fa-cog fa-spin"></i> <div><strong>Genset Aktif:</strong> Mengamankan pasokan listrik selama PLN padam.</div></div>`;
     }
-    if (role !== 'masyarakat') {
-        window.location.replace('index.html');
-        return false;
-    }
-    return true;
+
+    container.innerHTML = alertsHtml;
 }
 
-function markRealtimeStatus(isLive) {
-    const badge = $('#liveBadge');
-    if (!badge) return;
-    badge.classList.toggle('offline', !isLive);
-    badge.innerHTML = isLive
-        ? '<i class="fas fa-circle"></i> Live'
-        : '<i class="fas fa-triangle-exclamation"></i> Reconnecting';
-}
-
-// ---------- Data Fetching (API & MQTT) ----------
-function buildWeeklyUptimeFromSessions(sessions) {
-    const labels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
-    const totals = [0,0,0,0,0,0,0];
-    const now = new Date();
-    const start = new Date(now);
-    start.setDate(now.getDate() - 6);
-    start.setHours(0,0,0,0);
-
-    (sessions || []).forEach((row) => {
-        const started = new Date(row.startedAt);
-        const ended = row.endedAt ? new Date(row.endedAt) : new Date();
-        if (Number.isNaN(started.getTime()) || Number.isNaN(ended.getTime())) return;
-        const cursor = new Date(Math.max(started.getTime(), start.getTime()));
-        while (cursor < ended) {
-            const dayEnd = new Date(cursor);
-            dayEnd.setHours(23,59,59,999);
-            const segEnd = new Date(Math.min(dayEnd.getTime(), ended.getTime()));
-            const durH = Math.max(0, (segEnd - cursor) / 3600000);
-            const dayIndex = cursor.getDay();
-            totals[dayIndex] += durH;
-            cursor.setTime(segEnd.getTime() + 1);
-        }
-    });
-
-    return { labels, data: totals.map(v => +v.toFixed(2)) };
-}
-
-function renderAlertsFromDb(alertRows) {
-    const container = $('#recentAlertsList');
-    if (!container) return;
-    const rows = (alertRows || []).slice(0, 5);
-    if (!rows.length) {
-        container.innerHTML = '<div class="alert-item info"><i class="fas fa-check-circle"></i> Tidak ada alert dari database</div>';
-        return;
-    }
-    container.innerHTML = rows.map((a) => {
-        const sev = String(a.severity || '').toLowerCase();
-        const cls = sev === 'critical' || sev === 'high' ? 'err' : (sev === 'medium' ? 'warn' : 'info');
-        const label = a.message || `${String(a.parameter || 'sys').toUpperCase()} : ${a.value ?? '-'}`;
-        const tm = a.timestamp ? new Date(a.timestamp).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) : '--:--';
-        return `<div class="alert-item ${cls}"><i class="fas fa-triangle-exclamation"></i> ${label}<span style="margin-left:auto; font-size:0.65rem;">${tm}</span></div>`;
-    }).join('');
-}
-
-function updateDataSourceBadge(enginePayload) {
-    const badge = $('#dataSourceBadge');
-    if (!badge) return;
-    const ts = new Date(enginePayload?.timestamp || 0);
-    const ageMs = Date.now() - ts.getTime();
-    if (!Number.isFinite(ageMs) || ageMs > 60000) {
-        badge.className = 'data-source err';
-        badge.textContent = 'DB: stale data';
-        return;
-    }
-    if (ageMs > 15000) {
-        badge.className = 'data-source warn';
-        badge.textContent = 'DB: delayed';
-        return;
-    }
-    badge.className = 'data-source';
-    badge.textContent = 'DB: realtime';
-}
-
-async function loadData() {
+// --- FETCH DATA & MQTT ---
+async function fetchDashboardData() {
     try {
-        const [engineRes, activeRes, alertsRes] = await Promise.all([
-            fetch('/api/engine-data/latest'),
-            fetch('/api/generator-active-time/history?limit=60'),
-            fetch('/api/alerts?limit=5')
-        ]);
-        const [engineJson, activeJson, alertsJson] = await Promise.all([
-            engineRes.json(), activeRes.json(), alertsRes.json()
-        ]);
-
-        const weekly = buildWeeklyUptimeFromSessions(activeJson?.data || []);
-        const merged = { ...(engineJson?.data || {}), weeklyUptimeHistory: weekly.data };
-        if (uptimeChart) uptimeChart.data.labels = weekly.labels;
-
-        updateDashboard(merged);
-        renderAlertsFromDb(alertsJson?.data || []);
-        updateDataSourceBadge(engineJson?.data || {});
-        markRealtimeStatus(true);
-    } catch (e) {
-        markRealtimeStatus(false);
-        const badge = $('#dataSourceBadge');
-        if (badge) {
-            badge.className = 'data-source err';
-            badge.textContent = 'DB: offline';
+        const resObj = await fetch('/api/engine-data/latest');
+        const jsonObj = await resObj.json();
+        
+        const activeRes = await fetch('/api/generator-active-time/history?limit=7');
+        let weeklyData = [0,0,0,0,0,0,0];
+        if(activeRes.ok) {
+            const activeJson = await activeRes.json();
+            if(activeJson.data) weeklyData = activeJson.data;
         }
-        console.warn('Fetch error:', e);
+
+        if(jsonObj.data) {
+            jsonObj.data.weeklyUptimeHistory = weeklyData;
+            updatePublicDashboard(jsonObj.data);
+        }
+    } catch (e) {
+        console.warn('API Fetch error:', e);
     }
 }
 
@@ -404,53 +223,21 @@ function setupMQTT() {
     client.on('message', (topic, payload) => {
         let val = parseFloat(payload.toString());
         if (isNaN(val)) return;
-        if (topic.includes('voltage')) updateDashboard({ volt: val });
-        if (topic.includes('current')) updateDashboard({ current: val });
-        if (topic.includes('fuel')) updateDashboard({ fuel: val });
-        if (topic.includes('temp')) updateDashboard({ temp: val });
-        if (topic.includes('rpm')) updateDashboard({ rpm: val });
-        if (topic.includes('status')) updateDashboard({ status: payload.toString() });
+        
+        if (topic.includes('voltage')) liveData.volt = val;
+        if (topic.includes('current')) liveData.current = val;
+        if (topic.includes('fuel')) liveData.fuel = val;
+        if (topic.includes('temp')) liveData.temp = val;
+        if (topic.includes('rpm')) liveData.rpm = val;
+        if (topic.includes('status')) liveData.status = payload.toString();
+
+        updatePublicDashboard(liveData);
     });
 }
 
-// ---------- Call teknisi ----------
-function callTechnician() {
-    const phone = '08123456789';
-    if (confirm(`Hubungi teknisi di nomor ${phone}?`)) {
-        window.location.href = `tel:${phone}`;
-        addEvent('call', 'Pengguna memanggil teknisi', 'info');
-    }
-}
-
-// ---------- Sidebar & Logout (mobile toggle) ----------
-function initSidebar() {
-    const name = localStorage.getItem('username') || 'Pengguna';
-    const userEl = document.querySelector('#user-btn span');
-    if (userEl) userEl.innerText = name;
-
-    fetch('sidebar.html')
-        .then(r => r.text())
-        .then(h => {
-            const container = document.getElementById('sidebar-container');
-            if (container) container.innerHTML = h;
-        })
-        .catch(err => console.warn('Sidebar load failed:', err));
-
-    $('#callTechnicianBtn')?.addEventListener('click', callTechnician);
-    $('#refreshPublic')?.addEventListener('click', loadData);
-}
-
-// ---------- RUN ----------
 window.addEventListener('DOMContentLoaded', () => {
-    if (!enforcePublicAccess()) return;
-    initSidebar();
-    initCharts();
-    loadData();
-    connectMQTT();
-    setInterval(loadData, 800);
-    // Event dummy awal
-    setTimeout(() => {
-        addEvent('system', 'Sistem siap dipantau', 'ok');
-        addEvent('info', 'Generator dalam mode siaga', 'ok');
-    }, 500);
+    initUptimeChart();
+    fetchDashboardData(); 
+    setupMQTT(); 
+    setInterval(fetchDashboardData, 60000); // Sinkronisasi database
 });
