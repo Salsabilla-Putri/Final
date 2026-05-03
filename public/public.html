@@ -3,37 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>Gen-Track | Portal Informasi Warga</title>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="js/auth-guard.js"></script>
+    <title>Gen-Track · Public Dashboard</title>
+
+    <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script src="https://unpkg.com/mqtt@5.10.3/dist/mqtt.min.js"></script>
     <link rel="stylesheet" href="css/public-view.css">
+    <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="css/topbar.css">
+    <link rel="stylesheet" href="css/typography.css">
 </head>
 <body>
-    <!-- TOP NAVBAR -->
-    <nav class="glass-nav">
-        <div class="nav-brand">
-            <div class="brand-icon"><i class="fas fa-bolt"></i></div>
-            <div class="brand-text">
-                <h1>Gen-Track</h1>
-                <p>Public Monitoring</p>
+
+<div id="sidebar-container"></div>
+
+<!-- MAIN CONTENT -->
+<main class="main-content" id="mainContent">
+    <!-- TOPBAR -->
+    <div class="topbar">
+        <div class="topbar-title">Dashboard Publik</div>
+        <div style="display:flex; align-items:center; gap:12px;">
+            <span class="live-badge" id="liveBadge"><i class="fas fa-circle"></i> Live</span>
+                        <span class="data-source" id="dataSourceBadge">DB: checking...</span>
+            <button class="refresh-btn" id="refreshPublic"><i class="fas fa-rotate"></i></button>
+            <div class="user-info" id="user-btn">
+                <i class="fas fa-user"></i> <span>Pengguna</span>
             </div>
         </div>
-        <div class="nav-status">
-            <span class="live-indicator"><span class="pulse"></span> Live Sync</span>
-        </div>
-    </nav>
+    </div>
 
-    <main class="dashboard-wrapper">
-        <div class="bento-grid">
-            
-            <!-- 1. MAIN HERO STATUS -->
-            <div class="bento-card card-hero" id="heroCard">
-                <div class="hero-content">
-                    <h2 class="section-subtitle">Status Pasokan Listrik</h2>
-                    <h1 class="hero-title" id="powerSourceText">Memuat...</h1>
-                    <p class="hero-desc" id="powerDescText">Menghubungkan ke sistem Gen-Track.</p>
+    <!-- DASHBOARD GRID -->
+    <div class="dashboard-grid" id="dashboardMain">
+
+        <!-- OVERVIEW CARDS (4) -->
+        <div class="overview-grid">
+            <div class="overview-card">
+                <div class="ov-icon"><i class="fas fa-tachometer-alt"></i></div>
+                <div class="ov-content">
+                    <span class="ov-label">Engine Speed</span>
+                    <span class="ov-value" id="ovRPM">0</span>
+                    <span class="ov-unit">RPM</span>
                 </div>
                 <div class="hero-icon-wrapper">
                     <i class="fas fa-power-off" id="heroIcon"></i>
