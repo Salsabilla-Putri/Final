@@ -293,10 +293,13 @@ function buildMaintenanceSection(data, engineHours) {
 
   const nsb = $('nextServiceBanner');
   if (nsb && nextServiceHoursAway < Infinity) {
+    nsb.style.display = '';
     nsb.className = 'nsb ' + (nextServiceHoursAway <= 0 ? 'err' : nextServiceHoursAway <= 30 ? 'warn' : '');
     $('nsbTitle').textContent = nextServiceHoursAway <= 0 ? 'Perawatan terlambat — segera jadwalkan servis' : `Servis berikutnya dalam ${Math.round(nextServiceHoursAway)} jam operasi`;
     $('nsbSub').textContent = errCount > 0 ? `${errCount} komponen melewati jadwal servis` : `${okCount} komponen OK · ${warnCount} hampir jatuh tempo`;
     $('nsbVal').textContent = nextServiceHoursAway <= 0 ? 'TERLAMBAT' : Math.round(nextServiceHoursAway) + ' jam';
+  } else if (nsb) {
+    nsb.style.display = 'none';
   }
   return { okCount, warnCount, errCount, maintStatus };
 }
@@ -583,7 +586,7 @@ function connectMQTT() {
   mqttClient.on('message', (topic, message) => {
     try {
       const payload = JSON.parse(message.toString());
-      const topicKey = topic.split('/')[1]; // voltage, current, etc.
+      const topicKey = topic.split('/')[1];
       let updateData = {};
       if (topicKey === 'voltage') updateData.volt = Number(payload.voltage || payload.value || payload);
       else if (topicKey === 'current') updateData.current = Number(payload.current || payload.value || payload);
@@ -592,7 +595,6 @@ function connectMQTT() {
       else if (topicKey === 'fuel') updateData.fuel = Number(payload.fuel || payload.value || payload);
       else if (topicKey === 'status') updateData.status = String(payload.status || payload.value || payload);
       if (Object.keys(updateData).length > 0) {
-        // merge with current (we keep a global data object)
         if (!window._mqttData) window._mqttData = {};
         Object.assign(window._mqttData, updateData);
         updatePublicView(window._mqttData);
@@ -632,10 +634,9 @@ initScrollSpy();
 if (typeof Chart !== 'undefined') initCharts();
 else window.addEventListener('load', initCharts);
 
-// Initial data & MQTT
 loadPublicData();
 connectMQTT();
-setInterval(loadPublicData, 30_000); // periodic fallback
+setInterval(loadPublicData, 30_000);
 
 $('refreshPublic')?.addEventListener('click', loadPublicData);
 $('approveDecisionBtn')?.addEventListener('click', approveDecision);
