@@ -314,6 +314,30 @@ function updateDashboard(data) {
     // ...
 }
 
+
+function enforcePublicAccess() {
+    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+    const role = (localStorage.getItem('userRole') || '').toLowerCase();
+    if (!isLoggedIn) {
+        window.location.replace('login.html');
+        return false;
+    }
+    if (role !== 'masyarakat') {
+        window.location.replace('index.html');
+        return false;
+    }
+    return true;
+}
+
+function markRealtimeStatus(isLive) {
+    const badge = $('#liveBadge');
+    if (!badge) return;
+    badge.classList.toggle('offline', !isLive);
+    badge.innerHTML = isLive
+        ? '<i class="fas fa-circle"></i> Live'
+        : '<i class="fas fa-triangle-exclamation"></i> Reconnecting';
+}
+
 // ---------- Data Fetching (API & MQTT) ----------
 async function loadData() {
     try {
@@ -323,7 +347,9 @@ async function loadData() {
         const activeJson = await activeRes.json();
         const merged = { ...(json?.data || {}), weeklyUptimeHistory: activeJson?.data || [] };
         updateDashboard(merged);
+        markRealtimeStatus(true);
     } catch (e) {
+        markRealtimeStatus(false);
         console.warn('Fetch error:', e);
     }
 }
@@ -375,11 +401,12 @@ function initSidebar() {
 
 // ---------- RUN ----------
 window.addEventListener('DOMContentLoaded', () => {
+    if (!enforcePublicAccess()) return;
     initSidebar();
     initCharts();
     loadData();
     connectMQTT();
-    setInterval(loadData, 30000);
+    setInterval(loadData, 5000);
     // Event dummy awal
     setTimeout(() => {
         addEvent('system', 'Sistem siap dipantau', 'ok');
