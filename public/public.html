@@ -1,1486 +1,411 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Generator Dashboard | Home Base</title>
+    <title>Dashboard Generator • Home Base</title>
+
+    <!-- Fonts & icons (gunakan yang sudah ada) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="css/public.view.css">
+
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <!-- MQTT.js CDN -->
+    <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+
+    <!-- Auth Guard (keep if needed) -->
     <script src="js/auth-guard.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js">
-    </script>
-    <style>
-        /* === GLOBAL RESET === */
-        :root {
-            --primary: #1745a5;
-            --primary-light: #3b6bdf;
-            --secondary: #10b981;
-            --secondary-dark: #047857;
-            --warning: #f97316;
-            --danger: #ef4444;
-            --muted: #6b7280;
-            --light: #f8fafc;
-            --dark: #0f172a;
-            --card-bg: #fff;
-            --border: #d0d7e1;
-            --black: #334155;
-            --app-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            --text-base-size: 0.95rem;
-            --text-sm-size: 0.85rem;
-            --text-xs-size: 0.75rem;
-            --text-md-size: 1rem;
-            --text-lg-size: 1.15rem;
-            --sidebar-width: 80px;
-            --sidebar-expanded: 220px;
-            --transition-speed: 0.3s;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: var(--app-font-family);
-            background: #f1f5f9;
-            color: var(--dark);
-            overflow-x: hidden;
-            min-height: 100vh;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-
-        .container {
-            display: flex;
-            min-height: 100vh;
-            width: 100%;
-        }
-
-        /* === SIDEBAR === */
-        #sidebar-container {
-            position: fixed;
-            top: 0;
-            left: 0;
-            height: 100vh;
-            width: var(--sidebar-width);
-            background: linear-gradient(180deg, #0f172a 0%, #1a2744 40%, #0f1d3a 100%);
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding-top: 20px;
-            gap: 6px;
-            transition: width var(--transition-speed) ease;
-            overflow: hidden;
-            box-shadow: 4px 0 24px rgba(15, 23, 42, 0.18);
-            border-right: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        #sidebar-container:hover {
-            width: var(--sidebar-expanded);
-        }
-
-        .sidebar-logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 0 18px;
-            width: 100%;
-            margin-bottom: 28px;
-            white-space: nowrap;
-            min-height: 44px;
-        }
-
-        .sidebar-logo .logo-icon {
-            width: 38px;
-            height: 38px;
-            min-width: 38px;
-            background: linear-gradient(135deg, var(--primary-light), #5b8df5);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            color: #fff;
-            font-weight: 700;
-            flex-shrink: 0;
-        }
-
-        .sidebar-logo .logo-text {
-            color: #fff;
-            font-weight: 700;
-            font-size: 1rem;
-            opacity: 0;
-            transition: opacity 0.25s ease;
-            letter-spacing: -0.01em;
-        }
-
-        #sidebar-container:hover .sidebar-logo .logo-text {
-            opacity: 1;
-        }
-
-        .sidebar-nav {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            width: 100%;
-            padding: 0 10px;
-        }
-
-        .sidebar-nav .nav-item {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            padding: 13px 16px;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            white-space: nowrap;
-            color: rgba(255, 255, 255, 0.6);
-            text-decoration: none;
-            position: relative;
-        }
-
-        .sidebar-nav .nav-item:hover {
-            background: rgba(255, 255, 255, 0.07);
-            color: #fff;
-        }
-
-        .sidebar-nav .nav-item.active {
-            background: rgba(59, 107, 223, 0.35);
-            color: #fff;
-            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
-        }
-
-        .sidebar-nav .nav-item .nav-icon {
-            width: 22px;
-            min-width: 22px;
-            height: 22px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            flex-shrink: 0;
-        }
-
-        .sidebar-nav .nav-item .nav-label {
-            opacity: 0;
-            transition: opacity 0.25s ease;
-            font-size: var(--text-sm-size);
-            font-weight: 500;
-        }
-
-        #sidebar-container:hover .sidebar-nav .nav-item .nav-label {
-            opacity: 1;
-        }
-
-        .sidebar-nav .nav-badge {
-            margin-left: auto;
-            background: var(--danger);
-            color: #fff;
-            font-size: 10px;
-            font-weight: 700;
-            padding: 3px 8px;
-            border-radius: 20px;
-            opacity: 0;
-            transition: opacity 0.25s ease;
-            flex-shrink: 0;
-        }
-
-        #sidebar-container:hover .sidebar-nav .nav-badge {
-            opacity: 1;
-        }
-
-        /* === MAIN CONTENT === */
-        .main-content {
-            flex: 1;
-            margin-left: var(--sidebar-width);
-            padding: 24px;
-            padding-top: 92px;
-            transition: margin-left var(--transition-speed) ease;
-            width: calc(100% - var(--sidebar-width));
-            position: relative;
-        }
-
-        #sidebar-container:hover~.main-content {
-            margin-left: var(--sidebar-expanded);
-            width: calc(100% - var(--sidebar-expanded));
-        }
-
-        /* === TOP BAR === */
-        .top-bar {
-            position: fixed;
-            top: 0;
-            left: var(--sidebar-width);
-            right: 0;
-            height: 64px;
-            background: rgba(255, 255, 255, 0.82);
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
-            z-index: 999;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 28px;
-            border-bottom: 1px solid rgba(208, 215, 225, 0.5);
-            transition: left var(--transition-speed) ease;
-            box-shadow: 0 1px 8px rgba(15, 23, 42, 0.04);
-        }
-
-        #sidebar-container:hover~.main-content .top-bar {
-            left: var(--sidebar-expanded);
-        }
-
-        .top-bar .breadcrumb {
-            font-size: var(--text-sm-size);
-            color: var(--muted);
-            font-weight: 500;
-        }
-
-        .top-bar .breadcrumb span {
-            color: var(--dark);
-            font-weight: 600;
-        }
-
-        .top-bar-actions {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .top-bar-actions .status-dot {
-            width: 9px;
-            height: 9px;
-            border-radius: 50%;
-            background: var(--secondary);
-            animation: pulse-dot 2s infinite;
-        }
-
-        @keyframes pulse-dot {
-            0%,
-            100% {
-                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
-            }
-            50% {
-                box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
-            }
-        }
-
-        .top-bar-actions .live-text {
-            font-size: var(--text-xs-size);
-            color: var(--secondary-dark);
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-        }
-
-        .btn-icon {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            border: 1px solid var(--border);
-            background: #fff;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            transition: all 0.2s;
-            color: var(--muted);
-        }
-
-        .btn-icon:hover {
-            background: #f8fafc;
-            border-color: var(--primary-light);
-            color: var(--primary);
-            box-shadow: 0 4px 12px rgba(23, 69, 165, 0.1);
-        }
-
-        /* === DASHBOARD CONTAINER === */
-        .dashboard-container {
-            width: min(100%, 1320px);
-            margin: 0 auto;
-            display: grid;
-            gap: 24px;
-        }
-
-        .section-block {
-            background: #fff;
-            border: 1px solid rgba(208, 215, 225, 0.9);
-            border-radius: 16px;
-            padding: 22px;
-            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
-        }
-
-        .section-heading {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-end;
-            gap: 18px;
-            margin-bottom: 18px;
-        }
-
-        .section-heading.compact {
-            margin-bottom: 16px;
-        }
-
-        .section-heading h2 {
-            font-size: clamp(1.1rem, 2vw, 1.35rem);
-            color: var(--dark);
-            margin-top: 4px;
-        }
-
-        .section-eyebrow {
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--primary);
-        }
-
-        .section-copy {
-            max-width: 420px;
-            color: var(--muted);
-            font-size: 0.95rem;
-        }
-
-        /* === HERO SECTION === */
-        .hero {
-            background: linear-gradient(135deg, #1a3bb5 0%, #2f58e8 50%, #3b6bdf 100%);
-            min-height: 160px;
-            border-radius: 16px;
-            margin-bottom: 4px;
-            box-shadow: 0 12px 30px rgba(23, 69, 165, 0.22);
-            position: relative;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 36px 28px;
-        }
-
-        .hero::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background:
-                radial-gradient(ellipse 80% 60% at 50% 110%, rgba(255, 255, 255, 0.08) 0%, transparent 70%),
-                radial-gradient(ellipse 60% 40% at 20% -10%, rgba(255, 255, 255, 0.10) 0%, transparent 60%);
-            z-index: 1;
-        }
-
-        .hero::after {
-            content: '';
-            position: absolute;
-            bottom: -60px;
-            left: -60px;
-            width: 220px;
-            height: 220px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.05);
-            z-index: 1;
-        }
-
-        .hero-center {
-            position: relative;
-            z-index: 3;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            text-align: center;
-            color: #fff;
-            gap: 6px;
-        }
-
-        .hero-time {
-            font-size: clamp(3.5rem, 6vw, 4.2rem);
-            font-weight: 800;
-            line-height: 1;
-            letter-spacing: -0.02em;
-            color: #fff;
-            text-shadow: 0 2px 16px rgba(0, 0, 0, 0.2);
-        }
-
-        .hero-greeting {
-            font-size: clamp(1.25rem, 2vw, 1.3rem);
-            font-weight: 400;
-            color: rgba(255, 255, 255, 0.92);
-            margin-top: 10px;
-            line-height: 1.3;
-        }
-
-        .hero-greeting span {
-            font-weight: 400;
-            color: rgba(255, 255, 255, 0.92);
-            font-size: inherit;
-        }
-
-        .hero-subtitle {
-            font-size: clamp(0.9rem, 1.2vw, 0.88rem);
-            color: rgba(255, 255, 255, 0.68);
-            margin-top: 6px;
-            font-style: italic;
-            letter-spacing: 0.01em;
-        }
-
-        .hero-date {
-            font-size: 0.8rem;
-            color: rgba(255, 255, 255, 0.5);
-            margin-top: 2px;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-        }
-
-        /* === OVERVIEW CARDS === */
-        .overview-cards {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 18px;
-        }
-
-        .overview-card {
-            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-            border-radius: 20px;
-            padding: 20px;
-            min-height: 112px;
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
-            border: 1px solid rgba(208, 215, 225, 0.9);
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            transition: transform 0.2s, box-shadow 0.2s;
-            cursor: pointer;
-        }
-
-        .overview-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.09);
-        }
-
-        .overview-icon {
-            width: 60px;
-            height: 60px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 22px;
-            color: white;
-            flex-shrink: 0;
-        }
-
-        .icon-prm {
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-        }
-        .icon-sec {
-            background: linear-gradient(135deg, var(--secondary), var(--secondary-dark));
-        }
-        .icon-wrn {
-            background: linear-gradient(135deg, var(--warning), #fdba74);
-        }
-        .icon-dng {
-            background: linear-gradient(135deg, var(--danger), #fca5a5);
-        }
-
-        .overview-value {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--dark);
-            margin-bottom: 2px;
-        }
-        .overview-label {
-            font-size: var(--text-sm-size);
-            color: var(--black);
-            white-space: nowrap;
-        }
-        .overview-sub {
-            font-size: var(--text-xs-size);
-            color: var(--muted);
-            margin-top: 1px;
-        }
-        .overview-sub.good {
-            color: var(--secondary-dark);
-            font-weight: 600;
-        }
-
-        /* === GRID LAYOUTS === */
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 20px;
-        }
-
-        .grid-2 {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 20px;
-        }
-
-        /* === CARDS === */
-        .card {
-            background: white;
-            border-radius: 20px;
-            padding: 20px;
-            box-shadow: 0 14px 32px rgba(15, 23, 42, 0.05);
-            border: 1px solid rgba(208, 215, 225, 0.9);
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .card h3 {
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            color: white;
-            padding: 14px 16px;
-            border-radius: 0;
-            margin: -20px -20px 18px -20px;
-            font-size: var(--text-md-size);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .list-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 12px 0;
-            border-bottom: 1px solid #f1f5f9;
-            font-size: var(--text-sm-size);
-            color: var(--dark);
-        }
-        .list-row:last-child {
-            border-bottom: none;
-        }
-        .list-row span:first-child {
-            color: var(--black);
-            font-weight: 500;
-        }
-        .list-row span:last-child {
-            font-weight: 600;
-        }
-
-        /* Status Colors */
-        .st-ok {
-            color: var(--secondary);
-            font-weight: 700;
-        }
-        .st-err {
-            color: var(--danger);
-            font-weight: 700;
-        }
-        .st-warn {
-            color: var(--warning);
-            font-weight: 700;
-        }
-        .st-muted {
-            color: var(--muted);
-            font-weight: 500;
-        }
-
-        /* === ALERT CARDS === */
-        #alertContainer {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .alert-card {
-            display: flex;
-            align-items: center;
-            padding: 15px;
-            border-radius: 12px;
-            background: #fff;
-            position: relative;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.02);
-            transition: transform 0.2s;
-            cursor: pointer;
-        }
-
-        .alert-card:hover {
-            transform: translateX(5px);
-        }
-
-        .ac-critical {
-            background: #fff5f5;
-            border-left: 6px solid #ef4444;
-        }
-        .ac-warning {
-            background: #fffaf0;
-            border-left: 6px solid #f97316;
-        }
-        .ac-info {
-            background: #eff6ff;
-            border-left: 6px solid #3b82f6;
-        }
-
-        .ac-icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: var(--text-base-size);
-            margin-right: 15px;
-            flex-shrink: 0;
-        }
-
-        .ac-critical .ac-icon {
-            background: #ef4444;
-        }
-        .ac-warning .ac-icon {
-            background: #f97316;
-        }
-        .ac-info .ac-icon {
-            background: #3b82f6;
-        }
-
-        .ac-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .ac-title {
-            font-weight: 700;
-            font-size: var(--text-base-size);
-            color: #1e293b;
-            margin-bottom: 2px;
-            text-transform: uppercase;
-        }
-
-        .ac-desc {
-            font-size: var(--text-xs-size);
-            color: #64748b;
-        }
-
-        .ac-date {
-            font-size: var(--text-xs-size);
-            color: #94a3b8;
-            font-weight: 600;
-            margin-left: 10px;
-        }
-
-        /* === CHART === */
-        .chart-box {
-            position: relative;
-            flex: 1;
-            width: 100%;
-            min-height: 250px;
-        }
-
-        .chart-tabs {
-            display: flex;
-            gap: 6px;
-            margin-bottom: 12px;
-        }
-
-        .chart-tab {
-            padding: 7px 16px;
-            border-radius: 20px;
-            border: 1px solid var(--border);
-            background: #fff;
-            cursor: pointer;
-            font-size: var(--text-xs-size);
-            font-weight: 600;
-            color: var(--muted);
-            transition: all 0.2s;
-            white-space: nowrap;
-        }
-
-        .chart-tab.active {
-            background: var(--primary);
-            color: #fff;
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(23, 69, 165, 0.2);
-        }
-
-        .chart-tab:hover:not(.active) {
-            background: #f1f5f9;
-            border-color: #c0c9d4;
-        }
-
-        /* === FUEL PROGRESS === */
-        .fuel-progress-wrap {
-            margin: 8px 0;
-        }
-
-        .fuel-progress-bar {
-            width: 100%;
-            height: 12px;
-            border-radius: 20px;
-            background: #e5e7eb;
-            overflow: hidden;
-            margin: 6px 0 4px;
-        }
-
-        .fuel-progress-fill {
-            height: 100%;
-            border-radius: 20px;
-            background: linear-gradient(90deg, #f97316, #fb923c, #fbbf24);
-            transition: width 0.6s ease;
-        }
-
-        .fuel-progress-fill.good {
-            background: linear-gradient(90deg, #10b981, #34d399);
-        }
-
-        /* === BATTERY BUTTON === */
-        .btn-outline {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 18px;
-            border-radius: 24px;
-            border: 2px solid var(--primary);
-            background: transparent;
-            color: var(--primary);
-            font-weight: 600;
-            font-size: var(--text-sm-size);
-            cursor: pointer;
-            transition: all 0.2s;
-            white-space: nowrap;
-            font-family: var(--app-font-family);
-        }
-
-        .btn-outline:hover {
-            background: var(--primary);
-            color: #fff;
-            box-shadow: 0 6px 20px rgba(23, 69, 165, 0.2);
-        }
-
-        .btn-chat {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 22px;
-            border-radius: 28px;
-            background: var(--secondary);
-            color: #fff;
-            font-weight: 700;
-            font-size: var(--text-sm-size);
-            cursor: pointer;
-            border: none;
-            transition: all 0.2s;
-            font-family: var(--app-font-family);
-            box-shadow: 0 6px 18px rgba(16, 185, 129, 0.25);
-        }
-
-        .btn-chat:hover {
-            background: var(--secondary-dark);
-            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
-            transform: translateY(-2px);
-        }
-
-        /* === CHAT MODAL === */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.55);
-            z-index: 2000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease;
-        }
-
-        .modal-overlay.show {
-            opacity: 1;
-            pointer-events: all;
-        }
-
-        .modal-dialog {
-            background: #fff;
-            border-radius: 20px;
-            padding: 28px;
-            width: min(90%, 440px);
-            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
-            text-align: center;
-        }
-
-        .modal-dialog h3 {
-            font-size: 1.2rem;
-            margin-bottom: 8px;
-            color: var(--dark);
-        }
-        .modal-dialog p {
-            color: var(--muted);
-            font-size: var(--text-sm-size);
-            margin-bottom: 18px;
-        }
-        .modal-dialog .btn-close {
-            padding: 10px 24px;
-            border-radius: 20px;
-            background: var(--primary);
-            color: #fff;
-            border: none;
-            cursor: pointer;
-            font-weight: 600;
-            font-family: var(--app-font-family);
-            transition: all 0.2s;
-        }
-        .modal-dialog .btn-close:hover {
-            background: var(--primary-light);
-            box-shadow: 0 6px 18px rgba(23, 69, 165, 0.2);
-        }
-
-        /* === RESPONSIVE === */
-        @media (max-width: 1200px) {
-            .overview-cards {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            .grid-3,
-            .grid-2 {
-                grid-template-columns: 1fr;
-            }
-        }
-        @media (max-width: 992px) {
-            .section-heading {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            .hero {
-                padding: 28px 20px;
-            }
-            .grid-2 {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        @media (max-width: 768px) {
-            #sidebar-container {
-                width: 0;
-                padding-top: 0;
-                overflow: hidden;
-            }
-            #sidebar-container:hover {
-                width: 0;
-            }
-            .main-content {
-                margin-left: 0;
-                width: 100%;
-                padding: 14px;
-                padding-top: 70px;
-            }
-            #sidebar-container:hover~.main-content {
-                margin-left: 0;
-                width: 100%;
-            }
-            .top-bar {
-                left: 0;
-            }
-            #sidebar-container:hover~.main-content .top-bar {
-                left: 0;
-            }
-            .dashboard-container {
-                gap: 18px;
-            }
-            .section-block {
-                padding: 16px;
-                border-radius: 20px;
-            }
-            .hero {
-                min-height: auto;
-                padding: 24px 16px;
-                border-radius: 16px;
-            }
-            .overview-cards,
-            .grid-3,
-            .grid-2 {
-                grid-template-columns: 1fr;
-                gap: 14px;
-            }
-            .overview-card {
-                min-height: 96px;
-                padding: 16px;
-            }
-            .overview-icon {
-                width: 52px;
-                height: 52px;
-            }
-            .card {
-                border-radius: 18px;
-            }
-            .list-row {
-                gap: 10px;
-                align-items: flex-start;
-            }
-            .list-row span:last-child {
-                text-align: right;
-            }
-            .chart-box {
-                min-height: 220px;
-            }
-            .ac-date {
-                margin-left: 0;
-                margin-top: 8px;
-            }
-            .alert-card {
-                align-items: flex-start;
-                flex-wrap: wrap;
-            }
-            .hero-time {
-                font-size: 2.5rem;
-            }
-        }
-
-        @media (max-width: 520px) {
-            .section-copy {
-                font-size: 0.9rem;
-            }
-            .hero-time {
-                font-size: 2.35rem;
-            }
-            .hero-greeting {
-                font-size: 1.2rem;
-            }
-            .overview-value {
-                font-size: 1rem;
-            }
-            .overview-label {
-                white-space: normal;
-            }
-            .top-bar {
-                padding: 0 14px;
-            }
-        }
-    </style>
 </head>
 <body>
+    <!-- Sidebar overlay (mobile) -->
+    <div class="sb-overlay" id="sbOverlay"></div>
 
-    <div class="container">
-        <!-- ========== SIDEBAR ========== -->
-        <aside id="sidebar-container">
-            <div class="sidebar-logo">
-                <div class="logo-icon">⚡</div>
-                <span class="logo-text">Home Base</span>
-            </div>
-            <nav class="sidebar-nav">
-                <a class="nav-item active" title="Dashboard">
-                    <span class="nav-icon">📊</span>
-                    <span class="nav-label">Dashboard</span>
-                </a>
-                <a class="nav-item" title="Generator">
-                    <span class="nav-icon">🔧</span>
-                    <span class="nav-label">Generator</span>
-                </a>
-                <a class="nav-item" title="Analytics">
-                    <span class="nav-icon">📈</span>
-                    <span class="nav-label">Analytics</span>
-                    <span class="nav-badge">3</span>
-                </a>
-                <a class="nav-item" title="Fuel Logs">
-                    <span class="nav-icon">⛽</span>
-                    <span class="nav-label">Fuel Logs</span>
-                </a>
-                <a class="nav-item" title="Settings">
-                    <span class="nav-icon">⚙️</span>
-                    <span class="nav-label">Settings</span>
-                </a>
-                <a class="nav-item" title="Help">
-                    <span class="nav-icon">💬</span>
-                    <span class="nav-label">Help</span>
-                </a>
-            </nav>
-        </aside>
-
-        <!-- ========== MAIN CONTENT ========== -->
-        <main class="main-content">
-            <!-- Top Bar -->
-            <div class="top-bar">
-                <div class="breadcrumb">Home Base / <span>Dashboard</span></div>
-                <div class="top-bar-actions">
-                    <span class="status-dot" title="System Online"></span>
-                    <span class="live-text">Live Monitoring</span>
-                    <button class="btn-icon" title="Notifications">🔔</button>
-                    <button class="btn-icon" title="Refresh" onclick="location.reload()">🔄</button>
-                </div>
-            </div>
-
-            <!-- Dashboard Grid -->
-            <div class="dashboard-container">
-
-                <!-- === HERO === -->
-                <section class="hero">
-                    <div class="hero-center">
-                        <div class="hero-time" id="liveClock">--:--</div>
-                        <div class="hero-greeting">
-                            Hello, User! <span>🎉</span>
-                        </div>
-                        <div class="hero-subtitle">All systems are running smoothly today.</div>
-                        <div class="hero-date" id="liveDate"></div>
-                    </div>
-                </section>
-
-                <!-- === OVERVIEW CARDS === -->
-                <div class="overview-cards">
-                    <!-- System Health -->
-                    <div class="overview-card">
-                        <div class="overview-icon icon-sec">💚</div>
-                        <div>
-                            <div class="overview-value">98%</div>
-                            <div class="overview-label">System Health</div>
-                            <div class="overview-sub good">✦ Excellent Condition</div>
-                        </div>
-                    </div>
-                    <!-- Fuel Tank -->
-                    <div class="overview-card">
-                        <div class="overview-icon icon-wrn">⛽</div>
-                        <div>
-                            <div class="overview-value">85%</div>
-                            <div class="overview-label">Fuel Tank Level</div>
-                            <div class="fuel-progress-wrap">
-                                <div class="fuel-progress-bar">
-                                    <div class="fuel-progress-fill good" style="width:85%;"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Voltage -->
-                    <div class="overview-card">
-                        <div class="overview-icon icon-prm">⚡</div>
-                        <div>
-                            <div class="overview-value">13.2<span style="font-size:0.8rem;font-weight:500;">V</span></div>
-                            <div class="overview-label">Voltage</div>
-                            <div class="overview-sub good">✦ Stable Output</div>
-                        </div>
-                    </div>
-                    <!-- Next OR Charge -->
-                    <div class="overview-card">
-                        <div class="overview-icon icon-prm">⏱️</div>
-                        <div>
-                            <div class="overview-value">145<span style="font-size:0.8rem;font-weight:500;"> Hrs</span></div>
-                            <div class="overview-label">Next OR Charge</div>
-                            <div class="overview-sub">Calibrated to 3 months</div>
-                        </div>
-                        <div style="margin-top:14px; border-top:1px solid #e2e8f0; padding-top:12px;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                                <h3 style="font-size:0.95rem;color:#0f172a;">Maintenance Real-Time</h3>
-                                <span id="maintenanceCostTotal" style="font-size:0.82rem;color:#1745a5;font-weight:700;">Total biaya: Rp 0</span>
-                            </div>
-                            <div id="maintenancePublicList" style="display:grid;gap:8px;">
-                                <div class="alert-card ac-info">
-                                    <div class="ac-icon">🛠️</div>
-                                    <div class="ac-content">
-                                        <div class="ac-title">Memuat jadwal maintenance...</div>
-                                        <div class="ac-desc">Mengambil data dari konfigurasi halaman teknisi.</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- === GRID 3: Fuel & Costs | Weekly Chart | Active Subsystems === -->
-                <div class="grid-3">
-                    <!-- Fuel & Costs Card -->
-                    <div class="card">
-                        <h3>⛽ Fuel &amp; Costs</h3>
-                        <div class="list-row">
-                            <span>Charging Status</span>
-                            <span class="st-ok">● Charging Optimally</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Calibration</span>
-                            <span class="st-ok">✓ 3 Months</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Est. Monthly Cost</span>
-                            <span>$142.50</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Fuel Efficiency</span>
-                            <span>92%</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Last Refill</span>
-                            <span>Mar 18, 2026</span>
-                        </div>
-                        <div style="margin-top:auto;padding-top:12px;">
-                            <div class="fuel-progress-wrap">
-                                <span style="font-size:var(--text-xs-size);color:var(--muted);">Tank Reserve</span>
-                                <div class="fuel-progress-bar">
-                                    <div class="fuel-progress-fill good" style="width:85%;"></div>
-                                </div>
-                                <span style="font-size:var(--text-xs-size);color:var(--muted);">85% remaining</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Weekly Runtime Activity Chart -->
-                    <div class="card">
-                        <h3>📊 Weekly Runtime Activity</h3>
-                        <p style="font-size:var(--text-xs-size);color:var(--muted);margin-bottom:10px;">
-                            How often your generator stopped in to help.
-                        </p>
-                        <div class="chart-tabs">
-                            <button class="chart-tab" data-range="day">Day</button>
-                            <button class="chart-tab active" data-range="week">Week</button>
-                            <button class="chart-tab" data-range="month">Month</button>
-                        </div>
-                        <div class="chart-box">
-                            <canvas id="runtimeChart"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- Active Subsystems Card -->
-                    <div class="card">
-                        <h3>🔧 Active Subsystems</h3>
-                        <div class="list-row">
-                            <span>Cooling Fan</span>
-                            <span class="st-ok">● Running Smoothly</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Wi-Fi Module</span>
-                            <span class="st-ok">● Strong Signal</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Block Heater</span>
-                            <span class="st-muted">○ Currently Off</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Battery Array</span>
-                            <span class="st-ok">● 4 of 4 Online</span>
-                        </div>
-                        <div class="list-row">
-                            <span>Auto-Transfer Switch</span>
-                            <span class="st-ok">● Ready</span>
-                        </div>
-                        <div style="margin-top:auto;padding-top:14px;text-align:center;">
-                            <button class="btn-outline" id="btnViewBattery" title="View full battery details">
-                                🔋 View Full Battery
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- === GRID 2: Settings/Help | System Alerts === -->
-                <div class="grid-2">
-                    <!-- Settings / Need Help -->
-                    <div class="section-block" style="display:flex;flex-direction:column;gap:16px;">
-                        <div class="section-heading compact">
-                            <div>
-                                <div class="section-eyebrow">Settings</div>
-                                <h2>Need Help?</h2>
-                            </div>
-                        </div>
-                        <p class="section-copy" style="margin-bottom:4px;">
-                            Chat with a friendly technician now. Our team is standing by to assist you with any generator issues.
-                        </p>
-                        <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                            <button class="btn-chat" id="btnChatTechnician">
-                                💬 Chat with Technician
-                            </button>
-                            <button class="btn-outline">
-                                📞 Schedule Call
-                            </button>
-                        </div>
-                        <div style="margin-top:8px;padding:12px;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;">
-                            <span style="font-size:var(--text-xs-size);color:var(--secondary-dark);font-weight:600;">🟢
-                                Online</span>
-                            <span style="font-size:var(--text-xs-size);color:var(--muted);margin-left:8px;">Typical response
-                                &lt; 2 min</span>
-                        </div>
-                    </div>
-
-                    <!-- System Alerts -->
-                    <div class="section-block">
-                        <div class="section-heading compact">
-                            <div>
-                                <div class="section-eyebrow">Notifications</div>
-                                <h2>System Alerts</h2>
-                            </div>
-                        </div>
-                        <div id="alertContainer">
-                            <div class="alert-card ac-warning">
-                                <div class="ac-icon">⚠️</div>
-                                <div class="ac-content">
-                                    <div class="ac-title">Scheduled Maintenance</div>
-                                    <div class="ac-desc">Oil change due in 45 operating hours.</div>
-                                </div>
-                                <span class="ac-date">Apr 20</span>
-                            </div>
-                            <div class="alert-card ac-info">
-                                <div class="ac-icon">ℹ️</div>
-                                <div class="ac-content">
-                                    <div class="ac-title">Firmware Update Available</div>
-                                    <div class="ac-desc">Version 4.2.1 includes performance patches.</div>
-                                </div>
-                                <span class="ac-date">Apr 18</span>
-                            </div>
-                            <div class="alert-card ac-critical">
-                                <div class="ac-icon">❗</div>
-                                <div class="ac-content">
-                                    <div class="ac-title">Low Coolant Warning</div>
-                                    <div class="ac-desc">Resolved — coolant topped off on Apr 15.</div>
-                                </div>
-                                <span class="ac-date">Apr 15</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-            </div><!-- /dashboard-container -->
-        </main>
-    </div>
-
-    <!-- ========== CHAT MODAL ========== -->
-    <div class="modal-overlay" id="chatModalOverlay">
-        <div class="modal-dialog">
-            <h3>💬 Technician Chat</h3>
-            <p>A friendly technician is ready to assist you. In a production environment, this would open a live chat
-                widget.</p>
-            <p style="font-size:var(--text-xs-size);color:var(--secondary-dark);">🟢 Currently available — wait time ~1
-                minute</p>
-            <button class="btn-close" id="btnCloseModal">Got it, thanks!</button>
+    <!-- ================= SIDEBAR ================= -->
+    <aside class="sidebar" id="sidebarContainer">
+        <div class="sb-logo">
+            <div class="sb-logo-icon">⚡</div>
+            <span class="sb-logo-text">Home Base</span>
         </div>
+        <nav class="sb-nav">
+            <!-- section dots akan diisi oleh JS -->
+            <a class="sb-link active" data-section="summarySection" href="#summarySection">
+                <span class="sbl-dot ok" id="navDot-summary"></span>
+                <span>Ringkasan</span>
+            </a>
+            <a class="sb-link" data-section="electricSection" href="#electricSection">
+                <span class="sbl-dot ok" id="navDot-electric"></span>
+                <span>Listrik</span>
+            </a>
+            <a class="sb-link" data-section="engineSection" href="#engineSection">
+                <span class="sbl-dot ok" id="navDot-engine"></span>
+                <span>Mesin</span>
+            </a>
+            <a class="sb-link" data-section="lifespanSection" href="#lifespanSection">
+                <span class="sbl-dot ok" id="navDot-lifespan"></span>
+                <span>Umur Pakai</span>
+            </a>
+            <a class="sb-link" data-section="fuelSection" href="#fuelSection">
+                <span class="sbl-dot ok" id="navDot-fuel"></span>
+                <span>BBM</span>
+            </a>
+            <a class="sb-link" data-section="maintenanceSection" href="#maintenanceSection">
+                <span class="sbl-dot ok" id="navDot-maintenance"></span>
+                <span>Perawatan</span>
+            </a>
+            <a class="sb-link" data-section="decisionSection" href="#decisionSection">
+                <span class="sbl-dot ok" id="navDot-decision"></span>
+                <span>Keputusan</span>
+            </a>
+            <a class="sb-link" data-section="healthSection" href="#healthSection">
+                <span class="sbl-dot ok" id="navDot-health"></span>
+                <span>Kesehatan</span>
+            </a>
+            <a class="sb-link" data-section="eventLogSection" href="#eventLogSection">
+                <span class="sbl-dot ok" id="navDot-eventlog"></span>
+                <span>Log Kejadian</span>
+            </a>
+            <a class="sb-link" data-section="infoSection" href="#infoSection">
+                <span class="sbl-dot ok" id="navDot-info"></span>
+                <span>Info</span>
+            </a>
+        </nav>
+        <div class="sb-footer" style="margin-top:auto;padding:16px 14px;display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,.08);">
+            <div class="sb-avatar" id="sbAvatar">U</div>
+            <div class="sb-user-info">
+                <div class="sb-username" id="sbUsername">Pengguna</div>
+                <button class="sb-logout" id="logoutPublic">Keluar</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ================= MAIN ================= -->
+    <div class="main">
+        <!-- TOP BAR -->
+        <div class="topbar">
+            <button class="tb-menu" id="menuBtn" aria-label="Menu"><i class="fas fa-bars"></i></button>
+            <div class="tb-brand"><i class="fas fa-bolt"></i> Gen-Track <span style="font-weight:500;font-size:13px;color:var(--t3);margin-left:6px;">| Public View</span></div>
+            <div class="tb-right">
+                <div class="live-badge" id="liveBadge">
+                    <span class="live-dot"></span> Live
+                </div>
+                <button class="tb-btn" id="refreshPublic" title="Perbarui data">
+                    <i class="fas fa-rotate"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- ===== SUMMARY ===== -->
+        <section class="summary-wrap" id="summarySection">
+            <div class="summary-card" id="summaryCard">
+                <i class="fas fa-info-circle summary-icon" id="summaryIcon"></i>
+                <div class="summary-text">
+                    <div class="summary-title" id="summaryTitle">Memuat...</div>
+                    <div class="summary-desc" id="summaryDesc">Menghubungkan ke sistem...</div>
+                </div>
+                <span class="summary-badge" id="summaryBadge">--</span>
+            </div>
+        </section>
+
+        <!-- ===== HERO (sumber listrik) ===== -->
+        <section class="hero-wrap" id="heroSection">
+            <div class="hero-card" id="heroCard">
+                <div class="hero-left">
+                    <div class="hero-icon-wrap"><i class="fas fa-plug" id="heroIconI"></i></div>
+                    <div>
+                        <div class="hero-lbl">Sumber Listrik</div>
+                        <div class="hero-val" id="heroSourceName">PLN</div>
+                        <div class="hero-sub" id="heroSourceSub">Terhubung ke jaringan</div>
+                    </div>
+                </div>
+                <div class="hero-right">
+                    <span class="hero-est-lbl">Estimasi Operasi</span>
+                    <span class="hero-est-val" id="heroEstRuntime">--</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== ELECTRIC METRICS ===== -->
+        <section id="electricSection" style="padding:0 22px 6px;">
+            <div class="m4">
+                <div class="mc" id="mcVolt">
+                    <div class="mc-t">
+                        <span class="mci mci-b"><i class="fas fa-bolt"></i></span>
+                        <span class="mc-l">Tegangan</span>
+                    </div>
+                    <div class="mc-v"><span id="mVolt">--</span><em>V</em></div>
+                    <div class="mc-bar"><div class="mc-fill" id="mVoltBar" style="width:0%"></div></div>
+                    <div class="mc-h" id="mVoltHint">--</div>
+                </div>
+                <div class="mc" id="mcFreq">
+                    <div class="mc-t">
+                        <span class="mci mci-t"><i class="fas fa-wave-square"></i></span>
+                        <span class="mc-l">Frekuensi</span>
+                    </div>
+                    <div class="mc-v"><span id="mFreq">--</span><em>Hz</em></div>
+                    <div class="mc-bar"><div class="mc-fill" id="mFreqBar" style="width:0%"></div></div>
+                    <div class="mc-h" id="mFreqHint">--</div>
+                </div>
+                <div class="mc" id="mcAmp">
+                    <div class="mc-t">
+                        <span class="mci mci-a"><i class="fas fa-gauge-high"></i></span>
+                        <span class="mc-l">Arus</span>
+                    </div>
+                    <div class="mc-v"><span id="mAmp">--</span><em>A</em></div>
+                    <div class="mc-bar"><div class="mc-fill" id="mAmpBar" style="width:0%"></div></div>
+                    <div class="mc-h" id="mAmpHint">--</div>
+                </div>
+                <div class="mc" id="mcPow">
+                    <div class="mc-t">
+                        <span class="mci mci-g"><i class="fas fa-chart-line"></i></span>
+                        <span class="mc-l">Daya</span>
+                    </div>
+                    <div class="mc-v"><span id="mPow">--</span><em>kW</em></div>
+                    <div class="mc-bar"><div class="mc-fill" id="mPowBar" style="width:0%"></div></div>
+                    <div class="mc-h" id="mPowHint">--</div>
+                </div>
+            </div>
+            <!-- Trend Chart -->
+            <div class="chart-panel" style="margin-bottom:12px;">
+                <div class="cp-head">
+                    <span>📈 Tren Tegangan & Frekuensi</span>
+                    <div class="cp-leg">
+                        <span class="cpl cpl-b"></span> Tegangan
+                        <span class="cpl cpl-t"></span> Frekuensi
+                    </div>
+                </div>
+                <div style="height:140px;"><canvas id="trendChart"></canvas></div>
+            </div>
+        </section>
+
+        <!-- ===== ENGINE SECTION ===== -->
+        <section id="engineSection" style="padding:0 22px 6px;">
+            <div class="engine-layout">
+                <div class="gauge-card">
+                    <span class="gc-lbl">RPM</span>
+                    <div class="gauge-svg">
+                        <svg viewBox="0 0 180 100" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M 10 90 A 80 80 0 0 1 170 90" fill="none" stroke="var(--border)" stroke-width="14" stroke-linecap="round"/>
+                            <path id="rpmArc" d="M 10 90 A 80 80 0 0 1 170 90" fill="none" stroke="#1f4191" stroke-width="14" stroke-linecap="round" stroke-dasharray="282.7" stroke-dashoffset="282.7" style="transition: stroke-dashoffset 0.4s, stroke 0.3s;"/>
+                            <text x="90" y="55" text-anchor="middle" class="gv-n" id="rpmVal">0</text>
+                            <text x="90" y="72" text-anchor="middle" class="gv-u">RPM</text>
+                        </svg>
+                    </div>
+                    <div class="gc-status" id="rpmStatus">Standby</div>
+                </div>
+                <div class="gauge-card">
+                    <span class="gc-lbl">Suhu Mesin</span>
+                    <div class="gauge-svg">
+                        <svg viewBox="0 0 180 100" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M 10 90 A 80 80 0 0 1 170 90" fill="none" stroke="var(--border)" stroke-width="14" stroke-linecap="round"/>
+                            <path id="tempArc" d="M 10 90 A 80 80 0 0 1 170 90" fill="none" stroke="#10b981" stroke-width="14" stroke-linecap="round" stroke-dasharray="282.7" stroke-dashoffset="282.7" style="transition: stroke-dashoffset 0.4s, stroke 0.3s;"/>
+                            <text x="90" y="55" text-anchor="middle" class="gv-n" id="tempVal">0</text>
+                            <text x="90" y="72" text-anchor="middle" class="gv-u">°C</text>
+                        </svg>
+                    </div>
+                    <div class="gc-status" id="tempStatus">Dingin</div>
+                </div>
+                <div class="engine-stats">
+                    <div class="es" id="esOil">
+                        <span class="es-ico"><i class="fas fa-oil-can"></i></span>
+                        <div class="es-body"><span class="es-l">Tekanan Oli</span><strong id="esOilVal">--</strong></div>
+                        <span class="es-dot" id="esOilDot"></span>
+                    </div>
+                    <div class="es" id="esCoolant">
+                        <span class="es-ico"><i class="fas fa-droplet"></i></span>
+                        <div class="es-body"><span class="es-l">Coolant Level</span><strong id="esCoolantVal">--</strong></div>
+                        <span class="es-dot" id="esCoolantDot"></span>
+                    </div>
+                    <div class="es" id="esBatt">
+                        <span class="es-ico"><i class="fas fa-car-battery"></i></span>
+                        <div class="es-body"><span class="es-l">Baterai</span><strong id="esBattVal">--</strong></div>
+                        <span class="es-dot" id="esBattDot"></span>
+                    </div>
+                    <div class="es" id="esLoad">
+                        <span class="es-ico"><i class="fas fa-weight-hanging"></i></span>
+                        <div class="es-body"><span class="es-l">Beban</span><strong id="esLoadVal">--</strong></div>
+                        <span class="es-dot" id="esLoadDot"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== LIFESPAN + UPTIME ===== -->
+        <section id="lifespanSection" style="padding:0 22px 6px;">
+            <div class="lifespan-layout">
+                <div class="ls-donut-card">
+                    <div class="lsdc-chart"><canvas id="lifespanDonut"></canvas>
+                        <div class="lsdc-center">
+                            <div class="lsdc-pct" id="ldcPct">100%</div>
+                            <div class="lsdc-sub">usia sisa</div>
+                        </div>
+                    </div>
+                    <div class="lsdc-stats">
+                        <div class="lsdc-row"><span>Total Jam</span><strong id="engHoursTotal">--</strong></div>
+                        <div class="lsdc-row"><span>Sisa Umur</span><strong id="engHoursRemain">--</strong></div>
+                    </div>
+                </div>
+                <div class="ls-uptime-card">
+                    <div class="lsuc-head">
+                        <span>⏱️ Waktu Operasi Mingguan</span>
+                        <strong id="weeklyTotal">0 jam</strong>
+                    </div>
+                    <div style="height:160px;"><canvas id="uptimeChart"></canvas></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== FUEL SECTION ===== -->
+        <section id="fuelSection" style="padding:0 22px 6px;">
+            <div class="fuel-layout">
+                <div class="fuel-card">
+                    <div class="fuel-gauge-wrap">
+                        <span style="font-size:13px;font-weight:700;color:var(--t2);">⛽ Level Bahan Bakar</span>
+                        <div class="fuel-track">
+                            <div class="fuel-fill" id="fuelBarFill" style="width:0%;"></div>
+                            <span class="fuel-pct" id="fuelPct">--%</span>
+                        </div>
+                        <div class="fuel-ticks">
+                            <span>0</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                        </div>
+                    </div>
+                    <div class="fuel-stats">
+                        <div class="fst">
+                            <i class="fas fa-clock"></i>
+                            <div><span>Estimasi operasi</span><strong id="fuelRuntime">--</strong></div>
+                        </div>
+                        <div class="fst">
+                            <i class="fas fa-money-bill-wave"></i>
+                            <div><span>Biaya per jam</span><strong id="costPerHour">Rp --</strong></div>
+                        </div>
+                        <div class="fst">
+                            <i class="fas fa-calendar-day"></i>
+                            <div><span>Estimasi biaya hari ini</span><strong id="costDaily">Rp --</strong></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="fuel-advice" id="fuelAdvice">
+                    <i class="fas fa-circle-info fai"></i>
+                    <p id="fuelAdviceText">Menunggu data...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== MAINTENANCE SECTION ===== -->
+        <section id="maintenanceSection" style="padding:0 22px 6px;">
+            <div class="maint-summary">
+                <div class="ms-box"><div class="ms-n ms-ok" id="maintOkCount">--</div><div class="ms-l">Komponen OK</div></div>
+                <div class="ms-box"><div class="ms-n ms-warn" id="maintWarnCount">--</div><div class="ms-l">Hampir Jatuh Tempo</div></div>
+                <div class="ms-box"><div class="ms-n ms-err" id="maintErrCount">--</div><div class="ms-l">Perlu Servis</div></div>
+                <div class="ms-box ms-next-box">
+                    <div class="ms-nv" id="maintNextDate">--</div>
+                    <div class="ms-l">Servis Berikutnya</div>
+                </div>
+            </div>
+            <!-- Banner servis berikutnya -->
+            <div class="nsb" id="nextServiceBanner" style="margin-bottom:12px;">
+                <div class="nsb-ico"><i class="fas fa-calendar-check"></i></div>
+                <div class="nsb-body">
+                    <div class="nsb-t" id="nsbTitle">Memuat jadwal...</div>
+                    <div class="nsb-s" id="nsbSub">--</div>
+                </div>
+                <div class="nsb-val" id="nsbVal">--</div>
+            </div>
+            <!-- Daftar komponen -->
+            <div class="maint-list" id="maintList"></div>
+        </section>
+
+        <!-- ===== DECISION SECTION ===== -->
+        <section id="decisionSection" style="padding:0 22px 6px;">
+            <div class="decision-card">
+                <p class="decision-line"><strong>Status:</strong> <span id="decisionStatusText">-</span></p>
+                <p class="decision-line"><strong>Pesan:</strong> <span id="decisionMessageText">-</span></p>
+                <p class="decision-line"><strong>Rekomendasi:</strong> <span id="decisionRecommendationText">-</span></p>
+                <button class="decision-approve-btn" id="approveDecisionBtn" disabled>Setujui</button>
+                <small id="decisionApproveInfo"></small>
+            </div>
+        </section>
+
+        <!-- ===== HEALTH GRID ===== -->
+        <section id="healthSection" style="padding:0 22px 6px;">
+            <div class="health-grid">
+                <div class="hc" id="hcPLN">
+                    <div class="hc-l">
+                        <span class="hc-dot" id="hcPLNDot"></span>
+                        <div><div class="hc-t">PLN</div><div class="hc-d" id="hcPLNDesc">--</div></div>
+                    </div>
+                    <span class="hc-badge" id="hcPLNBadge">--</span>
+                </div>
+                <div class="hc" id="hcGen">
+                    <div class="hc-l">
+                        <span class="hc-dot" id="hcGenDot"></span>
+                        <div><div class="hc-t">Generator</div><div class="hc-d" id="hcGenDesc">--</div></div>
+                    </div>
+                    <span class="hc-badge" id="hcGenBadge">--</span>
+                </div>
+                <div class="hc" id="hcSync">
+                    <div class="hc-l">
+                        <span class="hc-dot" id="hcSyncDot"></span>
+                        <div><div class="hc-t">Sinkronisasi</div><div class="hc-d" id="hcSyncDesc">--</div></div>
+                    </div>
+                    <span class="hc-badge" id="hcSyncBadge">--</span>
+                </div>
+                <div class="hc" id="hcAuto">
+                    <div class="hc-l">
+                        <span class="hc-dot" id="hcAutoDot"></span>
+                        <div><div class="hc-t">ATS</div><div class="hc-d" id="hcAutoDesc">--</div></div>
+                    </div>
+                    <span class="hc-badge" id="hcAutoBadge">--</span>
+                </div>
+                <div class="hc" id="hcEngine">
+                    <div class="hc-l">
+                        <span class="hc-dot" id="hcEngineDot"></span>
+                        <div><div class="hc-t">Mesin</div><div class="hc-d" id="hcEngineDesc">--</div></div>
+                    </div>
+                    <span class="hc-badge" id="hcEngineBadge">--</span>
+                </div>
+                <div class="hc" id="hcMaint">
+                    <div class="hc-l">
+                        <span class="hc-dot" id="hcMaintDot"></span>
+                        <div><div class="hc-t">Perawatan</div><div class="hc-d" id="hcMaintDesc">--</div></div>
+                    </div>
+                    <span class="hc-badge" id="hcMaintBadge">--</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== EVENT LOG ===== -->
+        <section id="eventLogSection" style="padding:0 22px 6px;">
+            <div class="event-log" id="eventLogList"></div>
+        </section>
+
+        <!-- ===== INFO ===== -->
+        <section id="infoSection" style="padding:0 22px 6px;">
+            <div class="info-layout">
+                <div class="info-msg">
+                    <div class="im-header"><span class="im-ico"><i class="fas fa-broadcast-tower"></i></span>Pesan Sistem</div>
+                    <p id="publicMessage">Mengambil data...</p>
+                </div>
+                <div class="info-tips">
+                    <div class="it-header"><i class="fas fa-lightbulb"></i> Tips & Saran</div>
+                    <ul id="publicTips"></ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- FOOTER -->
+        <footer class="page-footer">
+            <span id="lastUpdate">🕒 Belum diperbarui</span>
+            <span style="margin-left:auto;">&copy; Gen-Track Public</span>
+        </footer>
     </div>
 
-    <script>
-        (function() {
-            // ========== LIVE CLOCK ==========
-            const clockEl = document.getElementById('liveClock');
-            const dateEl = document.getElementById('liveDate');
-
-            function updateClock() {
-                const now = new Date();
-                const h = now.getHours().toString().padStart(2, '0');
-                const m = now.getMinutes().toString().padStart(2, '0');
-                const s = now.getSeconds().toString().padStart(2, '0');
-                clockEl.textContent = `${h}:${m}:${s}`;
-
-                const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-                dateEl.textContent = now.toLocaleDateString('en-US', opts);
-            }
-            updateClock();
-            setInterval(updateClock, 1000);
-
-            // ========== CHART (Chart.js) ==========
-            const ctx = document.getElementById('runtimeChart').getContext('2d');
-            let runtimeChart;
-
-            const chartDataSets = {
-                day: {
-                    labels: ['00-04', '04-08', '08-12', '12-16', '16-20', '20-24'],
-                    data: [12, 8, 22, 35, 28, 15],
-                    label: 'Runtime (min) — Today'
-                },
-                week: {
-                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-                    data: [65, 45, 80, 55, 70, 35, 25],
-                    label: 'Runtime (%) — This Week'
-                },
-                month: {
-                    labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
-                    data: [58, 72, 49, 63],
-                    label: 'Avg Runtime (%) — This Month'
-                }
-            };
-
-            function getGradient(ctx, chartArea, color1, color2) {
-                const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-                gradient.addColorStop(0, color1);
-                gradient.addColorStop(1, color2);
-                return gradient;
-            }
-
-            function createChart(rangeKey) {
-                const ds = chartDataSets[rangeKey];
-                if (runtimeChart) runtimeChart.destroy();
-
-                runtimeChart = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: ds.labels,
-                        datasets: [{
-                            label: ds.label,
-                            data: ds.data,
-                            backgroundColor: function(context) {
-                                const chart = context.chart;
-                                const { ctx, chartArea } = chart;
-                                if (!chartArea) return 'rgba(59,107,223,0.6)';
-                                return getGradient(ctx, chartArea, 'rgba(23,69,165,0.45)',
-                                    'rgba(59,107,223,0.85)');
-                            },
-                            borderColor: 'rgba(23,69,165,0.9)',
-                            borderWidth: 1.5,
-                            borderRadius: 8,
-                            borderSkipped: false,
-                            hoverBackgroundColor: 'rgba(59,107,223,0.95)',
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: true, labels: { font: { size: 11 }, usePointStyle: true,
-                                    pointStyleWidth: 8, padding: 20 } },
-                            tooltip: {
-                                backgroundColor: '#0f172a',
-                                titleFont: { weight: 'bold' },
-                                bodyFont: { size: 12 },
-                                cornerRadius: 8,
-                                padding: 12,
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                max: 100,
-                                ticks: { stepSize: 20, font: { size: 10 }, callback: v => v + (rangeKey ===
-                                        'day' ? 'm' : '%') },
-                                grid: { color: 'rgba(208,215,225,0.4)', drawBorder: false },
-                            },
-                            x: {
-                                ticks: { font: { size: 10, weight: '600' } },
-                                grid: { display: false },
-                            }
-                        },
-                        animation: { duration: 600, easing: 'easeOutQuart' },
-                    }
-                });
-            }
-
-            createChart('week');
-
-            // Chart tab switching
-            const chartTabs = document.querySelectorAll('.chart-tab');
-            chartTabs.forEach(tab => {
-                tab.addEventListener('click', function() {
-                    chartTabs.forEach(t => t.classList.remove('active'));
-                    this.classList.add('active');
-                    const range = this.getAttribute('data-range');
-                    createChart(range);
-                });
-            });
-
-            // ========== CHAT MODAL ==========
-            const modalOverlay = document.getElementById('chatModalOverlay');
-            const btnChat = document.getElementById('btnChatTechnician');
-            const btnCloseModal = document.getElementById('btnCloseModal');
-
-            btnChat.addEventListener('click', () => {
-                modalOverlay.classList.add('show');
-            });
-
-            btnCloseModal.addEventListener('click', () => {
-                modalOverlay.classList.remove('show');
-            });
-
-            modalOverlay.addEventListener('click', function(e) {
-                if (e.target === modalOverlay) {
-                    modalOverlay.classList.remove('show');
-                }
-            });
-
-            // ========== VIEW FULL BATTERY ==========
-            const btnBattery = document.getElementById('btnViewBattery');
-            btnBattery.addEventListener('click', () => {
-                const battInfo = `
-        🔋 Battery Array Details:
-        ─────────────────────
-        • Battery 1: 13.2V — Healthy
-        • Battery 2: 13.1V — Healthy
-        • Battery 3: 13.3V — Healthy
-        • Battery 4: 13.0V — Healthy
-        ─────────────────────
-        Total Capacity: 98%
-        Last Tested: Apr 25, 2026
-              `.trim();
-                alert(battInfo);
-            });
-
-            // ========== ALERT CARD CLICK ==========
-            document.querySelectorAll('.alert-card').forEach(card => {
-                card.addEventListener('click', function() {
-                    const title = this.querySelector('.ac-title').textContent;
-                    const desc = this.querySelector('.ac-desc').textContent;
-                    alert(`📢 ${title}\n\n${desc}\n\nTap again to dismiss.`);
-                });
-            });
-
-            // ========== REAL ALERT + MAINTENANCE ==========
-            function formatRupiah(value) {
-                return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value || 0));
-            }
-
-            function alertClass(severity = '') {
-                const s = String(severity).toLowerCase();
-                if (s === 'critical' || s === 'high') return 'ac-critical';
-                if (s === 'medium') return 'ac-warning';
-                return 'ac-info';
-            }
-
-            async function loadPublicAlertAndMaintenance() {
-                try {
-                    const [alertRes, maintenanceRes] = await Promise.all([
-                        fetch('/api/alerts?limit=5'),
-                        fetch('/api/maintenance')
-                    ]);
-
-                    const alertJson = alertRes.ok ? await alertRes.json() : { data: [] };
-                    const maintenanceJson = maintenanceRes.ok ? await maintenanceRes.json() : { data: [] };
-
-                    const alerts = Array.isArray(alertJson.data) ? alertJson.data : [];
-                    const maints = Array.isArray(maintenanceJson.data) ? maintenanceJson.data : [];
-
-                    const alertContainer = document.getElementById('alertContainer');
-                    if (alertContainer) {
-                        alertContainer.innerHTML = alerts.length ? alerts.map(a => `
-                            <div class="alert-card ${alertClass(a.severity)}">
-                                <div class="ac-icon">${a.severity === 'critical' ? '❗' : a.severity === 'medium' ? '⚠️' : 'ℹ️'}</div>
-                                <div class="ac-content">
-                                    <div class="ac-title">${a.parameter ? String(a.parameter).toUpperCase() : 'Alert Sistem'}</div>
-                                    <div class="ac-desc">${a.message || 'Notifikasi sistem generator.'}</div>
-                                </div>
-                                <span class="ac-date">${a.timestamp ? new Date(a.timestamp).toLocaleDateString('id-ID', { day:'2-digit', month:'short' }) : '-'}</span>
-                            </div>
-                        `).join('') : '<div class="alert-card ac-info"><div class="ac-icon">✅</div><div class="ac-content"><div class="ac-title">Tidak Ada Alert Aktif</div><div class="ac-desc">Belum ada alert terbaru dari database.</div></div></div>';
-                    }
-
-                    const maintenanceList = document.getElementById('maintenancePublicList');
-                    const maintenanceCostTotal = document.getElementById('maintenanceCostTotal');
-                    const pendingMaint = maints.filter(m => String(m.status || 'scheduled').toLowerCase() !== 'completed').slice(0, 5);
-                    const totalCost = pendingMaint.reduce((sum, m) => sum + Number(m.cost || 0), 0);
-                    if (maintenanceCostTotal) maintenanceCostTotal.textContent = `Total biaya: ${formatRupiah(totalCost)}`;
-
-                    if (maintenanceList) {
-                        maintenanceList.innerHTML = pendingMaint.length ? pendingMaint.map(m => `
-                            <div class="alert-card ${String(m.priority || '').toLowerCase() === 'high' ? 'ac-critical' : 'ac-warning'}">
-                                <div class="ac-icon">🛠️</div>
-                                <div class="ac-content">
-                                    <div class="ac-title">${m.task || 'Maintenance Task'}</div>
-                                    <div class="ac-desc">${m.type || 'Preventive'} • Status: ${m.status || 'scheduled'} • Biaya: ${formatRupiah(m.cost || 0)}</div>
-                                </div>
-                                <span class="ac-date">${m.dueDate ? new Date(m.dueDate).toLocaleDateString('id-ID', { day:'2-digit', month:'short' }) : '-'}</span>
-                            </div>
-                        `).join('') : '<div class="alert-card ac-info"><div class="ac-icon">✅</div><div class="ac-content"><div class="ac-title">Tidak Ada Maintenance Pending</div><div class="ac-desc">Semua jadwal maintenance sudah selesai.</div></div></div>';
-                    }
-                } catch (error) {
-                    console.warn('Gagal memuat alert/maintenance public:', error);
-                }
-            }
-
-            document.getElementById('alertContainer')?.addEventListener('click', function(e) {
-                const card = e.target.closest('.alert-card');
-                if (!card) return;
-                const title = card.querySelector('.ac-title')?.textContent || 'Informasi';
-                const desc = card.querySelector('.ac-desc')?.textContent || '';
-                alert(`📢 ${title}
-
-${desc}`);
-            });
-
-            loadPublicAlertAndMaintenance();
-            setInterval(loadPublicAlertAndMaintenance, 30000);
-
-            console.log('🏠 Home Base Dashboard — All systems ready.');
-            console.log('📊 Chart initialized | 🕐 Live clock running | 💬 Chat modal ready');
-        })();
-    </script>
+    <!-- Main Script -->
+    <script src="js/public-view.js"></script>
 </body>
 </html>
-
