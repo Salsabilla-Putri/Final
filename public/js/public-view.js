@@ -236,9 +236,9 @@ function updateDashboard(data) {
     currentData.rpm = Number(data.rpm) || currentData.rpm;
     currentData.coolant = Number(data.coolant_temp || data.temp) || currentData.coolant;
     currentData.fuel = Number(data.fuel) || currentData.fuel;
-    currentData.iat = Number(data.iat) || (currentData.rpm > 0 ? 30 + Math.random() * 5 : 25);
-    currentData.afr = Number(data.afr) || (currentData.rpm > 0 ? 14.2 + (Math.random() * 1 - 0.5) : 0);
-    currentData.throttle = Number(data.throttle) || (currentData.rpm > 0 ? 35 + (currentData.rpm / 3600) * 30 : 0);
+    currentData.iat = Number(data.iat ?? data.intake_temp ?? 0);
+    currentData.afr = Number(data.afr ?? 0);
+    currentData.throttle = Number(data.throttle ?? data.tps ?? 0);
     currentData.engineHours = Number(data.engineHours) || currentData.engineHours;
     currentData.isRunning = String(data.status || '').toLowerCase() === 'on' || currentData.rpm > 50;
     const sync = String(data.sync || '').toUpperCase();
@@ -305,7 +305,8 @@ function updateDashboard(data) {
     const allGood = elecOk && engineOk && fuelOk && maintOk;
     const sysDot = $('#sbSysDot');
     if (sysDot) sysDot.className = `ssb-dot ${allGood ? 'ok' : (currentData.fuel < 10 ? 'err' : 'warn')}`;
-    $('#sbSysLabel').innerText = allGood ? 'Semua Sistem Normal' : 'Ada yang perlu diperiksa';
+    const sysLabel = $('#sbSysLabel');
+    if (sysLabel) sysLabel.innerText = allGood ? 'Semua Sistem Normal' : 'Ada yang perlu diperiksa';
     
     // Last update time
     $('#lastUpdate').innerHTML = `<i class="fas fa-clock"></i> Diperbarui: ${new Date().toLocaleString('id-ID')}`;
@@ -381,20 +382,18 @@ function callTechnician() {
 
 // ---------- Sidebar & Logout (mobile toggle) ----------
 function initSidebar() {
-    const btn = $('#menuBtn');
-    const overlay = $('#sbOverlay');
-    const sidebar = $('#sidebar');
-    const toggle = () => document.body.classList.toggle('sb-open');
-    btn?.addEventListener('click', toggle);
-    overlay?.addEventListener('click', toggle);
-    document.querySelectorAll('.sb-link').forEach(link => link.addEventListener('click', () => document.body.classList.remove('sb-open')));
-    
     const name = localStorage.getItem('username') || 'Pengguna';
-    $('#sbUsername').innerText = name;
-    $('#welcomeText').innerHTML = `👋 Welcome, ${name.split(' ')[0]}!`;
-    $('#sbAvatar').innerText = name.charAt(0).toUpperCase();
-    
-    $('#logoutPublic')?.addEventListener('click', () => { localStorage.clear(); window.location.href = 'login.html'; });
+    const userEl = document.querySelector('#user-btn span');
+    if (userEl) userEl.innerText = name;
+
+    fetch('sidebar.html')
+        .then(r => r.text())
+        .then(h => {
+            const container = document.getElementById('sidebar-container');
+            if (container) container.innerHTML = h;
+        })
+        .catch(err => console.warn('Sidebar load failed:', err));
+
     $('#callTechnicianBtn')?.addEventListener('click', callTechnician);
     $('#refreshPublic')?.addEventListener('click', loadData);
 }
@@ -406,7 +405,7 @@ window.addEventListener('DOMContentLoaded', () => {
     initCharts();
     loadData();
     connectMQTT();
-    setInterval(loadData, 5000);
+    setInterval(loadData, 800);
     // Event dummy awal
     setTimeout(() => {
         addEvent('system', 'Sistem siap dipantau', 'ok');
