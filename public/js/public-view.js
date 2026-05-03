@@ -1,388 +1,243 @@
-/**
- * Gen-Track Dashboard v5.0 - Sidebar dinamis, parameter lengkap, estimasi umur, biaya, perawatan
- */
 'use strict';
 
-// ---------- Constants ----------
-const VOLT_LO = 198, VOLT_HI = 242;
-const FREQ_LO = 49.5, FREQ_HI = 50.5;
-const ENGINE_LIFE_H = 10000;          // total umur mesin (jam)
-const AVG_CONSUMPTION_LPH = 2.5;      // konsumsi BBM rata-rata (L/jam)
-const FUEL_PRICE_PER_LITER = 12000;   // Rp per liter
-const TANK_CAPACITY_L = 50;           // liter
+const AVG_CONSUMPTION_LPH = 2.5; 
+const TANK_CAPACITY_L = 50;      
+const FUEL_PRICE_PER_LITER = 12000;
 
-// Maintenance items (interval jam)
-const MAINT_ITEMS = [
-    { name: 'Ganti Oli', interval: 250 },
-    { name: 'Filter Udara', interval: 500 },
-    { name: 'Busi', interval: 1000 },
-    { name: 'Coolant', interval: 1000 },
-    { name: 'Servis Besar', interval: 2500 }
-];
-
-// ---------- Global state ----------
 let uptimeChart = null;
-let donutChart = null;
-let eventLog = [];
-let dailyTotalCost = 0;
-let lastRuntimeUpdate = Date.now();
-let todayActiveSeconds = 0;
-let lastActiveTick = null;
-
-let currentData = {
-    volt: 0, freq: 0, current: 0, power: 0,
-    rpm: 0, iat: 0, coolant: 0, fuel: 0, afr: 0, throttle: 0,
-    engineHours: 0, isRunning: false, syncOk: false, source: 'OFF'
-};
-
-// ---------- DOM helpers ----------
 const $ = id => document.getElementById(id);
-const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+// Format Rupiah
 const formatRupiah = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
 
-// ---------- Event log ----------
-function addEvent(type, text, status = 'ok') {
-    const timeStr = new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' });
-    eventLog.unshift({ time: timeStr, type, text, status });
-    if (eventLog.length > 25) eventLog.pop();
-    renderRecentActivities();
-    renderRecentAlerts();
-}
-
-function renderRecentActivities() {
-    const container = $('#recentActivityList');
-    if (!container) return;
-    if (eventLog.length === 0) {
-        container.innerHTML = '<div class="activity-item">Tidak ada aktivitas baru</div>';
-        return;
-    }
-    container.innerHTML = eventLog.slice(0,5).map(ev => `
-        <div class="activity-item">
-            <i class="fas fa-${ev.type === 'source' ? 'bolt' : 'circle-info'}"></i>
-            <span>${ev.text}</span>
-            <span style="margin-left:auto; font-size:0.65rem;">${ev.time}</span>
-        </div>
-    `).join('');
-}
-
-function renderRecentAlerts() {
-    const container = $('#recentAlertsList');
-    if (!container) return;
-    const alerts = eventLog.filter(ev => ev.status === 'warn' || ev.status === 'err').slice(0,4);
-    if (alerts.length === 0) {
-        container.innerHTML = '<div class="alert-item info"><i class="fas fa-check-circle"></i> Tidak ada alert aktif</div>';
-        return;
-    }
-    container.innerHTML = alerts.map(alert => `
-        <div class="alert-item ${alert.status}">
-            <i class="fas fa-exclamation-triangle"></i> ${alert.text}
-            <span style="margin-left:auto; font-size:0.65rem;">${alert.time}</span>
-        </div>
-    `).join('');
-}
-
-// ---------- Charts ----------
-function initCharts() {
-    const ctx = $('#uptimeChart');
+function initUptimeChart() {
+    const ctx = $('uptimeChart');
     if (ctx && !uptimeChart) {
+        // Efek gradient untuk chart
+        let gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 400);
+        gradient.addColorStop(0, 'rgba(59, 130, 246, 0.5)'); // Blue
+        gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
         uptimeChart = new Chart(ctx, {
             type: 'bar',
-            data: { labels: ['Min','Sen','Sel','Rab','Kam','Jum','Sab'], datasets: [{ label:'Jam Operasi', data:[0,0,0,0,0,0,0], backgroundColor:'#1f6392', borderRadius:8 }] },
-            options: { responsive: true, maintainAspectRatio: true, scales: { y: { beginAtZero: true, max: 24 } }, plugins: { legend: { display: false } } }
-        });
-    }
-    const dctx = $('#lifespanDonut');
-    if (dctx && !donutChart) {
-        donutChart = new Chart(dctx, {
-            type: 'doughnut',
-            data: { datasets: [{ data: [0, ENGINE_LIFE_H], backgroundColor: ['#1f6392', '#e6f0f9'], borderWidth: 0 }] },
-            options: { cutout: '70%', responsive: false, maintainAspectRatio: true, plugins: { legend: { display: false }, tooltip: { enabled: false } } }
+            data: { 
+                labels: ['H-6', 'H-5', 'H-4', 'H-3', 'H-2', 'Kemarin', 'Hari Ini'], 
+                datasets: [{ 
+                    label: 'Jam Aktif', 
+                    data: [0, 0, 0, 0, 0, 0, 0], 
+                    backgroundColor: gradient,
+                    borderColor: '#3b82f6',
+                    borderWidth: 2,
+                    borderRadius: {topLeft: 8, topRight: 8},
+                    barPercentage: 0.6
+                }] 
+            },
+            options: { 
+                responsive: true, maintainAspectRatio: false, 
+                plugins: { legend: { display: false } },
+                scales: { 
+                    y: { beginAtZero: true, suggestedMax: 10, grid: { borderDash: [5, 5] } },
+                    x: { grid: { display: false } }
+                }
+            }
         });
     }
 }
 
-function updateLifespan(engineHours) {
-    const used = clamp(engineHours, 0, ENGINE_LIFE_H);
-    const remain = ENGINE_LIFE_H - used;
-    if (donutChart) {
-        donutChart.data.datasets[0].data = [used, remain];
-        donutChart.update();
-    }
-    $('#lifespanRemainText').innerText = remain.toFixed(0) + ' jam';
-    return remain;
+// Menghitung Kesehatan Sistem (Skala 0 - 100%)
+function calculateHealthScore(temp, fuel, isRunning, volt) {
+    let score = 100;
+    
+    // Penalti Suhu
+    if (temp > 95) score -= 40;
+    else if (temp > 85) score -= 15;
+    
+    // Penalti Bahan Bakar
+    if (fuel < 10) score -= 30;
+    else if (fuel < 25) score -= 15;
+    
+    // Penalti Listrik (Jika PLN tapi voltase ngedrop ekstrim)
+    if (!isRunning && volt > 0 && volt < 180) score -= 20;
+
+    return Math.max(0, score);
 }
 
-// ---------- Active time today ----------
-function updateTodayActive(isRunning) {
+function updatePublicDashboard(data) {
+    const rpm = Number(data.rpm) || 0;
+    const volt = Number(data.volt) || 0;
+    const freq = Number(data.freq) || 0;
+    const current = Number(data.current || data.amp) || 0;
+    const fuel = Number(data.fuel) || 0;
+    const temp = Number(data.coolant_temp || data.temp || data.coolant) || 0;
+    
+    const powerKw = (volt * current) / 1000;
+    
+    const isRunning = String(data.status || '').toLowerCase() === 'on' || rpm > 50;
+    const syncText = String(data.sync || '').toUpperCase();
+    const isPLN = syncText.includes('ON-GRID') || syncText.includes('PLN') || (volt > 200 && !isRunning);
+
+    // 1. HERO CARD
+    const heroCard = $('heroCard');
+    const heroIcon = $('heroIcon');
+    const powerSourceText = $('powerSourceText');
+    const powerDescText = $('powerDescText');
+
+    heroCard.classList.remove('pln', 'genset', 'off', 'loading');
     if (isRunning) {
-        const now = Date.now();
-        if (lastActiveTick) {
-            const deltaSec = (now - lastActiveTick) / 1000;
-            if (deltaSec > 0 && deltaSec < 10) todayActiveSeconds += deltaSec;
-        }
-        lastActiveTick = now;
+        heroCard.classList.add('genset');
+        heroIcon.className = 'fas fa-industry';
+        powerSourceText.innerText = 'Pasokan GENSET';
+        powerDescText.innerText = 'Genset beroperasi menyuplai daya area.';
+    } else if (isPLN) {
+        heroCard.classList.add('pln');
+        heroIcon.className = 'fas fa-plug-circle-check';
+        powerSourceText.innerText = 'Pasokan PLN';
+        powerDescText.innerText = 'Jaringan utama beroperasi normal.';
     } else {
-        lastActiveTick = null;
+        heroCard.classList.add('off');
+        heroIcon.className = 'fas fa-power-off';
+        powerSourceText.innerText = 'PEMADAMAN';
+        powerDescText.innerText = 'Aliran listrik terputus total.';
     }
-    const hours = Math.floor(todayActiveSeconds / 3600);
-    const mins = Math.floor((todayActiveSeconds % 3600) / 60);
-    $('#engToday').innerText = `${hours}h ${mins}m`;
-}
 
-// ---------- Cost & Runtime ----------
-function updateCostAndRuntime(fuelPct, powerKw, isRunning) {
-    const consumption = AVG_CONSUMPTION_LPH * (powerKw > 0.9 ? 1.3 : 1.0);
-    const costPerHour = consumption * FUEL_PRICE_PER_LITER;
-    $('#costPerHour').innerText = formatRupiah(costPerHour);
+    // 2. HEALTH SCORE
+    const healthScore = calculateHealthScore(temp, fuel, isRunning, volt);
+    $('healthScoreTxt').innerText = `${healthScore}%`;
+    const circle = $('healthCircle');
+    circle.setAttribute('stroke-dasharray', `${healthScore}, 100`);
     
-    const now = Date.now();
-    if (isRunning && lastRuntimeUpdate) {
-        const elapsedMs = now - lastRuntimeUpdate;
-        dailyTotalCost += costPerHour * (elapsedMs / 3600000);
+    let healthColor = '#10b981'; // Green
+    let healthDesc = 'Sistem Prima';
+    if (healthScore < 50) { healthColor = '#ef4444'; healthDesc = 'Perlu Perbaikan'; }
+    else if (healthScore < 80) { healthColor = '#f59e0b'; healthDesc = 'Perhatian Khusus'; }
+    
+    circle.style.stroke = healthColor;
+    $('healthScoreTxt').style.fill = healthColor;
+    $('healthDescTxt').innerText = healthDesc;
+    $('healthDescTxt').style.color = healthColor;
+
+    // 3. FUEL & POWER
+    $('fuelPct').innerText = fuel.toFixed(0);
+    const fuelBar = $('fuelBar');
+    fuelBar.style.width = `${fuel}%`;
+    fuelBar.style.backgroundColor = fuel > 25 ? 'var(--emerald)' : 'var(--rose)';
+
+    const estConsumption = powerKw > 0.9 ? AVG_CONSUMPTION_LPH * 1.3 : AVG_CONSUMPTION_LPH; 
+    const litersLeft = (fuel / 100) * TANK_CAPACITY_L;
+    const hoursLeft = estConsumption > 0 ? (litersLeft / estConsumption).toFixed(1) : 0;
+    $('fuelEstText').innerText = isRunning ? `${hoursLeft} jam` : 'Siaga Penuh';
+
+    $('powerKw').innerText = powerKw.toFixed(2);
+    const powerPill = $('powerStatusText');
+    if (powerKw > 15) {
+        powerPill.innerText = 'Beban Kritis'; powerPill.style.background = '#fef2f2'; powerPill.style.color = '#ef4444';
+    } else if (powerKw > 0) {
+        powerPill.innerText = 'Beban Wajar'; powerPill.style.background = '#eff6ff'; powerPill.style.color = '#3b82f6';
+    } else {
+        powerPill.innerText = 'Tanpa Beban'; powerPill.style.background = '#f1f5f9'; powerPill.style.color = '#64748b';
     }
-    lastRuntimeUpdate = now;
-    $('#costDaily').innerText = formatRupiah(dailyTotalCost);
-    
-    if (fuelPct > 0 && isRunning) {
-        const liters = (fuelPct / 100) * TANK_CAPACITY_L;
-        const hoursLeft = liters / consumption;
-        $('#nextServiceText').innerHTML = `${hoursLeft.toFixed(1)} jam (BBM)`;
-    } else if (!isRunning) {
-        $('#nextServiceText').innerHTML = '--';
-    }
-}
 
-// ---------- Maintenance ----------
-function renderMaintenance(engineHours) {
-    let nextServiceHour = Infinity;
-    const rows = MAINT_ITEMS.map(item => {
-        const last = Math.floor(engineHours / item.interval) * item.interval;
-        const dueAt = last + item.interval;
-        const hoursLeft = dueAt - engineHours;
-        let status = 'ok', badge = 'OK';
-        if (hoursLeft <= 0) { status = 'err'; badge = 'Terlambat'; }
-        else if (hoursLeft <= 50) { status = 'warn'; badge = 'Segera'; }
-        if (hoursLeft > 0 && hoursLeft < nextServiceHour) nextServiceHour = hoursLeft;
-        return `<div class="mi-compact">
-                    <span class="mi-name">${item.name}</span>
-                    <span class="mi-status ${status}">${badge}</span>
-                    <span style="font-size:0.7rem;">${hoursLeft > 0 ? hoursLeft.toFixed(0)+' jam' : 'segera'}</span>
-                </div>`;
-    }).join('');
-    $('#maintList').innerHTML = rows;
-    if (nextServiceHour !== Infinity) {
-        $('#nextServiceText').innerHTML = nextServiceHour <= 0 ? 'Segera servis!' : `${Math.round(nextServiceHour)} jam lagi`;
-    }
-    return nextServiceHour;
-}
+    // 4. MICRO METRICS (Bars & Text)
+    const setMiniMetric = (id, val, strVal, maxVal, isErr) => {
+        $(`val${id}`).innerText = strVal;
+        const fill = $(`bar${id}`);
+        let pct = Math.min((val / maxVal) * 100, 100);
+        fill.style.width = `${pct}%`;
+        fill.style.backgroundColor = isErr ? 'var(--rose)' : ''; // overrides default CSS color if error
+    };
 
-// ---------- System Health (Voltage, Current, Freq, Fuel, AFR) ----------
-function updateSystemHealth(volt, freq, current, fuel, afr) {
-    const container = $('#sysHealthList');
-    if (!container) return;
-    const voltStatus = (volt >= VOLT_LO && volt <= VOLT_HI) ? 'ok' : (volt > 0 ? 'warn' : 'err');
-    const freqStatus = (freq >= FREQ_LO && freq <= FREQ_HI) ? 'ok' : (freq > 0 ? 'warn' : 'err');
-    const fuelStatus = fuel >= 25 ? 'ok' : (fuel > 0 ? 'warn' : 'err');
-    const afrStatus = (afr > 13 && afr < 16) ? 'ok' : 'warn';
-    container.innerHTML = `
-        <div class="health-row"><span class="health-label">Voltage</span><span class="health-badge ${voltStatus}">${volt > 0 ? volt.toFixed(0)+'V' : 'N/A'}</span></div>
-        <div class="health-row"><span class="health-label">Current</span><span class="health-badge ${current>0?'ok':''}">${current>0 ? current.toFixed(1)+'A' : '0A'}</span></div>
-        <div class="health-row"><span class="health-label">Frequency</span><span class="health-badge ${freqStatus}">${freq>0 ? freq.toFixed(1)+'Hz' : '--'}</span></div>
-        <div class="health-row"><span class="health-label">Fuel Level</span><span class="health-badge ${fuelStatus}">${fuel.toFixed(0)}%</span></div>
-        <div class="health-row"><span class="health-label">AFR</span><span class="health-badge ${afrStatus}">${afr.toFixed(1)}</span></div>
-    `;
-}
+    setMiniMetric('Volt', volt, `${volt.toFixed(0)} V`, 250, volt > 0 && (volt < 200 || volt > 240));
+    setMiniMetric('Freq', freq, `${freq.toFixed(1)} Hz`, 60, freq > 0 && (freq < 49 || freq > 51));
+    setMiniMetric('Temp', temp, `${temp.toFixed(0)} °C`, 120, temp > 95);
+    setMiniMetric('Rpm', rpm, `${rpm.toFixed(0)} RPM`, 2000, rpm > 1600);
 
-// ---------- Diagnostik ----------
-function renderDiagnostik(elecOk, engineOk, fuelOk, maintOk, syncOk, source) {
-    const container = $('#healthCheckContainer');
-    if (!container) return;
-    const items = [
-        { label: 'Jaringan PLN', status: elecOk ? 'ok' : (currentData.volt>0 ? 'warn' : 'err'), desc: elecOk ? 'Stabil' : (currentData.volt>0 ? 'Fluktuasi' : 'Padam') },
-        { label: 'Generator', status: (engineOk && source !== 'OFF') ? 'ok' : (source==='GEN' ? 'warn' : 'ok'), desc: source==='GEN' ? 'Menyuplai' : (source==='OFF' ? 'Tidak aktif' : 'Siaga') },
-        { label: 'Sinkronisasi', status: syncOk ? 'ok' : (source==='HYBRID' ? 'warn' : 'ok'), desc: syncOk ? 'Tersinkron' : 'Tidak sync' },
-        { label: 'Bahan Bakar', status: fuelOk ? 'ok' : (currentData.fuel<25 ? 'warn' : 'err'), desc: currentData.fuel>0 ? `${currentData.fuel}%` : 'Kosong' },
-        { label: 'Perawatan', status: maintOk ? 'ok' : 'warn', desc: maintOk ? 'Terjadwal' : 'Perlu perhatian' }
-    ];
-    container.innerHTML = items.map(i => `<div class="health-check-item"><span>${i.label}</span><span class="health-badge ${i.status}">${i.desc}</span></div>`).join('');
-}
+    // 5. COST
+    const costPerHour = isRunning ? estConsumption * FUEL_PRICE_PER_LITER : 0;
+    $('costPerHour').innerText = formatRupiah(costPerHour);
+    const todayActiveHours = (data.todayActiveHours) || (isRunning ? 0.5 : 0); 
+    $('costDaily').innerText = formatRupiah(todayActiveHours * AVG_CONSUMPTION_LPH * FUEL_PRICE_PER_LITER);
 
-// ---------- Info & Tips dinamis ----------
-function updateInfoTips(elecOk, fuelOk, source, maintNear) {
-    let msg = 'Semua sistem normal.';
-    const tips = [];
-    if (source === 'GEN') msg = 'Generator aktif, listrik dari genset.';
-    if (source === 'OFF') msg = 'Gangguan listrik total.';
-    if (!elecOk && source !== 'OFF') msg = 'Kualitas listrik kurang stabil.';
-    if (!fuelOk) msg = 'Bahan bakar rendah, segera isi ulang.';
-    
-    if (!elecOk) tips.push('Cek kestabilan tegangan PLN');
-    if (!fuelOk) tips.push('Hubungi teknisi untuk pengisian BBM');
-    if (maintNear) tips.push('Jadwal servis rutin sudah dekat');
-    if (tips.length === 0) {
-        tips.push('Pantau level BBM setiap hari');
-        tips.push('Matikan peralatan tidak penting saat genset menyala');
-    }
-    $('#publicMessage').innerHTML = msg;
-    $('#publicTips').innerHTML = tips.map(t => `<li><i class="fas fa-circle-check"></i> ${t}</li>`).join('');
-}
+    // 6. ALERTS
+    renderAlerts(isRunning, fuel, temp, powerKw);
 
-// ---------- UPDATE UTAMA (dipanggil dari API / MQTT) ----------
-function updateDashboard(data) {
-    // Update nilai dari data (API atau MQTT)
-    currentData.volt = Number(data.volt) || currentData.volt;
-    currentData.freq = Number(data.freq) || currentData.freq;
-    currentData.current = Number(data.current || data.amp) || currentData.current;
-    currentData.rpm = Number(data.rpm) || currentData.rpm;
-    currentData.coolant = Number(data.coolant_temp || data.temp) || currentData.coolant;
-    currentData.fuel = Number(data.fuel) || currentData.fuel;
-    currentData.iat = Number(data.iat) || (currentData.rpm > 0 ? 30 + Math.random() * 5 : 25);
-    currentData.afr = Number(data.afr) || (currentData.rpm > 0 ? 14.2 + (Math.random() * 1 - 0.5) : 0);
-    currentData.throttle = Number(data.throttle) || (currentData.rpm > 0 ? 35 + (currentData.rpm / 3600) * 30 : 0);
-    currentData.engineHours = Number(data.engineHours) || currentData.engineHours;
-    currentData.isRunning = String(data.status || '').toLowerCase() === 'on' || currentData.rpm > 50;
-    const sync = String(data.sync || '').toUpperCase();
-    currentData.syncOk = sync.includes('ON-GRID') || sync.includes('SYNC') || sync.includes('PLN');
-    currentData.source = (!currentData.isRunning && !currentData.syncOk) ? 'OFF' :
-                          (currentData.isRunning && currentData.syncOk ? 'HYBRID' :
-                          (currentData.isRunning ? 'GEN' : 'PLN'));
-    
-    // Hitung daya (kW)
-    currentData.power = (currentData.volt * currentData.current) / 1000;
-    
-    // Update UI elemen
-    $('#ovRPM').innerText = currentData.rpm.toFixed(0);
-    $('#ovTemp').innerText = currentData.coolant.toFixed(1);
-    $('#ovVoltage').innerText = currentData.volt.toFixed(0);
-    
-    // Parameter kelistrikan
-    $('#genVolt').innerText = currentData.volt.toFixed(0) + ' V';
-    $('#genFreq').innerText = currentData.freq.toFixed(1) + ' Hz';
-    $('#genCurr').innerText = currentData.current.toFixed(1) + ' A';
-    $('#genPow').innerText = currentData.power.toFixed(2) + ' kW';
-    
-    // Parameter motor bakar
-    $('#motorRpm').innerText = currentData.rpm.toFixed(0);
-    $('#motorIat').innerText = currentData.iat.toFixed(1) + ' °C';
-    $('#motorCoolant').innerText = currentData.coolant.toFixed(1) + ' °C';
-    $('#motorFuel').innerText = currentData.fuel.toFixed(0) + ' %';
-    $('#motorAfr').innerText = currentData.afr.toFixed(1);
-    $('#motorThrottle').innerText = currentData.throttle.toFixed(0) + ' %';
-    
-    // Engine status
-    $('#engSync').innerText = currentData.syncOk ? 'Sync' : 'Not Sync';
-    $('#engState').innerText = currentData.isRunning ? (currentData.source==='GEN' ? 'Running (Gen)' : 'Running (Hybrid)') : 'Stopped';
-    $('#engFuel').innerText = currentData.fuel.toFixed(0) + '%';
-    
-    // System Health
-    updateSystemHealth(currentData.volt, currentData.freq, currentData.current, currentData.fuel, currentData.afr);
-    
-    // Active time chart (weekly uptime)
-    if (uptimeChart && data.weeklyUptimeHistory && data.weeklyUptimeHistory.length === 7) {
+    // 7. CHART
+    if(data.weeklyUptimeHistory && uptimeChart) {
         uptimeChart.data.datasets[0].data = data.weeklyUptimeHistory;
         uptimeChart.update();
-        const total = data.weeklyUptimeHistory.reduce((a,b)=>a+b,0);
-        $('#weeklyTotal').innerText = total.toFixed(1) + ' jam';
     }
-    
-    // Maintenance & lifespan
-    const elecOk = (currentData.volt >= VOLT_LO && currentData.volt <= VOLT_HI && currentData.volt > 0);
-    const engineOk = (currentData.coolant <= 95 || currentData.coolant === 0);
-    const fuelOk = currentData.fuel >= 25;
-    const nextMaint = renderMaintenance(currentData.engineHours);
-    updateLifespan(currentData.engineHours);
-    updateCostAndRuntime(currentData.fuel, currentData.power, currentData.isRunning);
-    updateTodayActive(currentData.isRunning);
-    const maintOk = (nextMaint === Infinity || nextMaint > 50);
-    renderDiagnostik(elecOk, engineOk, fuelOk, maintOk, currentData.syncOk, currentData.source);
-    updateInfoTips(elecOk, fuelOk, currentData.source, !maintOk);
-    
-    // Update jumlah alert di overview
-    const activeAlertCount = eventLog.filter(e => e.status !== 'ok').length;
-    $('#ovAlerts').innerText = activeAlertCount;
-    
-    // System status dot
-    const allGood = elecOk && engineOk && fuelOk && maintOk;
-    const sysDot = $('#sbSysDot');
-    if (sysDot) sysDot.className = `ssb-dot ${allGood ? 'ok' : (currentData.fuel < 10 ? 'err' : 'warn')}`;
-    $('#sbSysLabel').innerText = allGood ? 'Semua Sistem Normal' : 'Ada yang perlu diperiksa';
-    
-    // Last update time
-    $('#lastUpdate').innerHTML = `<i class="fas fa-clock"></i> Diperbarui: ${new Date().toLocaleString('id-ID')}`;
-    
-    // Trigger event jika sumber berubah (opsional)
-    // ...
 }
 
-// ---------- Data Fetching (API & MQTT) ----------
-async function loadData() {
+function renderAlerts(isRunning, fuel, temp, powerKw) {
+    const container = $('publicAlerts');
+    let alertsHtml = '';
+
+    if (temp > 95) {
+        alertsHtml += `<div class="alert-box danger"><i class="fas fa-fire"></i> <div><strong>Mesin Panas (Overheat):</strong> Operasi mungkin dihentikan sementara untuk pendinginan.</div></div>`;
+    }
+    if (fuel < 20) {
+        alertsHtml += `<div class="alert-box warn"><i class="fas fa-gas-pump"></i> <div><strong>BBM Menipis:</strong> Persediaan solar di bawah 20%. Tim teknisi sedang menjadwalkan pengisian.</div></div>`;
+    }
+    if (powerKw > 15) {
+        alertsHtml += `<div class="alert-box warn"><i class="fas fa-bolt"></i> <div><strong>Beban Listrik Tinggi:</strong> Dimohon mematikan AC atau alat elektronik berat agar listrik tidak anjlok.</div></div>`;
+    }
+    
+    if (alertsHtml === '') {
+        alertsHtml = `<div class="alert-box info"><i class="fas fa-shield-check"></i> <div><strong>Kondisi Ideal:</strong> Tidak ada anomali terdeteksi. Sistem berjalan lancar.</div></div>`;
+        if (isRunning) alertsHtml += `<div class="alert-box info"><i class="fas fa-cog fa-spin"></i> <div><strong>Genset Aktif:</strong> Mengamankan pasokan listrik selama PLN padam.</div></div>`;
+    }
+
+    container.innerHTML = alertsHtml;
+}
+
+// --- FETCH DATA & MQTT ---
+async function fetchDashboardData() {
     try {
-        const res = await fetch('/api/engine-data/latest');
-        const json = await res.json();
+        const resObj = await fetch('/api/engine-data/latest');
+        const jsonObj = await resObj.json();
+        
         const activeRes = await fetch('/api/generator-active-time/history?limit=7');
-        const activeJson = await activeRes.json();
-        const merged = { ...(json?.data || {}), weeklyUptimeHistory: activeJson?.data || [] };
-        updateDashboard(merged);
+        let weeklyData = [0,0,0,0,0,0,0];
+        if(activeRes.ok) {
+            const activeJson = await activeRes.json();
+            if(activeJson.data) weeklyData = activeJson.data;
+        }
+
+        if(jsonObj.data) {
+            jsonObj.data.weeklyUptimeHistory = weeklyData;
+            updatePublicDashboard(jsonObj.data);
+        }
     } catch (e) {
-        console.warn('Fetch error:', e);
+        console.warn('API Fetch error:', e);
     }
 }
 
-function connectMQTT() {
+function setupMQTT() {
     if (typeof mqtt === 'undefined') return;
-    const client = mqtt.connect('wss://broker.shiftr.io', { clientId: 'pub-' + Math.random().toString(16).slice(2) });
-    client.on('connect', () => client.subscribe(['genset/voltage','genset/current','genset/fuel','genset/temp','genset/rpm','genset/status']));
+    const client = mqtt.connect('wss://broker.shiftr.io', { clientId: 'pub-bento-' + Math.random().toString(16).slice(2) });
+    
+    let liveData = {};
+    client.on('connect', () => {
+        client.subscribe(['genset/voltage','genset/current','genset/fuel','genset/temp','genset/rpm','genset/status']);
+    });
+
     client.on('message', (topic, payload) => {
         let val = parseFloat(payload.toString());
         if (isNaN(val)) return;
-        if (topic.includes('voltage')) updateDashboard({ volt: val });
-        if (topic.includes('current')) updateDashboard({ current: val });
-        if (topic.includes('fuel')) updateDashboard({ fuel: val });
-        if (topic.includes('temp')) updateDashboard({ temp: val });
-        if (topic.includes('rpm')) updateDashboard({ rpm: val });
-        if (topic.includes('status')) updateDashboard({ status: payload.toString() });
+        
+        if (topic.includes('voltage')) liveData.volt = val;
+        if (topic.includes('current')) liveData.current = val;
+        if (topic.includes('fuel')) liveData.fuel = val;
+        if (topic.includes('temp')) liveData.temp = val;
+        if (topic.includes('rpm')) liveData.rpm = val;
+        if (topic.includes('status')) liveData.status = payload.toString();
+
+        updatePublicDashboard(liveData);
     });
 }
 
-// ---------- Call teknisi ----------
-function callTechnician() {
-    const phone = '08123456789';
-    if (confirm(`Hubungi teknisi di nomor ${phone}?`)) {
-        window.location.href = `tel:${phone}`;
-        addEvent('call', 'Pengguna memanggil teknisi', 'info');
-    }
-}
-
-// ---------- Sidebar & Logout (mobile toggle) ----------
-function initSidebar() {
-    const btn = $('#menuBtn');
-    const overlay = $('#sbOverlay');
-    const sidebar = $('#sidebar');
-    const toggle = () => document.body.classList.toggle('sb-open');
-    btn?.addEventListener('click', toggle);
-    overlay?.addEventListener('click', toggle);
-    document.querySelectorAll('.sb-link').forEach(link => link.addEventListener('click', () => document.body.classList.remove('sb-open')));
-    
-    const name = localStorage.getItem('username') || 'Pengguna';
-    $('#sbUsername').innerText = name;
-    $('#welcomeText').innerHTML = `👋 Welcome, ${name.split(' ')[0]}!`;
-    $('#sbAvatar').innerText = name.charAt(0).toUpperCase();
-    
-    $('#logoutPublic')?.addEventListener('click', () => { localStorage.clear(); window.location.href = 'login.html'; });
-    $('#callTechnicianBtn')?.addEventListener('click', callTechnician);
-    $('#refreshPublic')?.addEventListener('click', loadData);
-}
-
-// ---------- RUN ----------
 window.addEventListener('DOMContentLoaded', () => {
-    initSidebar();
-    initCharts();
-    loadData();
-    connectMQTT();
-    setInterval(loadData, 30000);
-    // Event dummy awal
-    setTimeout(() => {
-        addEvent('system', 'Sistem siap dipantau', 'ok');
-        addEvent('info', 'Generator dalam mode siaga', 'ok');
-    }, 500);
+    initUptimeChart();
+    fetchDashboardData(); 
+    setupMQTT(); 
+    setInterval(fetchDashboardData, 60000); // Sinkronisasi database
 });
