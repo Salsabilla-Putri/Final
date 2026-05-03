@@ -903,3 +903,4 @@ if (typeof Chart !== 'undefined') {
 
 loadPublicData();
 setInterval(loadPublicData, 10_000);
+
