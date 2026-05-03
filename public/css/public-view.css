@@ -366,3 +366,7 @@ body.sidebar-expanded .main-content {
     .overview-grid { gap:12px; }
     .params-grid { grid-template-columns:1fr; }
 }
+
+.data-source{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:600;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;}
+.data-source.warn{background:#fff7ed;color:#b45309;border-color:#fed7aa;}
+.data-source.err{background:#fef2f2;color:#b91c1c;border-color:#fecaca;}

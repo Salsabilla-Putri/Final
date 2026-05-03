@@ -340,17 +340,95 @@ function markRealtimeStatus(isLive) {
 }
 
 // ---------- Data Fetching (API & MQTT) ----------
+function buildWeeklyUptimeFromSessions(sessions) {
+    const labels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const totals = [0,0,0,0,0,0,0];
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() - 6);
+    start.setHours(0,0,0,0);
+
+    (sessions || []).forEach((row) => {
+        const started = new Date(row.startedAt);
+        const ended = row.endedAt ? new Date(row.endedAt) : new Date();
+        if (Number.isNaN(started.getTime()) || Number.isNaN(ended.getTime())) return;
+        const cursor = new Date(Math.max(started.getTime(), start.getTime()));
+        while (cursor < ended) {
+            const dayEnd = new Date(cursor);
+            dayEnd.setHours(23,59,59,999);
+            const segEnd = new Date(Math.min(dayEnd.getTime(), ended.getTime()));
+            const durH = Math.max(0, (segEnd - cursor) / 3600000);
+            const dayIndex = cursor.getDay();
+            totals[dayIndex] += durH;
+            cursor.setTime(segEnd.getTime() + 1);
+        }
+    });
+
+    return { labels, data: totals.map(v => +v.toFixed(2)) };
+}
+
+function renderAlertsFromDb(alertRows) {
+    const container = $('#recentAlertsList');
+    if (!container) return;
+    const rows = (alertRows || []).slice(0, 5);
+    if (!rows.length) {
+        container.innerHTML = '<div class="alert-item info"><i class="fas fa-check-circle"></i> Tidak ada alert dari database</div>';
+        return;
+    }
+    container.innerHTML = rows.map((a) => {
+        const sev = String(a.severity || '').toLowerCase();
+        const cls = sev === 'critical' || sev === 'high' ? 'err' : (sev === 'medium' ? 'warn' : 'info');
+        const label = a.message || `${String(a.parameter || 'sys').toUpperCase()} : ${a.value ?? '-'}`;
+        const tm = a.timestamp ? new Date(a.timestamp).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) : '--:--';
+        return `<div class="alert-item ${cls}"><i class="fas fa-triangle-exclamation"></i> ${label}<span style="margin-left:auto; font-size:0.65rem;">${tm}</span></div>`;
+    }).join('');
+}
+
+function updateDataSourceBadge(enginePayload) {
+    const badge = $('#dataSourceBadge');
+    if (!badge) return;
+    const ts = new Date(enginePayload?.timestamp || 0);
+    const ageMs = Date.now() - ts.getTime();
+    if (!Number.isFinite(ageMs) || ageMs > 60000) {
+        badge.className = 'data-source err';
+        badge.textContent = 'DB: stale data';
+        return;
+    }
+    if (ageMs > 15000) {
+        badge.className = 'data-source warn';
+        badge.textContent = 'DB: delayed';
+        return;
+    }
+    badge.className = 'data-source';
+    badge.textContent = 'DB: realtime';
+}
+
 async function loadData() {
     try {
-        const res = await fetch('/api/engine-data/latest');
-        const json = await res.json();
-        const activeRes = await fetch('/api/generator-active-time/history?limit=7');
-        const activeJson = await activeRes.json();
-        const merged = { ...(json?.data || {}), weeklyUptimeHistory: activeJson?.data || [] };
+        const [engineRes, activeRes, alertsRes] = await Promise.all([
+            fetch('/api/engine-data/latest'),
+            fetch('/api/generator-active-time/history?limit=60'),
+            fetch('/api/alerts?limit=5')
+        ]);
+        const [engineJson, activeJson, alertsJson] = await Promise.all([
+            engineRes.json(), activeRes.json(), alertsRes.json()
+        ]);
+
+        const weekly = buildWeeklyUptimeFromSessions(activeJson?.data || []);
+        const merged = { ...(engineJson?.data || {}), weeklyUptimeHistory: weekly.data };
+        if (uptimeChart) uptimeChart.data.labels = weekly.labels;
+
         updateDashboard(merged);
+        renderAlertsFromDb(alertsJson?.data || []);
+        updateDataSourceBadge(engineJson?.data || {});
         markRealtimeStatus(true);
     } catch (e) {
         markRealtimeStatus(false);
+        const badge = $('#dataSourceBadge');
+        if (badge) {
+            badge.className = 'data-source err';
+            badge.textContent = 'DB: offline';
+        }
         console.warn('Fetch error:', e);
     }
 }
