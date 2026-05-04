@@ -539,16 +539,6 @@ mqttClient.on('message', async (topic, message) => {
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        // Selalu kirim data memory terbaru dari MQTT terlebih dahulu
-        // Tambahkan timestamp agar frontend tahu kapan data terakhir diterima
-        const realtimeData = {
-            ...latestData,
-            _realtime: true,
-            lastMqttUpdate: new Date().toISOString()
-        };
-        
-        // Opsional: jika ingin tetap simpan ke database, tapi tidak untuk tampilan realtime
-        // Di dalam app.get('/api/engine-data/latest', ...)
         let totalEngineHours = 0;
         try {
             const statsRes = await fetch(`http://localhost:${PORT}/api/generator-active-time/stats?hours=8760`);
@@ -556,18 +546,17 @@ app.get('/api/engine-data/latest', async (req, res) => {
             if (statsJson.success && statsJson.data?.totalDurationHours) {
                 totalEngineHours = statsJson.data.totalDurationHours;
             }
-        } catch(e) { console.warn('Gagal ambil total jam operasi:', e.message); }
+        } catch(e) {
+            console.warn('Gagal ambil total jam operasi:', e.message);
+        }
 
         const realtimeData = {
             ...latestData,
             engineHours: totalEngineHours,
             lastMqttUpdate: new Date().toISOString()
         };
-        // return langsung tanpa query DB
         return res.json({ success: true, data: realtimeData, source: 'realtime-memory' });
-        
     } catch (error) {
-        // Fallback jika terjadi error
         res.json({ success: true, data: latestData, source: 'memory-fallback', warning: error.message });
     }
 });
