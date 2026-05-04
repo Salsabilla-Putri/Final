@@ -83,6 +83,52 @@ function setupMobileSidebarControls() {
     }
   });
 }
+(function() {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const role = (user.role || '').toLowerCase();
+    const isTeknisi = role === 'teknisi' || role === 'admin';
+    const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+
+    let menuItems = [];
+    if(isTeknisi) {
+        menuItems = [
+            { icon: 'fa-tachometer-alt', text: 'Dashboard', link: 'dashboard.html' },
+            { icon: 'fa-chart-line', text: 'Parameter', link: 'dashboard.html#parameters' }, // pake hash optional
+            { icon: 'fa-tools', text: 'Maintenance', link: 'dashboard.html#maintenance' },
+            { icon: 'fa-bell', text: 'Alerts', link: 'dashboard.html#alerts' },
+            { icon: 'fa-file-alt', text: 'Laporan', link: 'reports.html' },
+            { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'logout' }
+        ];
+    } else if(isMasyarakat) {
+        menuItems = [
+            { icon: 'fa-home', text: 'Dashboard Warga', link: 'public.html' },
+            { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'logout' }
+        ];
+    } else {
+        window.location.href = 'login.html';
+        return;
+    }
+
+    const sidebarHtml = `
+        <div class="sidebar">
+            <div class="sidebar-brand"><i class="fas fa-charging-station"></i> Gen-Track</div>
+            <div class="sidebar-menu">
+                ${menuItems.map(item => `
+                    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}(); return false;"` : ''}>
+                        <i class="fas ${item.icon}"></i> ${item.text}
+                    </a>
+                `).join('')}
+            </div>
+        </div>
+    `;
+    const container = document.getElementById('sidebar-container');
+    if(container) container.innerHTML = sidebarHtml;
+
+    window.logout = function() {
+        localStorage.removeItem('user');
+        window.location.href = 'login.html';
+    };
+})();
 
 document.addEventListener('DOMContentLoaded', function () {
   fetch('sidebar.html')

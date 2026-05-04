@@ -587,6 +587,88 @@ app.get('/api/public-status', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+// Endpoint untuk data publik (spesifikasi, health index, maintenance prediction)
+app.get('/api/public/dashboard', async (req, res) => {
+    try {
+        // Ambil data sensor terbaru
+        const latest = await GeneratorData.findOne().sort({ timestamp: -1 }).lean();
+        if (!latest) {
+            return res.status(404).json({ success: false, error: 'No data' });
+        }
+
+        // Hitung health index (sederhana: 0-100%)
+        let health = 100;
+        const temp = latest.temp || latest.coolant || 0;
+        const fuel = latest.fuel || 0;
+        const volt = latest.volt || 0;
+        const rpm = latest.rpm || 0;
+        if (temp > 95) health -= 30;
+        else if (temp > 85) health -= 10;
+        if (fuel < 15) health -= 30;
+        else if (fuel < 25) health -= 15;
+        if (rpm > 0 && volt < 190) health -= 20;
+        health = Math.max(0, Math.min(100, health));
+
+        // Maintenance prediction (berdasarkan jam operasi total & suhu)
+        const totalHours = await ActiveTimeHistory.aggregate([
+            { $match: { deviceId: latest.deviceId } },
+            { $group: { _id: null, totalMs: { $sum: "$durationMs" } } }
+        ]);
+        const totalHoursVal = totalHours[0] ? totalHours[0].totalMs / 3600000 : 0;
+        let maintenanceMessage = "Mesin dalam kondisi prima. Perawatan rutin sesuai jadwal.";
+        let maintenanceUrgency = "good";
+        if (totalHoursVal > 200) {
+            maintenanceMessage = "Segera lakukan servis berkala (oli & filter) dalam 50 jam ke depan.";
+            maintenanceUrgency = "warning";
+        }
+        if (temp > 90) {
+            maintenanceMessage = "Suhu mesin tinggi. Periksa sistem pendingin segera.";
+            maintenanceUrgency = "danger";
+        }
+
+        // Spesifikasi mesin (hardcoded sederhana, bisa juga dari database)
+        const specs = {
+            generator: {
+                type: "Generator Sinkron 3 Fasa",
+                power: "20 kVA / 16 kW",
+                voltage: "220V - 380V",
+                frequency: "50 Hz",
+                brand: "FIRMAN / Generic"
+            },
+            engine: {
+                type: "Diesel 4 langkah, pendingin air",
+                cylinders: "4 silinder inline",
+                displacement: "2500 cc",
+                maxRpm: "3000 RPM",
+                fuelType: "Solar"
+            }
+        };
+
+        // Parameter yang disederhanakan untuk masyarakat
+        const powerKw = (latest.volt * (latest.amp || 0)) / 1000;
+        const fuelPercent = latest.fuel || 0;
+        const fuelHoursLeft = latest.rpm > 0 ? ((fuelPercent / 100) * 50) / 2.5 : 0; // asumsi tangki 50L, konsumsi 2.5 L/jam
+        const equivalentLamps = Math.floor(powerKw / 0.1); // 1 lampu LED ~100W
+        const tempStatus = temp > 85 ? "Panas" : (temp > 70 ? "Normal" : "Dingin");
+
+        res.json({
+            success: true,
+            data: {
+                health: { score: health, message: health >= 80 ? "Sistem Sehat" : (health >= 50 ? "Perlu Perhatian" : "Segera Tindak Lanjut") },
+                maintenance: { message: maintenanceMessage, urgency: maintenanceUrgency, totalHours: totalHoursVal.toFixed(0) },
+                specs: specs,
+                parameters: {
+                    fuel: { percent: fuelPercent, hoursLeft: fuelHoursLeft.toFixed(1), description: fuelPercent > 50 ? "Cukup" : (fuelPercent > 20 ? "Mulai Menipis" : "Segera Isi") },
+                    power: { kw: powerKw.toFixed(1), lamps: equivalentLamps, description: powerKw > 15 ? "Beban Tinggi" : (powerKw > 5 ? "Beban Normal" : "Beban Ringan") },
+                    temperature: { value: temp, status: tempStatus },
+                    voltage: { value: latest.volt, status: latest.volt > 210 ? "Stabil" : (latest.volt > 190 ? "Terganggu" : "Tidak Stabil") }
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // 2. GET History Data (Updated for Date Filter)
 app.get('/api/engine-data/history', async (req, res) => {
