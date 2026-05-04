@@ -548,6 +548,21 @@ app.get('/api/engine-data/latest', async (req, res) => {
         };
         
         // Opsional: jika ingin tetap simpan ke database, tapi tidak untuk tampilan realtime
+        // Di dalam app.get('/api/engine-data/latest', ...)
+        let totalEngineHours = 0;
+        try {
+            const statsRes = await fetch(`http://localhost:${PORT}/api/generator-active-time/stats?hours=8760`);
+            const statsJson = await statsRes.json();
+            if (statsJson.success && statsJson.data?.totalDurationHours) {
+                totalEngineHours = statsJson.data.totalDurationHours;
+            }
+        } catch(e) { console.warn('Gagal ambil total jam operasi:', e.message); }
+
+        const realtimeData = {
+            ...latestData,
+            engineHours: totalEngineHours,
+            lastMqttUpdate: new Date().toISOString()
+        };
         // return langsung tanpa query DB
         return res.json({ success: true, data: realtimeData, source: 'realtime-memory' });
         
