@@ -77,6 +77,34 @@ async function fetchPublicData() {
         document.querySelectorAll('.value-large, .health-score').forEach(el => el.innerText = '--');
     }
 }
+async function loadSpecs() {
+    try {
+        const res = await fetch('/api/generator-specs');
+        const json = await res.json();
+        if (json.success) {
+            const s = json.data;
+            document.getElementById('specDaya').innerText = s.dayaMaks;
+            document.getElementById('specTegangan').innerText = s.tegangan;
+            document.getElementById('specFreq').innerText = s.frekuensi;
+            document.getElementById('specMesin').innerText = s.tipeMesin;
+            document.getElementById('specTangki').innerText = s.kapasitasTangki;
+            document.getElementById('specKonsumsi').innerText = s.konsumsiBbm;
+            document.getElementById('specStart').innerText = s.sistemStart;
+            document.getElementById('specOli').innerText = s.oliMesin;
+        }
+    } catch(e) { console.warn('Gagal memuat spesifikasi', e); }
+}
+
+// Panggil di window.addEventListener('DOMContentLoaded', ...)
+window.addEventListener('DOMContentLoaded', async () => {
+    updateClock();
+    initUptimeChart();
+    await fetchTotalEngineHours();
+    await fetchData();
+    await loadSpecs(); // tambahkan ini
+    setInterval(fetchData, 5000);
+    setInterval(fetchTotalEngineHours, 60000);
+});
 
 async function updatePowerSource() {
     try {

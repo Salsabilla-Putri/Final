@@ -184,3 +184,19 @@
         right: 20px;
     }
 }
+.spec-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+    margin-top: 8px;
+}
+.spec-item {
+    background: #f8fafc;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 0.9rem;
+}
+.spec-item i {
+    width: 24px;
+    color: var(--primary);
+}

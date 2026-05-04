@@ -1,33 +1,49 @@
 // File: public/js/sidebar.js
 
-function initSidebarEvents() {
-  const logoutBtn = document.getElementById('logout-btn');
-  if (logoutBtn) {
-    logoutBtn.addEventListener('click', function (e) {
-      e.preventDefault();
-
-      if (confirm('Apakah Anda yakin ingin keluar?')) {
-        localStorage.removeItem('isLoggedIn');
-        localStorage.removeItem('userRole');
-        localStorage.removeItem('username');
-        window.location.replace('login.html');
-      }
-    });
+// Fungsi untuk logout
+function handleLogout() {
+  if (confirm('Apakah Anda yakin ingin keluar?')) {
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('username');
+    localStorage.removeItem('user'); // hapus juga key user
+    window.location.replace('login.html');
   }
 }
 
+// Ambil data user dari localStorage (prioritas user object atau isLoggedIn)
+function getUserData() {
+  const userStr = localStorage.getItem('user');
+  if (userStr) {
+    try {
+      const user = JSON.parse(userStr);
+      return { role: user.role, username: user.name || user.email };
+    } catch(e) {}
+  }
+  // fallback ke isLoggedIn style
+  const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+  if (!isLoggedIn) return null;
+  return {
+    role: localStorage.getItem('userRole') || 'masyarakat',
+    username: localStorage.getItem('username') || 'Pengguna'
+  };
+}
+
+// Sinkron label user di topbar
 function syncTopbarUserLabel() {
-  const profileLabel = localStorage.getItem('username') || 'Pengguna';
-  document.querySelectorAll('.user-info span').forEach((el) => {
-    el.innerText = profileLabel;
+  const user = getUserData();
+  const name = user?.username || 'Pengguna';
+  document.querySelectorAll('.user-info span').forEach(el => {
+    el.innerText = name;
   });
 }
 
+// Set active link berdasarkan halaman
 function setActiveLink() {
   const path = window.location.pathname;
   const page = path.split('/').pop() || 'index.html';
 
-  document.querySelectorAll('.sidebar .nav-item').forEach((a) => a.classList.remove('active'));
+  document.querySelectorAll('.sidebar .nav-item, .sidebar .sidebar-item').forEach(a => a.classList.remove('active'));
 
   if (page === 'index.html' || page === '') document.getElementById('link-dashboard')?.classList.add('active');
   else if (page.includes('engine')) document.getElementById('link-engine')?.classList.add('active');
@@ -44,23 +60,15 @@ function closeMobileSidebar() {
 function setupSidebarHoverState() {
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
-
   let closeTimer;
-
   const openSidebar = () => {
     clearTimeout(closeTimer);
-    if (window.innerWidth > 768) {
-      document.body.classList.add('sidebar-expanded');
-    }
+    if (window.innerWidth > 768) document.body.classList.add('sidebar-expanded');
   };
-
   const closeSidebar = () => {
     clearTimeout(closeTimer);
-    closeTimer = setTimeout(() => {
-      document.body.classList.remove('sidebar-expanded');
-    }, 120);
+    closeTimer = setTimeout(() => document.body.classList.remove('sidebar-expanded'), 120);
   };
-
   sidebar.addEventListener('mouseenter', openSidebar);
   sidebar.addEventListener('mouseleave', closeSidebar);
 }
@@ -68,75 +76,75 @@ function setupSidebarHoverState() {
 function setupMobileSidebarControls() {
   const toggleBtn = document.querySelector('.mobile-menu-toggle');
   const overlay = document.querySelector('.sidebar-overlay');
-  const sidebarLinks = document.querySelectorAll('.sidebar .nav-item');
-
-  toggleBtn?.addEventListener('click', () => {
-    document.body.classList.toggle('mobile-sidebar-open');
-  });
-
+  const sidebarLinks = document.querySelectorAll('.sidebar .nav-item, .sidebar .sidebar-item');
+  toggleBtn?.addEventListener('click', () => document.body.classList.toggle('mobile-sidebar-open'));
   overlay?.addEventListener('click', closeMobileSidebar);
-  sidebarLinks.forEach((link) => link.addEventListener('click', closeMobileSidebar));
+  sidebarLinks.forEach(link => link.addEventListener('click', closeMobileSidebar));
+  window.addEventListener('resize', () => { if (window.innerWidth > 768) closeMobileSidebar(); });
+}
 
-  window.addEventListener('resize', () => {
-    if (window.innerWidth > 768) {
-      closeMobileSidebar();
-    }
+// Render sidebar berdasarkan role (dipanggil setelah konten sidebar dimuat)
+function renderSidebarMenu() {
+  const user = getUserData();
+  const role = user?.role?.toLowerCase() || '';
+  const isTeknisi = role === 'teknisi' || role === 'admin';
+  const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+
+  let menuItems = [];
+  if (isTeknisi) {
+    menuItems = [
+      { icon: 'fa-tachometer-alt', text: 'Dashboard', link: 'dashboard.html' },
+      { icon: 'fa-chart-line', text: 'Parameter', link: 'dashboard.html#parameters' },
+      { icon: 'fa-tools', text: 'Maintenance', link: 'dashboard.html#maintenance' },
+      { icon: 'fa-bell', text: 'Alerts', link: 'dashboard.html#alerts' },
+      { icon: 'fa-file-alt', text: 'Laporan', link: 'reports.html' },
+      { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
+    ];
+  } else if (isMasyarakat) {
+    menuItems = [
+      { icon: 'fa-home', text: 'Dashboard Warga', link: 'public.html' },
+      { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
+    ];
+  } else {
+    // Belum login, arahkan ke login
+    window.location.href = 'login.html';
+    return;
+  }
+
+  const menuHtml = menuItems.map(item => `
+    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}(); return false;"` : ''}>
+      <i class="fas ${item.icon}"></i> ${item.text}
+    </a>
+  `).join('');
+
+  const sidebarMenu = document.querySelector('.sidebar-menu');
+  if (sidebarMenu) sidebarMenu.innerHTML = menuHtml;
+
+  // Pasang ulang event listener untuk logout
+  document.querySelectorAll('.sidebar-item[onclick*="handleLogout"]').forEach(el => {
+    el.removeAttribute('onclick');
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleLogout();
+    });
   });
 }
-(function() {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    const role = (user.role || '').toLowerCase();
-    const isTeknisi = role === 'teknisi' || role === 'admin';
-    const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
 
-    let menuItems = [];
-    if(isTeknisi) {
-        menuItems = [
-            { icon: 'fa-tachometer-alt', text: 'Dashboard', link: 'dashboard.html' },
-            { icon: 'fa-chart-line', text: 'Parameter', link: 'dashboard.html#parameters' }, // pake hash optional
-            { icon: 'fa-tools', text: 'Maintenance', link: 'dashboard.html#maintenance' },
-            { icon: 'fa-bell', text: 'Alerts', link: 'dashboard.html#alerts' },
-            { icon: 'fa-file-alt', text: 'Laporan', link: 'reports.html' },
-            { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'logout' }
-        ];
-    } else if(isMasyarakat) {
-        menuItems = [
-            { icon: 'fa-home', text: 'Dashboard Warga', link: 'public.html' },
-            { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'logout' }
-        ];
-    } else {
-        window.location.href = 'login.html';
-        return;
-    }
-
-    const sidebarHtml = `
-        <div class="sidebar">
-            <div class="sidebar-brand"><i class="fas fa-charging-station"></i> Gen-Track</div>
-            <div class="sidebar-menu">
-                ${menuItems.map(item => `
-                    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}(); return false;"` : ''}>
-                        <i class="fas ${item.icon}"></i> ${item.text}
-                    </a>
-                `).join('')}
-            </div>
-        </div>
-    `;
-    const container = document.getElementById('sidebar-container');
-    if(container) container.innerHTML = sidebarHtml;
-
-    window.logout = function() {
-        localStorage.removeItem('user');
-        window.location.href = 'login.html';
-    };
-})();
-
+// Inisialisasi sidebar (load template, lalu render menu)
 document.addEventListener('DOMContentLoaded', function () {
-  fetch('sidebar.html')
-    .then((response) => response.text())
-    .then((data) => {
-      const container = document.getElementById('sidebar-container');
-      if (!container) return;
+  const container = document.getElementById('sidebar-container');
+  if (!container) return;
 
+  // Cek login dulu sebelum render sidebar
+  const user = getUserData();
+  if (!user) {
+    window.location.href = 'login.html';
+    return;
+  }
+
+  fetch('sidebar.html')
+    .then(response => response.text())
+    .then(data => {
       container.innerHTML = `
         <button class="mobile-menu-toggle" type="button" aria-label="Buka menu navigasi">
           <i class="fas fa-bars"></i>
@@ -145,19 +153,22 @@ document.addEventListener('DOMContentLoaded', function () {
         ${data}
       `;
 
-      initSidebarEvents();
+      // Render menu dinamis berdasarkan role
+      renderSidebarMenu();
+
+      // Inisialisasi event lain
       setActiveLink();
       setupSidebarHoverState();
       setupMobileSidebarControls();
+      syncTopbarUserLabel();
+
+      // Event untuk tombol user di topbar (jika ada)
+      document.addEventListener('click', function (e) {
+        const userBtn = e.target.closest('#user-btn') || e.target.closest('.user-info');
+        if (userBtn && !window.location.pathname.includes('login.html')) {
+          window.location.href = 'user.html';
+        }
+      });
     })
-    .catch((err) => console.error('Gagal memuat sidebar:', err));
-
-  syncTopbarUserLabel();
-
-  document.addEventListener('click', function (e) {
-    const userBtn = e.target.closest('#user-btn') || e.target.closest('.user-info');
-    if (userBtn && !window.location.pathname.includes('login.html')) {
-      window.location.href = 'user.html';
-    }
-  });
+    .catch(err => console.error('Gagal memuat sidebar:', err));
 });

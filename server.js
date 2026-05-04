@@ -1016,7 +1016,24 @@ app.put('/api/maintenance/suggestion/:id/status', async (req, res) => {
 });
 // Tambahkan kode ini di dalam server.js (sebelum app.listen)
 
+// Spesifikasi mesin generator dan motor bakar
+const GENERATOR_SPECS = {
+    merk: "Honda",
+    tipe: "EG6500CXS",
+    dayaMaks: 5.5, // kW
+    tegangan: 220, // Volt
+    frekuensi: 50, // Hz
+    tipeMesin: "4-tak, OHV, berpendingin udara",
+    kapasitasMesin: "389 cc",
+    kapasitasTangki: 25, // Liter
+    konsumsiBbm: 2.5, // Liter per jam (beban 50%)
+    oliMesin: "SAE 10W-30",
+    sistemStart: "Elektrik & Recoil"
+};
 
+app.get('/api/generator-specs', (req, res) => {
+    res.json({ success: true, data: GENERATOR_SPECS });
+});
 
 
 
