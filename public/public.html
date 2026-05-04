@@ -5,144 +5,141 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gen-Track | Portal Warga</title>
     
-    <!-- CSS Bawaan Teknisi -->
+    <!-- CSS Dependencies -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="css/typography.css">
     <link rel="stylesheet" href="sidebar.css">
     <link rel="stylesheet" href="css/topbar.css">
-    
-    <!-- CSS Khusus Halaman Publik -->
     <link rel="stylesheet" href="css/public-view.css">
-
-    <!-- Library -->
+    
+    <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script src="https://unpkg.com/mqtt@5.10.3/dist/mqtt.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <!-- Sidebar di-load oleh sidebar.js milik Anda -->
-        <div id="sidebar-container"></div>
-
-        <div class="main-content">
-            <!-- TOPBAR STANDAR GEN-TRACK -->
-            <div class="topbar">
+        <!-- Sidebar Container -->
+        <nav id="sidebar-container" aria-label="Main Navigation"></nav>
+        
+        <main class="main-content">
+            <!-- TOPBAR -->
+            <header class="topbar">
                 <div class="topbar-title">
                     <i class="fas fa-city text-primary"></i> Portal Warga
                 </div>
                 <div class="topbar-right">
-                    <div class="realtime-clock">
-                        <i class="fas fa-clock"></i> <span id="realtimeClock">00:00 WIB</span>
+                    <span id="lastUpdated" class="text-muted" style="font-size: 12px; margin-right: 10px;"></span>
+                    <div class="realtime-clock" aria-live="polite">
+                        <i class="fas fa-clock"></i> <span id="realtimeClock">--:-- WIB</span>
                     </div>
                     <div class="user-info" id="user-btn">
                         <i class="fas fa-users"></i> <span>Akses Publik</span>
                     </div>
                 </div>
-            </div>
+            </header>
 
             <!-- KONTEN UTAMA (DASHBOARD) -->
-            <div class="public-dashboard">
-                
-                <!-- BENTO GRID SYSTEM (12 Columns) -->
+            <section class="public-dashboard">
                 <div class="bento-grid">
                     
-                    <!-- 1. HERO CARD (Full Width - 12 Kolom) -->
-                    <div class="b-card hero-card" id="heroCard">
+                    <!-- 1. HERO CARD -->
+                    <article class="b-card hero-card skeleton-container" id="heroCard">
                         <div class="hero-content">
-                            <span class="hero-badge" id="syncStatusText"><i class="fas fa-satellite-dish"></i> Menghubungkan ke Sistem...</span>
-                            <h2 class="hero-title" id="powerSourceText">Memuat Status Listrik...</h2>
-                            <p class="hero-desc" id="powerDescText">Mohon tunggu, Gen-Track sedang mengambil data pemantauan terbaru.</p>
+                            <span class="hero-badge" id="syncStatusText"><i class="fas fa-satellite-dish"></i> Sinkronisasi...</span>
+                            <h2 class="hero-title" id="powerSourceText">Memuat Status...</h2>
+                            <p class="hero-desc" id="powerDescText">Mohon tunggu, Gen-Track sedang mengambil data pemantauan terbaru dari sistem.</p>
                         </div>
                         <i class="fas fa-power-off hero-icon" id="heroIcon"></i>
-                    </div>
+                    </article>
 
-                    <!-- 2. FUEL CARD (4 Kolom) -->
-                    <div class="b-card">
-                        <div class="card-head">
+                    <!-- 2. FUEL CARD -->
+                    <article class="b-card">
+                        <header class="card-head">
                             <h3 class="card-title"><i class="fas fa-gas-pump text-green"></i> Bahan Bakar</h3>
-                        </div>
+                        </header>
                         <div class="card-body flex-col-center">
-                            <div class="big-metric"><span id="fuelPct">0</span><span class="unit">%</span></div>
+                            <div class="big-metric"><span id="fuelPct" class="data-value">0</span><span class="unit">%</span></div>
                             <div class="progress-bar-wrap">
                                 <div class="progress-bar-fill" id="fuelBar" style="width: 0%; background: var(--secondary);"></div>
                             </div>
-                            <span class="sub-metric"><i class="fas fa-hourglass-half"></i> Sisa waktu: <b id="fuelEstText">-- jam</b></span>
+                            <span class="sub-metric"><i class="fas fa-hourglass-half"></i> Est: <b id="fuelEstText">-- jam</b></span>
                         </div>
-                    </div>
+                    </article>
 
-                    <!-- 3. POWER CARD (4 Kolom) -->
-                    <div class="b-card">
-                        <div class="card-head">
+                    <!-- 3. POWER CARD -->
+                    <article class="b-card">
+                        <header class="card-head">
                             <h3 class="card-title"><i class="fas fa-bolt text-yellow"></i> Beban Daya</h3>
-                        </div>
+                        </header>
                         <div class="card-body flex-col-center">
-                            <div class="big-metric"><span id="powerKw">0.0</span><span class="unit">kW</span></div>
-                            <span class="status-pill" id="powerStatusText">Stabil</span>
+                            <div class="big-metric"><span id="powerKw" class="data-value">0.0</span><span class="unit">kW</span></div>
+                            <span class="status-pill neutral" id="powerStatusText">Menghitung...</span>
                         </div>
-                    </div>
+                    </article>
 
-                    <!-- 4. SYSTEM HEALTH CARD (4 Kolom) -->
-                    <div class="b-card">
-                        <div class="card-head">
+                    <!-- 4. SYSTEM HEALTH CARD -->
+                    <article class="b-card">
+                        <header class="card-head">
                             <h3 class="card-title"><i class="fas fa-shield-heart text-blue"></i> Kesehatan Sistem</h3>
-                        </div>
+                        </header>
                         <div class="card-body flex-col-center">
                             <div class="health-circle" id="healthCircleBox">
-                                <span class="health-score" id="healthScoreTxt">0%</span>
+                                <span class="health-score data-value" id="healthScoreTxt">0%</span>
                             </div>
-                            <span class="sub-metric" id="healthDescTxt">Menghitung...</span>
+                            <span class="sub-metric font-weight-bold" id="healthDescTxt">Memuat...</span>
                         </div>
-                    </div>
+                    </article>
 
-                    <!-- 5. ALERTS & NOTIFICATIONS (4 Kolom) -->
-                    <div class="b-card feed-card">
-                        <div class="card-head">
+                    <!-- 5. ALERTS & NOTIFICATIONS -->
+                    <article class="b-card feed-card">
+                        <header class="card-head">
                             <h3 class="card-title"><i class="fas fa-bell text-red"></i> Info Terkini</h3>
-                        </div>
+                        </header>
                         <div class="feed-container" id="publicAlerts">
-                            <div class="feed-item info">Memuat informasi...</div>
+                            <div class="feed-item info text-muted text-center"><i class="fas fa-spinner fa-spin"></i> Memuat informasi...</div>
                         </div>
-                    </div>
+                    </article>
 
-                    <!-- 6. PREDICTIVE MAINTENANCE (8 Kolom) -->
-                    <div class="b-card table-card">
-                        <div class="card-head flex-between">
-                            <h3 class="card-title"><i class="fas fa-clipboard-check text-blue"></i> Perawatan & Biaya Operasional</h3>
-                            <div class="cost-badge">Est. Hari Ini: <strong id="dailyCost">Rp 0</strong></div>
-                        </div>
+                    <!-- 6. PREDICTIVE MAINTENANCE -->
+                    <article class="b-card table-card">
+                        <header class="card-head flex-between">
+                            <h3 class="card-title"><i class="fas fa-clipboard-check text-blue"></i> Jadwal Perawatan</h3>
+                            <div class="cost-badge">Est. Biaya: <strong id="totalCost">Rp 0</strong></div>
+                        </header>
                         <div class="table-wrapper">
                             <table class="public-table">
                                 <thead>
                                     <tr>
-                                        <th>Komponen</th>
-                                        <th>Sisa Umur Pakai</th>
+                                        <th>Tugas / Komponen</th>
+                                        <th>Tenggat Waktu</th>
                                         <th>Status</th>
-                                        <th>Est. Biaya Ganti</th>
+                                        <th>Est. Biaya</th>
                                     </tr>
                                 </thead>
                                 <tbody id="maintenanceList">
-                                    <tr><td colspan="4" class="text-center">Memuat data perawatan...</td></tr>
+                                    <tr><td colspan="4" class="text-center text-muted"><i class="fas fa-spinner fa-spin"></i> Sinkronisasi data...</td></tr>
                                 </tbody>
                             </table>
                         </div>
-                    </div>
+                    </article>
 
-                    <!-- 7. CHART HISTORY (12 Kolom) -->
-                    <div class="b-card">
-                        <div class="card-head">
-                            <h3 class="card-title"><i class="fas fa-chart-area text-blue"></i> Riwayat Penggunaan Genset (7 Hari Terakhir)</h3>
-                        </div>
+                    <!-- 7. CHART HISTORY -->
+                    <article class="b-card">
+                        <header class="card-head">
+                            <h3 class="card-title"><i class="fas fa-chart-area text-blue"></i> Tren Operasional (7 Hari Terakhir)</h3>
+                        </header>
                         <div class="chart-wrapper">
                             <canvas id="uptimeChart"></canvas>
                         </div>
-                    </div>
+                    </article>
 
-                </div> <!-- End Bento Grid -->
-            </div>
-        </div>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <!-- QUICK CALL TEKNISI (FAB) -->
-    <a href="tel:08123456789" class="fab-call">
+    <!-- QUICK CALL TEKNISI -->
+    <a href="tel:08123456789" class="fab-call" aria-label="Hubungi Teknisi">
         <div class="fab-icon"><i class="fas fa-headset"></i></div>
         <div class="fab-text">
             <span>Butuh Bantuan?</span>
@@ -150,7 +147,7 @@
         </div>
     </a>
 
-    <!-- Scripts Gen-Track -->
+    <!-- Scripts -->
     <script src="js/sidebar.js"></script>
     <script src="js/public-view.js"></script>
 </body>
