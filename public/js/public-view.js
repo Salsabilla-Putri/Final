@@ -1,48 +1,138 @@
 'use strict';
 
-// --- CONFIGURATION ---
-const API_BASE = '/api';
-const TANK_CAPACITY_L = 50;
-const AVG_CONSUMPTION_LPH = 2.5;
+const AVG_CONSUMPTION_LPH = 2.5; 
+const TANK_CAPACITY_L = 50;      
+const FUEL_PRICE_PER_LITER = 12000;
+const AVG_HOURS_PER_DAY = 2;
+
+const MAINTENANCE_PARTS = [
+    { name: 'Oli Mesin', interval: 250, cost: 450000 },
+    { name: 'Filter Udara & Solar', interval: 500, cost: 350000 },
+    { name: 'Air Radiator (Coolant)', interval: 1000, cost: 300000 }
+];
 
 let uptimeChart = null;
-
-// --- UTILITIES ---
 const $ = id => document.getElementById(id);
 const formatRupiah = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
-const formatDate = (dateString) => new Date(dateString).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-const formatTime = (dateString) => new Date(dateString).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
-// --- CLOCK CONTROLLER ---
+// 1. JAM REAL-TIME
 function updateClock() {
     const el = $('realtimeClock');
-    if (el) el.innerText = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+    if(el) el.innerText = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+}
+setInterval(updateClock, 1000);
+
+// 2. INIT CHART
+function initUptimeChart() {
+    const ctx = $('uptimeChart');
+    if (ctx && !uptimeChart) {
+        let gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 300);
+        gradient.addColorStop(0, 'rgba(23, 69, 165, 0.8)'); // Primary Gen-Track
+        gradient.addColorStop(1, 'rgba(23, 69, 165, 0.1)');
+
+        uptimeChart = new Chart(ctx, {
+            type: 'bar',
+            data: { 
+                labels: ['H-6', 'H-5', 'H-4', 'H-3', 'H-2', 'Kemarin', 'Hari Ini'], 
+                datasets: [{ 
+                    label: 'Jam Operasi', 
+                    data: [0,0,0,0,0,0,0], 
+                    backgroundColor: gradient,
+                    borderRadius: {topLeft: 6, topRight: 6},
+                    barPercentage: 0.5
+                }] 
+            },
+            options: { 
+                responsive: true, maintainAspectRatio: false, 
+                plugins: { legend: { display: false } },
+                scales: { 
+                    y: { beginAtZero: true, suggestedMax: 8, grid: { borderDash: [4, 4] } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+    }
 }
 
-// --- DOM UPDATERS ---
-function updateSystemMetrics(data) {
+// 3. LOGIKA KESEHATAN SISTEM
+function calculateHealth(temp, fuel, isRunning, volt) {
+    let score = 100;
+    if (temp > 95) score -= 30; else if (temp > 85) score -= 10;
+    if (fuel < 15) score -= 30; else if (fuel < 25) score -= 15;
+    if (!isRunning && volt > 0 && volt < 190) score -= 15;
+    return Math.max(0, score);
+}
+
+// 4. UPDATE MAINTENANCE TABLE
+function updateMaintenanceTable(engineHours) {
+    const tbody = $('maintenanceList');
+    let html = '';
+    
+    let parts = MAINTENANCE_PARTS.map(part => {
+        const hoursUsed = engineHours % part.interval;
+        const hoursLeft = part.interval - hoursUsed;
+        const daysLeft = Math.ceil(hoursLeft / AVG_HOURS_PER_DAY);
+        return { ...part, hoursLeft, daysLeft };
+    }).sort((a, b) => a.hoursLeft - b.hoursLeft);
+
+    parts.forEach(part => {
+        let cClass = 'cond-good', cText = 'Bagus';
+        if (part.hoursLeft < 50) { cClass = 'cond-bad'; cText = 'Segera Ganti'; } 
+        else if (part.hoursLeft < 100) { cClass = 'cond-warn'; cText = 'Mulai Aus'; }
+
+        html += `
+            <tr>
+                <td><strong>${part.name}</strong></td>
+                <td>${part.hoursLeft.toFixed(0)} Jam <small class="text-muted">(~${part.daysLeft} Hari)</small></td>
+                <td><span class="cond-badge ${cClass}">${cText}</span></td>
+                <td>${formatRupiah(part.cost)}</td>
+            </tr>`;
+    });
+    tbody.innerHTML = html;
+}
+
+// 5. RENDER ALERTS
+function renderAlerts(isRunning, fuel, temp, powerKw) {
+    const box = $('publicAlerts');
+    let html = '';
+
+    if (temp > 95) html += `<div class="feed-item danger"><strong><i class="fas fa-fire"></i> Mesin Overheat!</strong> Sistem sedang didinginkan otomatis.</div>`;
+    if (fuel < 20) html += `<div class="feed-item warn"><strong><i class="fas fa-gas-pump"></i> BBM Menipis (<20%).</strong> Teknisi siap melakukan pengisian.</div>`;
+    if (powerKw > 15) html += `<div class="feed-item warn"><strong><i class="fas fa-bolt"></i> Beban Listrik Puncak.</strong> Warga diimbau mengurangi pemakaian daya tinggi.</div>`;
+    
+    if (!html) {
+        html += `<div class="feed-item info"><strong><i class="fas fa-shield-check"></i> Kondisi Ideal.</strong> Tidak terdeteksi anomali sistem.</div>`;
+        if (isRunning) html += `<div class="feed-item info"><strong><i class="fas fa-cog fa-spin"></i> Genset Beroperasi.</strong> Mengamankan kelistrikan area.</div>`;
+    }
+    box.innerHTML = html;
+}
+
+// 6. MAIN UPDATE FUNCTION
+function updateDashboard(data) {
     const rpm = Number(data.rpm) || 0;
     const volt = Number(data.volt) || 0;
-    const current = Number(data.amp) || 0;
+    const current = Number(data.current || data.amp) || 0;
     const fuel = Number(data.fuel) || 0;
-    const temp = Number(data.temp || data.coolant) || 0;
-    const powerKw = Number(data.power) || ((volt * current) / 1000) || 0;
+    const temp = Number(data.coolant_temp || data.temp || data.coolant) || 0;
+    const engHours = Number(data.engineHours) || 1200; 
+    
+    const powerKw = (volt * current) / 1000;
+    const isRunning = String(data.status || '').toLowerCase() === 'on' || rpm > 50;
+    const syncText = String(data.sync || '').toUpperCase();
+    const isPLN = syncText.includes('ON-GRID') || syncText.includes('PLN') || (volt > 200 && !isRunning);
 
-    const isRunning = String(data.status).toUpperCase() === 'RUNNING' || rpm > 0;
-    const isGrid = String(data.sync).toUpperCase() === 'ON-GRID' || String(data.sync).toUpperCase() === 'SYNCHRONIZED';
-
-    // 1. Update Hero Card
+    // HERO CARD
     const hero = $('heroCard');
-    hero.className = 'b-card hero-card'; // reset
+    hero.className = 'b-card hero-card'; // reset classes
     if (isRunning) {
         hero.classList.add('genset');
         $('powerSourceText').innerText = 'Pasokan GENSET';
-        $('powerDescText').innerText = 'Sistem kelistrikan area saat ini disuplai penuh oleh Generator.';
+        $('powerDescText').innerText = 'PLN Padam. Genset beroperasi penuh menyuplai daya area.';
         $('syncStatusText').innerHTML = '<i class="fas fa-plug"></i> Beroperasi Mandiri';
-    } else if (isGrid) {
+    } else if (isPLN) {
         hero.classList.add('pln');
-        $('powerSourceText').innerText = 'Pasokan PLN (Utama)';
-        $('powerDescText').innerText = 'Jaringan kelistrikan utama beroperasi normal tanpa kendala.';
+        $('powerSourceText').innerText = 'Pasokan PLN';
+        $('powerDescText').innerText = 'Jaringan kelistrikan utama beroperasi normal.';
         $('syncStatusText').innerHTML = '<i class="fas fa-link"></i> Tersinkron (ON-GRID)';
     } else {
         hero.classList.add('off');
@@ -51,208 +141,85 @@ function updateSystemMetrics(data) {
         $('syncStatusText').innerHTML = '<i class="fas fa-unlink"></i> Terputus';
     }
 
-    // 2. Update Fuel
+    // FUEL
     $('fuelPct').innerText = fuel.toFixed(0);
-    $('fuelBar').style.width = `${Math.min(100, Math.max(0, fuel))}%`;
-    $('fuelBar').style.background = fuel > 20 ? 'var(--secondary)' : 'var(--danger)';
-    
-    const estHours = isRunning && fuel > 0 ? (fuel / 100 * TANK_CAPACITY_L) / AVG_CONSUMPTION_LPH : 0;
-    $('fuelEstText').innerText = isRunning ? `${estHours.toFixed(1)} Jam` : 'Standby';
+    $('fuelBar').style.width = `${fuel}%`;
+    $('fuelBar').style.background = fuel > 25 ? 'var(--secondary)' : 'var(--danger)';
+    const cRate = powerKw > 0.9 ? AVG_CONSUMPTION_LPH * 1.3 : AVG_CONSUMPTION_LPH; 
+    $('fuelEstText').innerText = isRunning ? ((fuel/100*TANK_CAPACITY_L)/cRate).toFixed(1) + ' Jam' : 'Standby';
 
-    // 3. Update Power & Load
+    // POWER
     $('powerKw').innerText = powerKw.toFixed(1);
     const pPill = $('powerStatusText');
-    if (powerKw > 15) {
-        pPill.innerText = 'Beban Kritis'; pPill.className = 'status-pill danger';
-    } else if (powerKw > 0) {
-        pPill.innerText = 'Beban Wajar'; pPill.className = 'status-pill info';
-    } else {
-        pPill.innerText = 'Sistem Idle'; pPill.className = 'status-pill neutral';
-    }
+    if(powerKw > 15) { pPill.innerText='Beban Kritis'; pPill.style.background='#fef2f2'; pPill.style.color='#ef4444'; }
+    else if(powerKw > 0) { pPill.innerText='Beban Wajar'; pPill.style.background='#eff6ff'; pPill.style.color='#1745a5'; }
+    else { pPill.innerText='Sistem Idle'; pPill.style.background='var(--bg-page)'; pPill.style.color='var(--muted)'; }
 
-    // 4. Update Health
-    let score = 100;
-    if (temp > 95) score -= 30; else if (temp > 85) score -= 10;
-    if (fuel < 15) score -= 30; else if (fuel < 25) score -= 15;
-    if (!isRunning && volt > 0 && volt < 190) score -= 15;
-    score = Math.max(0, score);
-
-    $('healthScoreTxt').innerText = `${score}%`;
+    // HEALTH SCORE
+    const health = calculateHealth(temp, fuel, isRunning, volt);
+    $('healthScoreTxt').innerText = `${health}%`;
     const hBox = $('healthCircleBox');
-    if (score < 50) {
-        hBox.style.borderTopColor = 'var(--danger)';
-        $('healthScoreTxt').style.color = 'var(--danger)';
-        $('healthDescTxt').innerText = 'Perlu Pemeriksaan';
-    } else if (score < 80) {
-        hBox.style.borderTopColor = 'var(--warning)';
-        $('healthScoreTxt').style.color = 'var(--warning)';
-        $('healthDescTxt').innerText = 'Perhatian Khusus';
-    } else {
-        hBox.style.borderTopColor = 'var(--secondary)';
-        $('healthScoreTxt').style.color = 'var(--secondary)';
-        $('healthDescTxt').innerText = 'Sistem Prima';
-    }
-}
+    let hColor = 'var(--secondary)'; let hDesc = 'Sistem Prima';
+    if(health < 50) { hColor = 'var(--danger)'; hDesc = 'Perlu Cek'; }
+    else if (health < 80) { hColor = 'var(--warning)'; hDesc = 'Perhatian'; }
+    hBox.style.borderTopColor = hColor;
+    $('healthScoreTxt').style.color = hColor;
+    $('healthDescTxt').innerText = hDesc;
 
-function updateAlertsFeed(alerts) {
-    const box = $('publicAlerts');
-    if (!alerts || alerts.length === 0) {
-        box.innerHTML = `<div class="feed-item info"><i class="fas fa-shield-check"></i> <strong>Sistem Stabil.</strong> Tidak ada peringatan aktif.</div>`;
-        return;
-    }
+    // MAINT & ALERTS
+    updateMaintenanceTable(engHours);
+    renderAlerts(isRunning, fuel, temp, powerKw);
+    $('dailyCost').innerText = formatRupiah((data.todayActiveHours || (isRunning ? 0.5 : 0)) * AVG_CONSUMPTION_LPH * FUEL_PRICE_PER_LITER);
 
-    let html = '';
-    alerts.filter(a => !a.resolved).slice(0, 5).forEach(alert => {
-        let styleClass = 'info', icon = 'fa-info-circle';
-        if (alert.severity === 'critical') { styleClass = 'danger'; icon = 'fa-exclamation-triangle'; }
-        else if (alert.severity === 'high' || alert.severity === 'medium') { styleClass = 'warn'; icon = 'fa-bell'; }
-        
-        html += `
-            <div class="feed-item ${styleClass}">
-                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <strong><i class="fas ${icon}"></i> ${alert.parameter ? alert.parameter.toUpperCase() : 'SISTEM'}</strong>
-                    <small style="opacity:0.7">${formatTime(alert.timestamp)}</small>
-                </div>
-                <div>${alert.message}</div>
-            </div>`;
-    });
-    
-    if(!html) html = `<div class="feed-item info"><i class="fas fa-shield-check"></i> <strong>Sistem Stabil.</strong> Tidak ada peringatan aktif.</div>`;
-    box.innerHTML = html;
-}
-
-function updateMaintenanceTable(tasks) {
-    const tbody = $('maintenanceList');
-    if (!tasks || tasks.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Belum ada data jadwal perawatan.</td></tr>';
-        return;
-    }
-
-    const pendingTasks = tasks.filter(t => t.status !== 'completed').sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate)).slice(0, 5);
-    if (pendingTasks.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted"><i class="fas fa-check-circle text-green"></i> Semua perawatan telah selesai.</td></tr>';
-        return;
-    }
-
-    let html = '';
-    let totalCost = 0;
-    const now = new Date();
-    now.setHours(0,0,0,0);
-
-    pendingTasks.forEach(task => {
-        const dueDate = new Date(task.dueDate);
-        dueDate.setHours(0,0,0,0);
-        
-        const daysLeft = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
-        let cClass = 'cond-good', cText = 'Terjadwal';
-        
-        if (daysLeft < 0) { cClass = 'cond-bad'; cText = 'Terlambat'; }
-        else if (daysLeft <= 7) { cClass = 'cond-warn'; cText = 'Segera'; }
-
-        totalCost += (task.cost || 0);
-
-        html += `
-            <tr>
-                <td><strong>${task.task}</strong><br><small class="text-muted" style="text-transform:capitalize;">${task.type || 'Preventive'}</small></td>
-                <td>${formatDate(task.dueDate)} <br><small class="text-muted">(${daysLeft < 0 ? 'Overdue' : daysLeft + ' Hari Lagi'})</small></td>
-                <td><span class="cond-badge ${cClass}">${cText}</span></td>
-                <td>${formatRupiah(task.cost || 0)}</td>
-            </tr>`;
-    });
-
-    tbody.innerHTML = html;
-    $('totalCost').innerText = formatRupiah(totalCost);
-}
-
-function processAndRenderChart(historyRows) {
-    const dailyUptime = Array(7).fill(0); // [H-6, H-5, ..., Today]
-    const today = new Date();
-    today.setHours(0,0,0,0);
-
-    if (historyRows && historyRows.length > 0) {
-        historyRows.forEach(row => {
-            const start = new Date(row.startedAt);
-            const end = row.endedAt ? new Date(row.endedAt) : new Date();
-            const startDay = new Date(start);
-            startDay.setHours(0,0,0,0);
-            
-            const diffDays = Math.floor((today - startDay) / (1000 * 60 * 60 * 24));
-            if (diffDays >= 0 && diffDays < 7) {
-                const index = 6 - diffDays;
-                const durationHours = (end - start) / (1000 * 60 * 60);
-                dailyUptime[index] += durationHours;
-            }
-        });
-    }
-
-    const dataPoints = dailyUptime.map(h => Number(h.toFixed(2)));
-
-    const ctx = $('uptimeChart');
-    if (!ctx) return;
-
-    if (!uptimeChart) {
-        let gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 300);
-        gradient.addColorStop(0, 'rgba(59, 130, 246, 0.8)'); 
-        gradient.addColorStop(1, 'rgba(59, 130, 246, 0.1)');
-
-        uptimeChart = new Chart(ctx, {
-            type: 'bar',
-            data: { 
-                 labels: ['H-6', 'H-5', 'H-4', 'H-3', 'H-2', 'Kemarin', 'Hari Ini'],
-                 datasets: [{
-                     label: 'Jam Operasi (h)',
-                     data: dataPoints,
-                     backgroundColor: gradient,
-                     borderRadius: 6,
-                     barPercentage: 0.5
-                 }] 
-             },
-            options: { 
-                 responsive: true, maintainAspectRatio: false,
-                 plugins: { legend: { display: false } },
-                 scales: { 
-                     y: { beginAtZero: true, suggestedMax: 6, grid: { borderDash: [4, 4] } },
-                     x: { grid: { display: false } }
-                 }
-            }
-        });
-    } else {
-        uptimeChart.data.datasets[0].data = dataPoints;
+    // CHART
+    if(data.weeklyUptimeHistory && uptimeChart) {
+        uptimeChart.data.datasets[0].data = data.weeklyUptimeHistory;
         uptimeChart.update();
     }
 }
 
-// --- DATA FETCHING & ORCHESTRATION ---
-async function fetchDashboardData() {
+// 7. FETCH & MQTT
+async function fetchData() {
     try {
-        const [latestRes, alertsRes, maintRes, historyRes] = await Promise.all([
-            fetch(`${API_BASE}/engine-data/latest`).then(r => r.ok ? r.json() : {}),
-            fetch(`${API_BASE}/alerts?limit=10`).then(r => r.ok ? r.json() : {}),
-            fetch(`${API_BASE}/maintenance`).then(r => r.ok ? r.json() : {}),
-            fetch(`${API_BASE}/generator-active-time/history?limit=100`).then(r => r.ok ? r.json() : {})
-        ]);
-
-        if (latestRes.success && latestRes.data) updateSystemMetrics(latestRes.data);
-        if (alertsRes.success) updateAlertsFeed(alertsRes.data);
-        if (maintRes.success) updateMaintenanceTable(maintRes.data);
-        if (historyRes.success) processAndRenderChart(historyRes.data);
-        
-        // Update Timestamp
-        $('lastUpdated').innerText = 'Diperbarui: ' + new Date().toLocaleTimeString('id-ID');
-
-    } catch (error) {
-        console.error("Dashboard fetch error:", error);
-    }
+        const res = await fetch('/api/engine-data/latest');
+        const json = await res.json();
+        const activeRes = await fetch('/api/generator-active-time/history?limit=7');
+        let wData = [0,0,0,0,0,0,0];
+        if(activeRes.ok) {
+            const aJson = await activeRes.json();
+            if(aJson.data) wData = aJson.data;
+        }
+        if(json.data) {
+            json.data.weeklyUptimeHistory = wData;
+            updateDashboard(json.data);
+        }
+    } catch(e) { console.warn('Fetch Err:', e); }
 }
 
-// --- INITIALIZATION ---
+function initMQTT() {
+    if (typeof mqtt === 'undefined') return;
+    const client = mqtt.connect('wss://broker.shiftr.io', { clientId: 'pub-' + Math.random().toString(16).slice(2) });
+    let lData = {};
+    client.on('connect', () => { client.subscribe(['genset/voltage','genset/current','genset/fuel','genset/temp','genset/rpm','genset/status']); });
+    client.on('message', (topic, msg) => {
+        let val = parseFloat(msg.toString());
+        if(topic.includes('status')) lData.status = msg.toString();
+        else {
+            if(isNaN(val)) return;
+            if(topic.includes('voltage')) lData.volt = val;
+            if(topic.includes('current')) lData.current = val;
+            if(topic.includes('fuel')) lData.fuel = val;
+            if(topic.includes('temp')) lData.temp = val;
+            if(topic.includes('rpm')) lData.rpm = val;
+        }
+        updateDashboard(lData);
+    });
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     updateClock();
-    setInterval(updateClock, 1000);
-    
-    // Initial fetch
-    fetchDashboardData();
-    
-    // Poll DB data regularly for public view
-    setInterval(fetchDashboardData, 15000);
-});
+    initUptimeChart();
+    fetchData();
+    initMQTT();
+    setInterval(fetchData, 30000);
+});.
