@@ -1,148 +1,912 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>Gen-Track | Portal Warga</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="css/typography.css">
-    <link rel="stylesheet" href="sidebar.css">
-    <link rel="stylesheet" href="css/topbar.css">
-    <style>
-        /* Gaya khusus untuk portal warga */
-        :root {
-            --primary: #1745a5;
-            --secondary: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --info: #3b82f6;
-            --dark: #0f172a;
-            --muted: #64748b;
-            --bg-page: #f0f4f8;
-            --card-bg: #ffffff;
-            --border: #e2e8f0;
-        }
-        body { background: var(--bg-page); font-family: 'Segoe UI', system-ui, sans-serif; }
-        .container { display: flex; min-height: 100vh; }
-        .main-content { flex: 1; padding: 20px; margin-left: 260px; transition: all 0.3s; }
-        .topbar { background: white; padding: 12px 24px; border-radius: 28px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
-        .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
-        .card { background: var(--card-bg); border-radius: 28px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); transition: transform 0.2s; border: 1px solid var(--border); }
-        .card:hover { transform: translateY(-3px); }
-        .card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; border-bottom: 2px solid #eef2ff; padding-bottom: 12px; }
-        .card-header i { font-size: 1.8rem; color: var(--primary); }
-        .card-header h2 { font-size: 1.3rem; font-weight: 700; margin: 0; }
-        .health-score { font-size: 2.5rem; font-weight: 800; text-align: center; padding: 10px; border-radius: 60px; background: #f1f5f9; }
-        .meter-bar { height: 12px; background: #e2e8f0; border-radius: 20px; overflow: hidden; margin: 12px 0; }
-        .meter-fill { height: 100%; border-radius: 20px; transition: width 0.5s; }
-        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 30px; font-size: 0.75rem; font-weight: 600; }
-        .status-good { background: #d1fae5; color: #065f46; }
-        .status-warning { background: #fef3c7; color: #92400e; }
-        .status-danger { background: #fee2e2; color: #991b1b; }
-        .spec-list { list-style: none; padding: 0; }
-        .spec-list li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed var(--border); }
-        .value-large { font-size: 1.8rem; font-weight: 700; }
-        .text-muted { color: var(--muted); font-size: 0.8rem; }
-        .grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        @media (max-width: 768px) {
-            .main-content { margin-left: 0; padding: 16px; }
-            .dashboard-grid { gap: 16px; }
-        }
-        .fab-call { position: fixed; bottom: 24px; right: 24px; background: var(--primary); color: white; border-radius: 40px; display: flex; align-items: center; gap: 12px; padding: 10px 20px; text-decoration: none; box-shadow: 0 4px 12px rgba(23,69,165,0.4); z-index: 100; }
-        .realtime-clock { background: #eef2fa; padding: 6px 14px; border-radius: 30px; font-size: 0.85rem; font-weight: 600; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+  <title>Gen-Track | Monitoring Publik</title>
+  <!-- Auth Guard - harus di-load PERTAMA -->
+  <script src="js/auth-guard.js"></script>
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    :root {
+      --primary: #1745a5;
+      --primary-light: #3b6bdf;
+      --secondary: #10b981;
+      --warning: #f97316;
+      --danger: #ef4444;
+      --muted: #6b7280;
+      --light: #f8fafc;
+      --dark: #0f172a;
+      --card-bg: #ffffff;
+      --bg-main: #f1f5f9;
+      --sidebar-bg: #0f1e30;
+      --sidebar-hover: #1e3a5f;
+      --border-color: #e2e8f0;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+    }
+
+    body {
+      background: var(--bg-main);
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ===== SIDEBAR DINAMIS ===== */
+    .sidebar {
+      width: 260px;
+      background: var(--sidebar-bg);
+      display: flex;
+      flex-direction: column;
+      padding: 1.8rem 1.2rem;
+      color: #ccdbe9;
+      box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+      transition: all 0.3s ease;
+      z-index: 10;
+    }
+
+    .sidebar .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 2.5rem;
+      border-bottom: 1px solid #2a4058;
+      padding-bottom: 1.5rem;
+    }
+
+    .logo-area i {
+      font-size: 2.2rem;
+      color: #3b82f6;
+      filter: drop-shadow(0 0 6px #2563eb);
+    }
+
+    .logo-area span {
+      font-weight: 700;
+      font-size: 1.4rem;
+      letter-spacing: 0.5px;
+      background: linear-gradient(to right, #e0f2fe, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-menu {
+      list-style: none;
+      flex: 1;
+    }
+
+    .nav-menu li {
+      margin-bottom: 0.5rem;
+      border-radius: 12px;
+    }
+
+    .nav-menu li a {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0.9rem 1rem;
+      text-decoration: none;
+      color: #b0c7e0;
+      font-weight: 500;
+      border-radius: 12px;
+      transition: all 0.25s;
+    }
+
+    .nav-menu li a i {
+      width: 22px;
+      font-size: 1.2rem;
+      text-align: center;
+    }
+
+    .nav-menu li:hover a,
+    .nav-menu li.active a {
+      background: var(--sidebar-hover);
+      color: white;
+      box-shadow: 0 8px 18px rgba(0,40,70,0.4);
+      transform: translateX(4px);
+    }
+
+    .user-profile-sidebar {
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 1rem;
+      background: #12273f;
+      border-radius: 16px;
+      border: 1px solid #2e4561;
+    }
+
+    .user-profile-sidebar i {
+      font-size: 2.2rem;
+      color: #90cdf4;
+    }
+
+    .user-name {
+      font-weight: 700;
+      font-size: 1rem;
+      color: white;
+    }
+
+    .user-role {
+      font-size: 0.75rem;
+      color: #8ba9cc;
+    }
+
+    .btn-logout {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 0.5rem;
+      transition: 0.2s;
+    }
+
+    .btn-logout:hover {
+      background: #ef4444;
+      color: white;
+    }
+
+    /* ===== MAIN CONTENT ===== */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      background: #f1f5f9;
+    }
+
+    .top-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+
+    .welcome-text h1 {
+      font-size: 1.8rem;
+      font-weight: 600;
+      color: var(--dark);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .welcome-text span {
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    .time-badge {
+      background: white;
+      padding: 0.5rem 1.4rem;
+      border-radius: 30px;
+      color: var(--dark);
+      font-weight: 600;
+      font-size: 0.9rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.2rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      background: white;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.3rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+      transition: transform 0.2s;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    }
+
+    .card-label {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+
+    .card-value {
+      font-size: 2.1rem;
+      font-weight: 700;
+      color: var(--dark);
+    }
+
+    .card-sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.2rem;
+    }
+
+    .row-cards {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr;
+      gap: 1.2rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card-panel {
+      background: white;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.3rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+    }
+
+    .card-panel h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--dark);
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .specs-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .spec-item {
+      background: #f8fafc;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .spec-item strong {
+      display: block;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+
+    .spec-item span {
+      font-weight: 600;
+      color: var(--dark);
+    }
+
+    .health-circle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 1rem 0;
+    }
+
+    .progress-ring {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      font-weight: 800;
+      position: relative;
+    }
+
+    .progress-ring::before {
+      content: '';
+      position: absolute;
+      inset: 8px;
+      background: white;
+      border-radius: 50%;
+      z-index: 0;
+    }
+
+    .progress-ring span {
+      position: relative;
+      z-index: 1;
+    }
+
+    .health-label {
+      text-align: center;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-top: 0.3rem;
+    }
+
+    .maintenance-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .maint-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f8fafc;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .maint-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cost-badge {
+      background: #fef3c7;
+      color: #92400e;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
+
+    .alert-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #fef2f2;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      font-size: 0.82rem;
+    }
+
+    .alert-item.warning {
+      background: #fffbeb;
+    }
+
+    .system-status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 0.5rem;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 0.85rem;
+    }
+
+    .status-normal { color: #10b981; font-weight: 600; }
+    .status-warning { color: #f59e0b; font-weight: 600; }
+    .status-critical { color: #ef4444; font-weight: 600; }
+
+    .bar-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 80px;
+      margin-top: 0.5rem;
+    }
+
+    .bar {
+      flex: 1;
+      background: var(--primary-light);
+      border-radius: 6px 6px 0 0;
+      min-width: 20px;
+      transition: height 0.4s;
+    }
+
+    .chart-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .loading-overlay {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      color: var(--muted);
+      gap: 8px;
+    }
+
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 3px solid #e2e8f0;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 1000px) {
+      .row-cards {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        width: 220px;
+      }
+    }
+  </style>
 </head>
 <body>
-<div class="container">
-    <div id="sidebar-container"></div>
-    <div class="main-content">
-        <div class="topbar">
-            <div class="topbar-title"><i class="fas fa-city"></i> Portal Informasi Warga</div>
-            <div class="topbar-right">
-                <div class="realtime-clock"><i class="far fa-clock"></i> <span id="liveClock">--:-- WIB</span></div>
-                <div class="user-info"><i class="fas fa-users"></i> <span>Akses Publik</span></div>
-            </div>
-        </div>
-
-        <div class="dashboard-grid">
-            <!-- Kesehatan Sistem -->
-            <div class="card">
-                <div class="card-header"><i class="fas fa-heartbeat"></i><h2>Kesehatan Genset</h2></div>
-                <div class="health-score" id="healthScore">--%</div>
-                <div id="healthMessage" class="text-center text-muted" style="margin-top: 8px;">Memuat...</div>
-                <div class="meter-bar mt-2"><div class="meter-fill" id="healthFill" style="width:0%; background: var(--secondary);"></div></div>
-            </div>
-
-            <!-- Status Operasional -->
-            <div class="card">
-                <div class="card-header"><i class="fas fa-plug"></i><h2>Sumber Listrik</h2></div>
-                <div class="value-large" id="powerSource">--</div>
-                <div id="powerDesc" class="text-muted">--</div>
-                <div class="mt-2"><i class="fas fa-bolt"></i> Daya terpakai: <strong id="powerKw">0</strong> kW <span id="powerDescText" class="text-muted"></span></div>
-            </div>
-
-            <!-- Bahan Bakar -->
-            <div class="card">
-                <div class="card-header"><i class="fas fa-gas-pump"></i><h2>Bahan Bakar Solar</h2></div>
-                <div class="value-large"><span id="fuelPercent">0</span>%</div>
-                <div class="meter-bar"><div class="meter-fill" id="fuelBar" style="width:0%; background: var(--warning);"></div></div>
-                <div><i class="fas fa-hourglass-half"></i> Sisa waktu: <strong id="fuelHours">--</strong> jam</div>
-                <div id="fuelHint" class="text-muted"></div>
-            </div>
-
-            <!-- Temperatur Mesin -->
-            <div class="card">
-                <div class="card-header"><i class="fas fa-thermometer-half"></i><h2>Suhu Mesin</h2></div>
-                <div class="value-large"><span id="tempValue">0</span>°C</div>
-                <div id="tempStatus" class="status-badge status-good">Normal</div>
-            </div>
-        </div>
-
-        <!-- Prediksi Perawatan -->
-        <div class="card" style="margin-top: 24px;">
-            <div class="card-header"><i class="fas fa-tools"></i><h2>Prediksi Perawatan</h2></div>
-            <div id="maintenanceMsg" class="mb-2">Memuat...</div>
-            <div><i class="fas fa-clock"></i> Total jam operasi: <strong id="totalHours">0</strong> jam</div>
-            <div class="meter-bar mt-2"><div class="meter-fill" id="maintenanceMeter" style="width:0%; background: var(--info);"></div></div>
-            <div class="text-muted mt-1">*Berdasarkan jam operasi dan kondisi mesin</div>
-        </div>
-
-        <!-- Spesifikasi Mesin (Ringkas) -->
-        <div class="grid-2col" style="margin-top: 24px;">
-            <div class="card">
-                <div class="card-header"><i class="fas fa-microchip"></i><h2>Spesifikasi Generator</h2></div>
-                <ul class="spec-list" id="genSpecs">
-                    <li><span>Tipe:</span><span>--</span></li><li><span>Daya Maks:</span><span>--</span></li><li><span>Tegangan:</span><span>--</span></li>
-                </ul>
-            </div>
-            <div class="card">
-                <div class="card-header"><i class="fas fa-oil-can"></i><h2>Spesifikasi Mesin</h2></div>
-                <ul class="spec-list" id="engineSpecs">
-                    <li><span>Jenis:</span><span>--</span></li><li><span>Kapasitas:</span><span>--</span></li><li><span>Bahan Bakar:</span><span>--</span></li>
-                </ul>
-            </div>
-        </div>
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="dynamicSidebar">
+    <div class="logo-area">
+      <i class="fas fa-bolt"></i>
+      <span>Gen-Track</span>
     </div>
-</div>
-<!-- 8. SPESIFIKASI MESIN (12 Kolom) -->
-<div class="b-card spec-card">
-    <div class="card-head">
-        <h3 class="card-title"><i class="fas fa-engine text-blue"></i> Spesifikasi Generator & Motor Bakar</h3>
+    <ul class="nav-menu">
+      <li class="active"><a href="#"><i class="fas fa-tachometer-alt"></i> Dashboard Publik</a></li>
+      <li><a href="#"><i class="fas fa-chart-bar"></i> Statistik</a></li>
+      <li><a href="#"><i class="fas fa-history"></i> Riwayat</a></li>
+    </ul>
+    <div class="user-profile-sidebar">
+      <i class="fas fa-user-circle"></i>
+      <div class="user-info-sidebar">
+        <span class="user-name" id="sidebarUserName">Warga</span>
+        <span class="user-role">Masyarakat</span>
+      </div>
     </div>
-    <div class="spec-grid">
-        <div class="spec-item"><i class="fas fa-tachometer-alt"></i> <strong>Daya Maks:</strong> <span id="specDaya">--</span> kW</div>
-        <div class="spec-item"><i class="fas fa-bolt"></i> <strong>Tegangan:</strong> <span id="specTegangan">--</span> V</div>
-        <div class="spec-item"><i class="fas fa-waveform"></i> <strong>Frekuensi:</strong> <span id="specFreq">--</span> Hz</div>
-        <div class="spec-item"><i class="fas fa-oil-can"></i> <strong>Mesin:</strong> <span id="specMesin">--</span></div>
-        <div class="spec-item"><i class="fas fa-gas-pump"></i> <strong>Kapasitas Tangki:</strong> <span id="specTangki">--</span> L</div>
-        <div class="spec-item"><i class="fas fa-chart-line"></i> <strong>Konsumsi BBM:</strong> <span id="specKonsumsi">--</span> L/jam</div>
-        <div class="spec-item"><i class="fas fa-battery-full"></i> <strong>Sistem Start:</strong> <span id="specStart">--</span></div>
-        <div class="spec-item"><i class="fas fa-oil-can"></i> <strong>Oli:</strong> <span id="specOli">--</span></div>
-    </div>
-</div>
-<a href="tel:08123456789" class="fab-call"><i class="fas fa-headset fa-lg"></i> <span>Butuh Bantuan? <strong>Panggil Teknisi</strong></span></a>
+    <button class="btn-logout" onclick="handleLogout()">
+      <i class="fas fa-sign-out-alt"></i> Keluar
+    </button>
+  </aside>
 
-<script src="js/sidebar.js"></script>
-<script src="js/public-view.js"></script>
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+    <div class="top-header">
+      <div class="welcome-text">
+        <h1><i class="fas fa-broadcast-tower" style="color:var(--primary);"></i> Monitoring Publik <span id="displayUserName">Warga</span></h1>
+      </div>
+      <div class="time-badge">
+        <i class="far fa-clock"></i> <span id="liveTime">--:--</span>
+      </div>
+    </div>
+
+    <!-- KARTU UTAMA: RPM, Suhu, BBM, Tegangan -->
+    <div class="dashboard-grid" id="mainStatsCards">
+      <div class="stat-card">
+        <div class="card-label"><i class="fas fa-tachometer-alt"></i> Kecepatan Mesin</div>
+        <div class="card-value" id="valRpm">--</div>
+        <div class="card-sub">RPM</div>
+      </div>
+      <div class="stat-card">
+        <div class="card-label"><i class="fas fa-thermometer-half"></i> Suhu Pendingin</div>
+        <div class="card-value" id="valTemp">--</div>
+        <div class="card-sub">°C</div>
+      </div>
+      <div class="stat-card">
+        <div class="card-label"><i class="fas fa-gas-pump"></i> Bahan Bakar</div>
+        <div class="card-value" id="valFuel">--</div>
+        <div class="card-sub" id="fuelDesc">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="card-label"><i class="fas fa-bolt"></i> Tegangan</div>
+        <div class="card-value" id="valVolt">--</div>
+        <div class="card-sub">Volt</div>
+      </div>
+    </div>
+
+    <!-- BARIS: Spesifikasi Mesin, Health Index, Maintenance -->
+    <div class="row-cards">
+      <!-- SPESIFIKASI MESIN & GENERATOR -->
+      <div class="card-panel" id="specsPanel">
+        <h3><i class="fas fa-cogs"></i> Spesifikasi Mesin & Generator</h3>
+        <div class="loading-overlay" id="specsLoading">
+          <div class="spinner"></div> Memuat spesifikasi...
+        </div>
+        <div class="specs-grid" id="specsContent" style="display:none;">
+          <!-- Diisi dari API -->
+        </div>
+      </div>
+
+      <!-- HEALTH INDEX -->
+      <div class="card-panel" id="healthPanel">
+        <h3><i class="fas fa-heartbeat"></i> Health Index</h3>
+        <div class="loading-overlay" id="healthLoading">
+          <div class="spinner"></div> Menghitung...
+        </div>
+        <div id="healthContent" style="display:none; text-align:center;">
+          <div class="health-circle">
+            <div class="progress-ring" id="healthRing" style="background: conic-gradient(#22c55e 0deg 290deg, #e5e7eb 290deg 360deg);">
+              <span id="healthScore">81%</span>
+            </div>
+          </div>
+          <div class="health-label" id="healthLabel">Sistem Sehat</div>
+        </div>
+      </div>
+
+      <!-- UPCOMING MAINTENANCE & COST -->
+      <div class="card-panel" id="maintenancePanel">
+        <h3><i class="fas fa-tools"></i> Perawatan & Biaya</h3>
+        <div class="loading-overlay" id="maintLoading">
+          <div class="spinner"></div> Memuat data...
+        </div>
+        <div id="maintContent" style="display:none;">
+          <div class="maintenance-list" id="maintList"></div>
+          <div style="margin-top:1rem; font-weight:700; display:flex; justify-content:space-between; background:#f0fdf4; padding:10px; border-radius:10px;">
+            <span>Estimasi Biaya:</span>
+            <span class="cost-badge" id="estCost">Rp 0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BARIS BAWAH: Status & Grafik -->
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.2rem; margin-bottom:1.5rem;">
+      <div class="card-panel">
+        <h3><i class="fas fa-engine"></i> Status Mesin</h3>
+        <div id="engineStatusContent">
+          <p>Status: <strong id="engineStatusText">-</strong></p>
+          <p>Sinkronisasi: <strong id="syncStatusText">-</strong></p>
+        </div>
+      </div>
+      <div class="card-panel">
+        <h3><i class="fas fa-chart-line"></i> Riwayat Frekuensi (7 Hari)</h3>
+        <div class="bar-chart" id="freqChart">
+          <div class="bar" style="height:40%;"></div>
+          <div class="bar" style="height:60%;"></div>
+          <div class="bar" style="height:45%;"></div>
+          <div class="bar" style="height:75%;"></div>
+          <div class="bar" style="height:55%;"></div>
+          <div class="bar" style="height:80%;"></div>
+          <div class="bar" style="height:50%;"></div>
+        </div>
+        <div class="chart-labels">
+          <span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert & System Status -->
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.2rem;">
+      <div class="card-panel">
+        <h3><i class="fas fa-bell"></i> Notifikasi Terbaru</h3>
+        <div id="alertsContent">
+          <div class="loading-overlay"><div class="spinner"></div> Memuat alert...</div>
+        </div>
+      </div>
+      <div class="card-panel">
+        <h3><i class="fas fa-microchip"></i> Status Sistem</h3>
+        <div id="systemStatusContent">
+          <div class="loading-overlay"><div class="spinner"></div> Memuat status...</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // ==================== KONFIGURASI ====================
+    const API_BASE = window.location.origin;
+    
+    // ==================== AMBIL DATA USER DARI LOCALSTORAGE ====================
+    function getUserData() {
+      return {
+        name: localStorage.getItem('username') || 'Warga',
+        role: localStorage.getItem('userRole') || 'Masyarakat',
+        isLoggedIn: localStorage.getItem('isLoggedIn') === 'true'
+      };
+    }
+
+    // ==================== LOGOUT ====================
+    function handleLogout() {
+      localStorage.removeItem('isLoggedIn');
+      localStorage.removeItem('userRole');
+      localStorage.removeItem('username');
+      window.location.replace('login.html');
+    }
+
+    // ==================== UPDATE UI DENGAN NAMA USER ====================
+    function updateUserUI() {
+      const user = getUserData();
+      document.getElementById('displayUserName').textContent = user.name;
+      document.getElementById('sidebarUserName').textContent = user.name;
+      document.title = `Gen-Track Publik | ${user.name}`;
+    }
+
+    // ==================== CLOCK REAL-TIME ====================
+    function updateClock() {
+      const now = new Date();
+      let h = now.getHours();
+      const m = String(now.getMinutes()).padStart(2, '0');
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      document.getElementById('liveTime').textContent = `${h}:${m} ${ampm}`;
+    }
+
+    // ==================== FETCH DATA DARI API ====================
+    async function fetchAPI(endpoint) {
+      try {
+        const res = await fetch(`${API_BASE}${endpoint}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        console.error(`Gagal fetch ${endpoint}:`, err.message);
+        return { success: false, error: err.message };
+      }
+    }
+
+    // ==================== LOAD SEMUA DATA ====================
+    async function loadAllData() {
+      // 1. Data engine real-time
+      const engineRes = await fetchAPI('/api/engine-data/latest');
+      if (engineRes.success && engineRes.data) {
+        updateEngineStats(engineRes.data);
+      }
+
+      // 2. Data dashboard publik (health, maintenance, specs, parameters)
+      const publicRes = await fetchAPI('/api/public/dashboard');
+      if (publicRes.success && publicRes.data) {
+        updatePublicDashboard(publicRes.data);
+      }
+
+      // 3. Spesifikasi generator (dari endpoint terpisah)
+      const specsRes = await fetchAPI('/api/generator-specs');
+      if (specsRes.success && specsRes.data) {
+        updateSpecs(specsRes.data);
+      }
+
+      // 4. Alert terbaru
+      const alertsRes = await fetchAPI('/api/alerts?limit=10');
+      if (alertsRes.success && alertsRes.data) {
+        updateAlerts(alertsRes.data);
+      }
+
+      // 5. Maintenance dari database
+      const maintRes = await fetchAPI('/api/maintenance');
+      if (maintRes.success && maintRes.data) {
+        updateMaintenance(maintRes.data);
+      }
+    }
+
+    // ==================== UPDATE ENGINE STATS ====================
+    function updateEngineStats(data) {
+      document.getElementById('valRpm').textContent = data.rpm || 0;
+      document.getElementById('valTemp').textContent = (data.temp || data.coolant || 0).toFixed(1);
+      document.getElementById('valFuel').textContent = (data.fuel || 0) + '%';
+      document.getElementById('valVolt').textContent = (data.volt || 0).toFixed(1);
+
+      // Fuel description
+      const fuel = data.fuel || 0;
+      const fuelDesc = document.getElementById('fuelDesc');
+      if (fuel > 50) fuelDesc.textContent = 'Bahan bakar cukup';
+      else if (fuel > 20) fuelDesc.textContent = 'Mulai menipis';
+      else fuelDesc.textContent = 'Segera isi!';
+
+      // Engine status
+      const status = String(data.status || '').toUpperCase();
+      document.getElementById('engineStatusText').textContent = 
+        (status === 'RUNNING' || data.rpm > 0) ? 'AKTIF / MENYALA' : 'TIDAK AKTIF / MATI';
+      document.getElementById('syncStatusText').textContent = data.sync || 'OFF-GRID';
+    }
+
+    // ==================== UPDATE PUBLIC DASHBOARD ====================
+    function updatePublicDashboard(pubData) {
+      // Health Index
+      if (pubData.health) {
+        document.getElementById('healthLoading').style.display = 'none';
+        document.getElementById('healthContent').style.display = 'block';
+        const score = pubData.health.score || 0;
+        document.getElementById('healthScore').textContent = score + '%';
+        document.getElementById('healthLabel').textContent = pubData.health.message || 'Sistem Sehat';
+        
+        const ring = document.getElementById('healthRing');
+        const deg = (score / 100) * 360;
+        let color = score >= 80 ? '#22c55e' : (score >= 50 ? '#f59e0b' : '#ef4444');
+        ring.style.background = `conic-gradient(${color} 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`;
+      }
+
+      // Maintenance prediction
+      if (pubData.maintenance) {
+        document.getElementById('maintLoading').style.display = 'none';
+        document.getElementById('maintContent').style.display = 'block';
+        
+        const maintList = document.getElementById('maintList');
+        maintList.innerHTML = `
+          <div class="maint-item">
+            <div class="maint-info">
+              <i class="fas fa-info-circle" style="color:${pubData.maintenance.urgency === 'danger' ? '#ef4444' : '#f59e0b'};"></i>
+              <span>${pubData.maintenance.message}</span>
+            </div>
+          </div>
+          <div class="maint-item">
+            <div class="maint-info">
+              <i class="fas fa-clock"></i>
+              <span>Total Jam Operasi: <strong>${pubData.maintenance.totalHours || 0} jam</strong></span>
+            </div>
+          </div>
+        `;
+      }
+
+      // Parameters (untuk deskripsi tambahan)
+      if (pubData.parameters) {
+        const p = pubData.parameters;
+        if (p.fuel) document.getElementById('fuelDesc').textContent = p.fuel.description || '-';
+      }
+    }
+
+    // ==================== UPDATE SPESIFIKASI ====================
+    function updateSpecs(specs) {
+      document.getElementById('specsLoading').style.display = 'none';
+      const content = document.getElementById('specsContent');
+      content.style.display = 'grid';
+      content.innerHTML = `
+        <div class="spec-item"><strong>Merk</strong><span>${specs.merk || '-'}</span></div>
+        <div class="spec-item"><strong>Tipe</strong><span>${specs.tipe || '-'}</span></div>
+        <div class="spec-item"><strong>Daya Maks</strong><span>${specs.dayaMaks || '-'} kW</span></div>
+        <div class="spec-item"><strong>Tegangan</strong><span>${specs.tegangan || '-'} V</span></div>
+        <div class="spec-item"><strong>Frekuensi</strong><span>${specs.frekuensi || '-'} Hz</span></div>
+        <div class="spec-item"><strong>Tipe Mesin</strong><span>${specs.tipeMesin || '-'}</span></div>
+        <div class="spec-item"><strong>Kapasitas Mesin</strong><span>${specs.kapasitasMesin || '-'}</span></div>
+        <div class="spec-item"><strong>Kap. Tangki</strong><span>${specs.kapasitasTangki || '-'} L</span></div>
+      `;
+    }
+
+    // ==================== UPDATE ALERTS ====================
+    function updateAlerts(alerts) {
+      const container = document.getElementById('alertsContent');
+      if (!alerts || alerts.length === 0) {
+        container.innerHTML = '<p style="color:var(--muted);">Tidak ada notifikasi aktif.</p>';
+        return;
+      }
+      container.innerHTML = alerts.slice(0, 6).map(a => {
+        const severityClass = a.severity === 'critical' ? '' : 'warning';
+        const icon = a.severity === 'critical' ? 'fa-exclamation-circle' : 'fa-exclamation-triangle';
+        return `
+          <div class="alert-item ${severityClass}">
+            <i class="fas ${icon}" style="color:${a.severity === 'critical' ? '#ef4444' : '#f59e0b'};"></i>
+            <span><strong>${a.parameter?.toUpperCase() || '-'}</strong>: ${a.message || 'Nilai di luar batas'} 
+            <small>(${new Date(a.timestamp).toLocaleDateString('id-ID')})</small></span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==================== UPDATE MAINTENANCE ====================
+    function updateMaintenance(maintData) {
+      const list = document.getElementById('maintList');
+      if (!maintData || maintData.length === 0) {
+        // Biarkan data dari public dashboard yang tampil
+        return;
+      }
+      
+      // Hitung total biaya
+      const totalCost = maintData.reduce((sum, item) => sum + (item.cost || 0), 0);
+      document.getElementById('estCost').textContent = 
+        'Rp ' + totalCost.toLocaleString('id-ID');
+
+      // Tampilkan 3 item maintenance terbaru
+      const items = maintData.slice(0, 3).map(item => `
+        <div class="maint-item">
+          <div class="maint-info">
+            <i class="fas fa-wrench" style="color:var(--primary);"></i>
+            <span>${item.task || 'Perawatan'}</span>
+          </div>
+          <span style="font-size:0.8rem; color:var(--muted);">${item.dueDate ? new Date(item.dueDate).toLocaleDateString('id-ID') : '-'}</span>
+        </div>
+      `).join('');
+      
+      if (items) {
+        document.getElementById('maintList').innerHTML = items + document.getElementById('maintList').innerHTML;
+      }
+    }
+
+    // ==================== SYSTEM STATUS (dari data terbaru) ====================
+    async function loadSystemStatus() {
+      const engineRes = await fetchAPI('/api/engine-data/latest');
+      if (!engineRes.success || !engineRes.data) return;
+      
+      const d = engineRes.data;
+      const container = document.getElementById('systemStatusContent');
+      
+      const statuses = [
+        { label: 'Tegangan', value: d.volt || 0, min: 190, max: 250, unit: 'V' },
+        { label: 'Arus', value: d.amp || 0, max: 100, unit: 'A' },
+        { label: 'Frekuensi', value: d.freq || 0, min: 48, max: 52, unit: 'Hz' },
+        { label: 'Tekanan Oli', value: d.oil || 0, min: 1, unit: 'Bar' },
+        { label: 'Suhu Pendingin', value: d.coolant || d.temp || 0, max: 95, unit: '°C' },
+        { label: 'Suhu Udara Masuk', value: d.iat || 0, max: 60, unit: '°C' },
+        { label: 'Bahan Bakar', value: d.fuel || 0, min: 20, unit: '%' },
+        { label: 'Rasio Udara-BBM', value: d.afr || 0, min: 12, max: 16, unit: '' },
+      ];
+
+      container.innerHTML = statuses.map(s => {
+        let statusClass = 'status-normal';
+        let statusText = 'Normal';
+        
+        if (s.max !== undefined && s.value > s.max) {
+          statusClass = 'status-critical';
+          statusText = 'Kritis';
+        } else if (s.min !== undefined && s.value < s.min) {
+          statusClass = 'status-warning';
+          statusText = 'Warning';
+        }
+        
+        return `
+          <div class="status-row">
+            <span>${s.label}</span>
+            <span class="${statusClass}">${s.value} ${s.unit} (${statusText})</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==================== SIDEBAR NAVIGATION ====================
+    function setupSidebar() {
+      document.querySelectorAll('.nav-menu li a').forEach(link => {
+        link.addEventListener('click', function(e) {
+          e.preventDefault();
+          document.querySelectorAll('.nav-menu li').forEach(li => li.classList.remove('active'));
+          this.parentElement.classList.add('active');
+        });
+      });
+    }
+
+    // ==================== INISIALISASI ====================
+    async function init() {
+      // Verifikasi user sudah login sebagai warga
+      const user = getUserData();
+      if (!user.isLoggedIn) {
+        window.location.replace('login.html');
+        return;
+      }
+      
+      // Pastikan role adalah masyarakat (auth-guard.js sudah handle, tapi double-check)
+      const role = (user.role || '').toLowerCase();
+      if (role !== 'masyarakat' && role !== 'user' && role !== 'viewer') {
+        // Jika bukan role publik, redirect ke index (auth-guard juga handle ini)
+        window.location.replace('index.html');
+        return;
+      }
+
+      updateUserUI();
+      updateClock();
+      setInterval(updateClock, 30000);
+      setupSidebar();
+
+      // Load semua data
+      await Promise.all([
+        loadAllData(),
+        loadSystemStatus()
+      ]);
+
+      // Refresh data setiap 30 detik
+      setInterval(async () => {
+        await Promise.all([
+          loadAllData(),
+          loadSystemStatus()
+        ]);
+      }, 30000);
+    }
+
+    // Jalankan saat halaman siap
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
 </body>
 </html>
