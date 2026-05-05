@@ -22,8 +22,11 @@
       --dark: #0f172a;
       --card-bg: #fff;
       --border: #d0d7e1;
-      --sidebar-width: 80px;
-      --sidebar-expanded: 220px;
+      --sidebar-bg: #183153;
+      --sidebar-hover: #3b6bdf;
+      --icon-size-lg: 1.3rem;
+      --text-base-size: 0.9rem;
+      --text-md-size: 0.95rem;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -36,443 +39,280 @@
       min-height: 100vh;
     }
 
-    .container { 
-      display: flex; 
-      min-height: 100vh; 
-      width: 100%; 
+    /* ===== SIDEBAR (REFERENSI) ===== */
+    .sidebar {
+      width: 80px;
+      background: var(--sidebar-bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 20px;
+      position: fixed;
+      height: 100vh;
+      overflow-y: auto;
+      box-shadow: 3px 0 15px rgba(0, 0, 0, 0.1);
+      z-index: 100;
+      transition: width 0.3s ease, transform 0.3s ease;
+      transform: translateZ(0);
+      backface-visibility: hidden;
+      left: 0;
+      top: 0;
+    }
+
+    .sidebar:hover,
+    body.sidebar-expanded .sidebar {
+      width: 220px;
+    }
+
+    .sidebar-logo {
+      width: 50px;
+      height: 50px;
+      margin: 0 auto 30px auto;
+      background: white;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .sidebar-logo i {
+      font-size: 1.6rem;
+      color: var(--primary);
+    }
+
+    .nav-items-wrapper {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: align-items 0.3s ease;
+      flex: 1;
+    }
+
+    .sidebar:hover .nav-items-wrapper,
+    body.sidebar-expanded .nav-items-wrapper {
+      align-items: flex-start;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      color: white;
+      text-decoration: none;
+      padding: 14px;
+      margin: 4px 8px;
+      border-radius: 10px;
+      width: calc(100% - 16px);
+      font-size: var(--text-base-size);
+      transition: all 0.3s ease;
+      white-space: nowrap;
+      overflow: hidden;
       position: relative;
     }
 
-    /* ===== TOP BAR (HERO HEADER) ===== */
+    .nav-item:hover,
+    .nav-item.active {
+      background: var(--sidebar-hover);
+      transform: translateX(3px);
+    }
+
+    .nav-icon {
+      font-size: var(--icon-size-lg);
+      min-width: 22px;
+      text-align: center;
+      flex-shrink: 0;
+      transition: margin-right 0.3s ease;
+    }
+
+    .sidebar:hover .nav-icon,
+    body.sidebar-expanded .nav-icon {
+      margin-right: 15px;
+    }
+
+    .nav-icon i {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .nav-text {
+      opacity: 0;
+      font-size: var(--text-md-size);
+      font-weight: 500;
+      transition: opacity 0.3s ease;
+    }
+
+    .sidebar:hover .nav-text,
+    body.sidebar-expanded .nav-text {
+      opacity: 1;
+    }
+
+    .nav-item.logout-btn {
+      color: #ff6b6b;
+      font-weight: 600;
+      margin-top: auto;
+      margin-bottom: 12px;
+    }
+
+    .nav-item.logout-btn:hover {
+      background: rgba(239, 68, 68, 0.15) !important;
+    }
+
+    .sidebar::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .sidebar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    /* ===== MAIN CONTENT ===== */
+    .main-content {
+      flex: 1;
+      margin-left: 80px;
+      padding: 20px;
+      transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      will-change: margin-left;
+      min-width: 0;
+      min-height: 100vh;
+    }
+
+    .sidebar:hover ~ .main-content,
+    body.sidebar-expanded .main-content {
+      margin-left: 220px;
+    }
+
+    /* ===== TOP BAR ===== */
     .top-bar {
-      position: fixed;
-      top: 0;
-      left: var(--sidebar-width);
-      right: 0;
-      height: 80px;
       background: linear-gradient(135deg, #1a3bb5 0%, #2f58e8 50%, #3b6bdf 100%);
-      z-index: 100;
+      border-radius: 16px;
+      padding: 20px 28px;
+      margin-bottom: 20px;
+      box-shadow: 0 12px 30px rgba(23, 69, 165, 0.22);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 28px;
-      box-shadow: 0 4px 24px rgba(23, 69, 165, 0.25);
-      transition: left 0.3s ease;
+      flex-wrap: wrap;
+      gap: 16px;
+      position: relative;
+      overflow: hidden;
     }
 
-    #sidebar-container:hover ~ .top-bar {
-      left: var(--sidebar-expanded);
+    .top-bar::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 110%, rgba(255,255,255,0.06) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 80% -10%, rgba(255,255,255,0.08) 0%, transparent 60%);
+      pointer-events: none;
     }
 
     .top-bar-left {
       display: flex;
       align-items: center;
       gap: 16px;
+      z-index: 1;
     }
 
-    .top-bar-logo {
+    .top-bar-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      border: 2px solid rgba(255,255,255,0.4);
       display: flex;
       align-items: center;
-      gap: 10px;
-    }
-
-    .top-bar-logo i {
-      font-size: 1.8rem;
+      justify-content: center;
       color: #fff;
-      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.2));
+      font-size: 1.3rem;
     }
 
-    .top-bar-logo span {
-      font-weight: 700;
-      font-size: 1.2rem;
+    .top-bar-info h2 {
       color: #fff;
-      letter-spacing: 0.5px;
-      display: none;
+      font-size: 1.1rem;
+      font-weight: 600;
+      line-height: 1.2;
     }
 
-    @media (min-width: 768px) {
-      .top-bar-logo span {
-        display: inline;
-      }
+    .top-bar-info span {
+      color: rgba(255,255,255,0.75);
+      font-size: 0.8rem;
     }
 
     .top-bar-center {
       text-align: center;
-      color: #fff;
+      z-index: 1;
     }
 
     .top-bar-time {
-      font-size: 2rem;
+      font-size: 2.4rem;
       font-weight: 800;
       line-height: 1;
-      letter-spacing: -0.02em;
-      text-shadow: 0 2px 12px rgba(0,0,0,0.2);
-    }
-
-    .top-bar-greeting {
-      font-size: 0.95rem;
-      font-weight: 400;
-      color: rgba(255,255,255,0.9);
-      margin-top: 2px;
-    }
-
-    .top-bar-greeting span {
-      font-weight: 600;
       color: #fff;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.2);
     }
 
     .top-bar-jargon {
       font-size: 0.78rem;
       color: rgba(255,255,255,0.65);
       font-style: italic;
-      margin-top: 1px;
+      margin-top: 4px;
     }
 
     .top-bar-right {
+      z-index: 1;
       display: flex;
-      align-items: center;
-      gap: 16px;
+      gap: 10px;
     }
 
-    .user-profile-btn {
-      width: 42px;
-      height: 42px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.15);
-      border: 2px solid rgba(255,255,255,0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.25s;
-      color: #fff;
-      font-size: 1.2rem;
-      position: relative;
-    }
-
-    .user-profile-btn:hover {
-      background: rgba(255,255,255,0.25);
-      border-color: rgba(255,255,255,0.5);
-      transform: scale(1.05);
-    }
-
-    .user-dropdown {
-      position: absolute;
-      top: 54px;
-      right: 0;
+    .btn-call-tech {
       background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 12px 36px rgba(0,0,0,0.18);
-      min-width: 200px;
-      padding: 12px;
-      display: none;
-      z-index: 200;
-      border: 1px solid var(--border);
-    }
-
-    .user-dropdown.show {
-      display: block;
-      animation: fadeIn 0.2s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .user-dropdown .user-info {
-      padding: 8px 12px;
-      border-bottom: 1px solid #f1f5f9;
-      margin-bottom: 8px;
-    }
-
-    .user-dropdown .user-name-drop {
-      font-weight: 700;
-      color: var(--dark);
-      font-size: 0.9rem;
-    }
-
-    .user-dropdown .user-role-drop {
-      font-size: 0.75rem;
-      color: var(--muted);
-    }
-
-    .user-dropdown button {
-      width: 100%;
-      padding: 10px 12px;
+      color: var(--primary);
       border: none;
-      background: #fef2f2;
-      color: var(--danger);
-      border-radius: 8px;
+      padding: 10px 20px;
+      border-radius: 25px;
+      font-weight: 700;
+      font-size: 0.9rem;
       cursor: pointer;
-      font-weight: 600;
-      font-size: 0.85rem;
       display: flex;
       align-items: center;
       gap: 8px;
-      transition: 0.2s;
+      transition: all 0.3s;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.15);
     }
 
-    .user-dropdown button:hover {
-      background: #fee2e2;
+    .btn-call-tech:hover {
+      background: #f0f4ff;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.2);
     }
 
-    /* ===== SIDEBAR ===== */
-    .sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      width: var(--sidebar-width);
-      background: linear-gradient(180deg, #0f1e30 0%, #12273f 50%, #0b1a2f 100%);
-      z-index: 150;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px 0;
-      transition: width 0.3s ease;
-      overflow: hidden;
-      box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+    .btn-call-tech i {
+      animation: pulse 1.5s infinite;
     }
 
-    #sidebar-container:hover .sidebar {
-      width: var(--sidebar-expanded);
-      align-items: flex-start;
-      padding-left: 16px;
-      padding-right: 16px;
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.2); }
     }
 
-    .sidebar-logo {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 32px;
-      padding: 0 8px;
-      white-space: nowrap;
-    }
-
-    .sidebar-logo i {
-      font-size: 1.8rem;
-      color: #3b82f6;
-      flex-shrink: 0;
-      filter: drop-shadow(0 0 8px rgba(59,130,246,0.5));
-    }
-
-    .sidebar-logo span {
-      font-weight: 700;
-      font-size: 1.2rem;
-      color: #e0f2fe;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    #sidebar-container:hover .sidebar-logo span {
-      opacity: 1;
-    }
-
-    .sidebar-nav {
-      list-style: none;
-      width: 100%;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      padding: 0 8px;
-    }
-
-    .sidebar-nav li a {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      padding: 12px 10px;
-      text-decoration: none;
-      color: #94a3b8;
-      border-radius: 10px;
-      transition: all 0.25s;
-      white-space: nowrap;
-      font-weight: 500;
-      font-size: 0.9rem;
-    }
-
-    .sidebar-nav li a i {
-      width: 22px;
-      text-align: center;
-      font-size: 1.1rem;
-      flex-shrink: 0;
-    }
-
-    .sidebar-nav li a .nav-text {
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    #sidebar-container:hover .sidebar-nav li a .nav-text {
-      opacity: 1;
-    }
-
-    .sidebar-nav li:hover a,
-    .sidebar-nav li.active a {
-      background: rgba(59,130,246,0.2);
-      color: #fff;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    }
-
-    .sidebar-footer {
-      margin-top: auto;
-      padding: 12px 8px;
-      width: 100%;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      border-top: 1px solid rgba(255,255,255,0.08);
-      white-space: nowrap;
-    }
-
-    .sidebar-footer i {
-      font-size: 1.5rem;
-      color: #94a3b8;
-      flex-shrink: 0;
-    }
-
-    .sidebar-footer .footer-text {
-      opacity: 0;
-      transition: opacity 0.2s ease;
-      font-size: 0.8rem;
-      color: #94a3b8;
-    }
-
-    #sidebar-container:hover .sidebar-footer .footer-text {
-      opacity: 1;
-    }
-
-    /* ===== MAIN CONTENT ===== */
-    .main-content {
-      flex: 1;
-      margin-left: var(--sidebar-width);
-      padding: 24px;
-      padding-top: 104px; /* top-bar height + padding */
-      transition: margin-left 0.3s ease;
-      width: calc(100% - var(--sidebar-width));
-      min-height: 100vh;
-    }
-
-    #sidebar-container:hover ~ .main-content {
-      margin-left: var(--sidebar-expanded);
-      width: calc(100% - var(--sidebar-expanded));
-    }
-
+    /* ===== DASHBOARD CONTAINER ===== */
     .dashboard-container {
       width: min(100%, 1320px);
       margin: 0 auto;
       display: grid;
-      gap: 24px;
-    }
-
-    /* ===== HERO SECTION (di bawah top bar) ===== */
-    .hero {
-      background: linear-gradient(135deg, #1a3bb5 0%, #2f58e8 50%, #3b6bdf 100%);
-      min-height: 140px;
-      border-radius: 16px;
-      box-shadow: 0 12px 30px rgba(23, 69, 165, 0.22);
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 28px 24px;
-    }
-
-    .hero::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 80% 60% at 50% 110%, rgba(255,255,255,0.08) 0%, transparent 70%),
-        radial-gradient(ellipse 60% 40% at 20% -10%, rgba(255,255,255,0.10) 0%, transparent 60%);
-      z-index: 1;
-    }
-
-    .hero::after {
-      content: '';
-      position: absolute;
-      bottom: -60px;
-      left: -60px;
-      width: 220px;
-      height: 220px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.05);
-      z-index: 1;
-    }
-
-    .hero-center {
-      position: relative;
-      z-index: 3;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      color: #fff;
-      gap: 6px;
-    }
-
-    .hero-time {
-      font-size: clamp(3rem, 6vw, 3.8rem);
-      font-weight: 800;
-      line-height: 1;
-      letter-spacing: -0.02em;
-      color: #fff;
-      text-shadow: 0 2px 16px rgba(0,0,0,0.2);
-    }
-
-    .hero-greeting {
-      font-size: clamp(1.1rem, 2vw, 1.3rem);
-      font-weight: 400;
-      color: rgba(255,255,255,0.92);
-      margin-top: 8px;
-      line-height: 1.3;
-    }
-
-    .hero-greeting span {
-      font-weight: 700;
-      color: #fff;
-    }
-
-    .hero-subtitle {
-      font-size: clamp(0.8rem, 1.2vw, 0.9rem);
-      color: rgba(255,255,255,0.68);
-      margin-top: 4px;
-      font-style: italic;
-      letter-spacing: 0.01em;
-    }
-
-    /* ===== SECTION BLOCK ===== */
-    .section-block {
-      background: #fff;
-      border: 1px solid rgba(208, 215, 225, 0.9);
-      border-radius: 16px;
-      padding: 22px;
-      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
-    }
-
-    .section-heading {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
-      gap: 18px;
-      margin-bottom: 18px;
-    }
-
-    .section-heading h2 {
-      font-size: clamp(1.1rem, 2vw, 1.35rem);
-      color: var(--dark);
-    }
-
-    .section-eyebrow {
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--primary);
+      gap: 20px;
     }
 
     /* ===== OVERVIEW CARDS ===== */
@@ -503,7 +343,7 @@
     .overview-icon {
       width: 60px; 
       height: 60px; 
-      border-radius: 12px;
+      border-radius: 14px;
       display: flex; 
       align-items: center; 
       justify-content: center;
@@ -512,10 +352,11 @@
       flex-shrink: 0;
     }
 
-    .icon-prm { background: linear-gradient(135deg, var(--primary), var(--primary-light)); }
-    .icon-sec { background: linear-gradient(135deg, var(--secondary), var(--secondary-dark)); }
-    .icon-wrn { background: linear-gradient(135deg, var(--warning), #fdba74); }
-    .icon-dng { background: linear-gradient(135deg, var(--danger), #fca5a5); }
+    .icon-prm { background: linear-gradient(135deg, #1745a5, #3b6bdf); }
+    .icon-sec { background: linear-gradient(135deg, #10b981, #047857); }
+    .icon-wrn { background: linear-gradient(135deg, #f97316, #fdba74); }
+    .icon-dng { background: linear-gradient(135deg, #ef4444, #fca5a5); }
+    .icon-inf { background: linear-gradient(135deg, #6366f1, #818cf8); }
 
     .overview-value { 
       font-size: 1.5rem; 
@@ -525,8 +366,15 @@
     }
 
     .overview-label { 
-      font-size: 0.85rem; 
+      font-size: 0.82rem; 
       color: var(--muted); 
+      line-height: 1.2;
+    }
+
+    .overview-sub {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-weight: 500;
     }
 
     /* ===== GRID LAYOUTS ===== */
@@ -558,7 +406,7 @@
     .card h3 {
       background: linear-gradient(135deg, var(--primary), var(--primary-light)); 
       color: white;
-      padding: 14px 16px; 
+      padding: 14px 18px; 
       border-radius: 12px 12px 0 0;
       margin: -20px -20px 18px -20px;
       font-size: 0.95rem; 
@@ -568,12 +416,24 @@
       font-weight: 600;
     }
 
+    .card h3.card-header-green {
+      background: linear-gradient(135deg, #059669, #10b981);
+    }
+
+    .card h3.card-header-orange {
+      background: linear-gradient(135deg, #ea580c, #f97316);
+    }
+
+    .card h3.card-header-purple {
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+    }
+
     .list-row {
       display: flex; 
       justify-content: space-between; 
-      padding: 12px 0;
+      padding: 10px 0;
       border-bottom: 1px solid #f1f5f9; 
-      font-size: 0.9rem; 
+      font-size: 0.88rem; 
       color: var(--dark);
     }
 
@@ -581,35 +441,37 @@
     .list-row span:first-child { color: var(--muted); font-weight: 500; }
     .list-row span:last-child { font-weight: 600; }
 
-    .st-ok { color: var(--secondary); font-weight: 700; }
-    .st-err { color: var(--danger); font-weight: 700; }
-    .st-warn { color: var(--warning); font-weight: 700; }
+    .st-ok { color: #10b981; font-weight: 700; }
+    .st-err { color: #ef4444; font-weight: 700; }
+    .st-warn { color: #f59e0b; font-weight: 700; }
 
     /* ===== ALERT CARD ===== */
-    #alertContainer {
+    .alert-list {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
+      max-height: 300px;
+      overflow-y: auto;
     }
 
     .alert-card {
       display: flex;
       align-items: center;
-      padding: 15px;
+      padding: 14px;
       border-radius: 12px;
       background: #fff;
       position: relative;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.03);
       transition: transform 0.2s;
     }
 
     .alert-card:hover {
-      transform: translateX(5px);
+      transform: translateX(4px);
     }
 
-    .ac-critical { background: #fff5f5; border-left: 6px solid #ef4444; }
-    .ac-warning  { background: #fffaf0; border-left: 6px solid #f97316; }
-    .ac-info     { background: #eff6ff; border-left: 6px solid #3b82f6; }
+    .ac-critical { background: #fff5f5; border-left: 5px solid #ef4444; }
+    .ac-warning  { background: #fffaf0; border-left: 5px solid #f97316; }
+    .ac-info     { background: #eff6ff; border-left: 5px solid #3b82f6; }
 
     .ac-icon {
       width: 36px;
@@ -620,7 +482,7 @@
       justify-content: center;
       color: white;
       font-size: 0.85rem;
-      margin-right: 15px;
+      margin-right: 14px;
       flex-shrink: 0;
     }
 
@@ -632,26 +494,31 @@
       flex: 1;
       display: flex;
       flex-direction: column;
+      min-width: 0;
     }
 
     .ac-title {
       font-weight: 700;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       color: #1e293b;
       margin-bottom: 2px;
       text-transform: uppercase;
     }
 
     .ac-desc {
-      font-size: 0.75rem;
+      font-size: 0.73rem;
       color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .ac-date {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: #94a3b8;
       font-weight: 600;
       margin-left: 10px;
+      white-space: nowrap;
     }
 
     /* ===== SPECS GRID ===== */
@@ -663,22 +530,30 @@
 
     .spec-item {
       background: #f8fafc;
-      padding: 10px 12px;
+      padding: 12px;
       border-radius: 10px;
       border: 1px solid #e2e8f0;
+      transition: all 0.2s;
+    }
+
+    .spec-item:hover {
+      background: #eff6ff;
+      border-color: var(--primary-light);
     }
 
     .spec-item strong {
       display: block;
-      font-size: 0.7rem;
+      font-size: 0.68rem;
       text-transform: uppercase;
       color: var(--muted);
-      margin-bottom: 2px;
+      margin-bottom: 3px;
+      letter-spacing: 0.5px;
     }
 
     .spec-item span {
       font-weight: 600;
       color: var(--dark);
+      font-size: 0.9rem;
     }
 
     /* ===== HEALTH INDEX ===== */
@@ -686,17 +561,17 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 1rem 0;
+      margin: 0.5rem 0 1rem;
     }
 
     .progress-ring {
-      width: 110px;
-      height: 110px;
+      width: 120px;
+      height: 120px;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 2rem;
+      font-size: 2.2rem;
       font-weight: 800;
       position: relative;
     }
@@ -704,7 +579,7 @@
     .progress-ring::before {
       content: '';
       position: absolute;
-      inset: 8px;
+      inset: 10px;
       background: white;
       border-radius: 50%;
       z-index: 0;
@@ -717,16 +592,35 @@
 
     .health-label {
       text-align: center;
-      font-weight: 600;
-      font-size: 0.9rem;
+      font-weight: 700;
+      font-size: 0.95rem;
       margin-top: 0.3rem;
+    }
+
+    .health-details {
+      display: flex;
+      justify-content: space-around;
+      margin-top: 12px;
+      font-size: 0.75rem;
+    }
+
+    .health-detail-item {
+      text-align: center;
+    }
+
+    .health-detail-item .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 4px;
     }
 
     /* ===== MAINTENANCE ===== */
     .maintenance-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
     }
 
     .maint-item {
@@ -734,21 +628,38 @@
       justify-content: space-between;
       align-items: center;
       background: #f8fafc;
-      padding: 10px;
+      padding: 12px;
       border-radius: 10px;
       border: 1px solid #e2e8f0;
+      transition: all 0.2s;
+    }
+
+    .maint-item:hover {
+      background: #f0fdf4;
+      border-color: #10b981;
     }
 
     .maint-info {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
     }
+
+    .maint-urgency {
+      padding: 3px 10px;
+      border-radius: 15px;
+      font-size: 0.7rem;
+      font-weight: 700;
+    }
+
+    .maint-urgency.good { background: #d1fae5; color: #065f46; }
+    .maint-urgency.warning { background: #fef3c7; color: #92400e; }
+    .maint-urgency.danger { background: #fee2e2; color: #991b1b; }
 
     .cost-badge {
       background: #fef3c7;
       color: #92400e;
-      padding: 4px 12px;
+      padding: 6px 14px;
       border-radius: 20px;
       font-weight: 700;
       font-size: 0.85rem;
@@ -764,25 +675,174 @@
     .bar-chart {
       display: flex;
       align-items: flex-end;
-      gap: 6px;
-      height: 100px;
+      gap: 8px;
+      height: 120px;
       margin-top: 0.5rem;
     }
 
     .bar {
       flex: 1;
-      background: var(--primary-light);
-      border-radius: 6px 6px 0 0;
-      min-width: 14px;
-      transition: height 0.4s;
+      background: linear-gradient(180deg, var(--primary-light), var(--primary));
+      border-radius: 8px 8px 0 0;
+      min-width: 16px;
+      transition: height 0.5s ease;
+      position: relative;
+    }
+
+    .bar:hover {
+      background: linear-gradient(180deg, #60a5fa, #2563eb);
     }
 
     .chart-labels {
       display: flex;
       justify-content: space-between;
-      font-size: 0.7rem;
+      font-size: 0.72rem;
       color: var(--muted);
-      margin-top: 6px;
+      margin-top: 8px;
+      font-weight: 500;
+    }
+
+    /* ===== MODAL CALL TECHNICIAN ===== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.6);
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal {
+      background: white;
+      border-radius: 20px;
+      padding: 28px;
+      width: min(90%, 480px);
+      box-shadow: 0 24px 48px rgba(0,0,0,0.25);
+      animation: slideUp 0.3s ease;
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(30px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .modal h2 {
+      font-size: 1.3rem;
+      color: var(--dark);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .modal p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 20px;
+    }
+
+    .modal .form-group {
+      margin-bottom: 16px;
+    }
+
+    .modal label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 0.85rem;
+      color: var(--dark);
+    }
+
+    .modal input,
+    .modal textarea,
+    .modal select {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-family: inherit;
+      transition: 0.2s;
+    }
+
+    .modal input:focus,
+    .modal textarea:focus,
+    .modal select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(23, 69, 165, 0.1);
+    }
+
+    .modal textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .modal-buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      border-radius: 10px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-light);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: #f1f5f9;
+      color: var(--dark);
+    }
+
+    .btn-secondary:hover {
+      background: #e2e8f0;
+    }
+
+    /* ===== TOAST NOTIFICATION ===== */
+    .toast {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      background: #10b981;
+      color: white;
+      padding: 14px 24px;
+      border-radius: 12px;
+      font-weight: 600;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+      z-index: 300;
+      display: none;
+      animation: slideIn 0.3s ease;
+    }
+
+    .toast.show {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
     }
 
     /* ===== LOADING ===== */
@@ -808,274 +868,382 @@
       to { transform: rotate(360deg); }
     }
 
+    /* ===== MOBILE TOGGLE ===== */
+    .mobile-menu-toggle {
+      display: none;
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      width: 44px;
+      height: 44px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 14px;
+      background: linear-gradient(135deg, #0f2f70, #183153);
+      color: #fff;
+      box-shadow: 0 16px 32px rgba(15, 23, 42, 0.22);
+      z-index: 140;
+      cursor: pointer;
+    }
+
+    .sidebar-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 95;
+    }
+
+    body.mobile-sidebar-open .sidebar-overlay {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
     /* ===== RESPONSIVE ===== */
     @media (max-width: 1200px) {
       .overview-cards { grid-template-columns: repeat(2, 1fr); }
-      .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 992px) {
-      .top-bar {
-        left: 0;
-        padding: 0 16px;
+      .main-content,
+      .sidebar:hover ~ .main-content,
+      body.sidebar-expanded .main-content {
+        margin-left: 80px;
       }
-      #sidebar-container:hover ~ .top-bar {
-        left: 0;
-      }
-      .main-content {
-        margin-left: 0;
-        width: 100%;
-        padding-top: 104px;
-      }
-      #sidebar-container:hover ~ .main-content {
-        margin-left: 0;
-        width: 100%;
-      }
-      .sidebar {
-        width: 0;
-        padding: 0;
-      }
-      #sidebar-container:hover .sidebar {
-        width: var(--sidebar-expanded);
-        padding: 20px 16px;
-      }
-      .grid-2 { grid-template-columns: 1fr; }
-      .hero-time { font-size: 2.5rem; }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+      .top-bar { flex-direction: column; text-align: center; }
+      .top-bar-left { flex-direction: column; }
     }
 
     @media (max-width: 768px) {
-      .main-content { padding: 14px; padding-top: 96px; }
-      .dashboard-container { gap: 18px; }
-      .section-block { padding: 16px; border-radius: 20px; }
-      .hero { min-height: auto; padding: 24px 16px; border-radius: 16px; }
-      .overview-cards, .grid-3, .grid-2 { grid-template-columns: 1fr; gap: 14px; }
-      .overview-card { min-height: 96px; padding: 16px; }
-      .overview-icon { width: 52px; height: 52px; }
-      .card { border-radius: 18px; }
-      .chart-box { min-height: 220px; }
-      .top-bar-time { font-size: 1.5rem; }
-      .top-bar-greeting { font-size: 0.8rem; }
-      .top-bar-jargon { font-size: 0.7rem; }
+      .mobile-menu-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .sidebar {
+        width: min(300px, 86vw);
+        transform: translateX(-100%);
+        box-shadow: 12px 0 32px rgba(15, 23, 42, 0.2);
+        border-top-right-radius: 24px;
+        border-bottom-right-radius: 24px;
+        padding-top: 18px;
+      }
+
+      .sidebar:hover,
+      body.sidebar-expanded .sidebar,
+      body.mobile-sidebar-open .sidebar {
+        width: min(300px, 86vw);
+        transform: translateX(0);
+      }
+
+      .nav-items-wrapper,
+      .sidebar:hover .nav-items-wrapper,
+      body.sidebar-expanded .nav-items-wrapper {
+        align-items: flex-start;
+      }
+
+      .nav-icon,
+      .sidebar:hover .nav-icon,
+      body.sidebar-expanded .nav-icon {
+        margin-right: 15px;
+      }
+
+      .nav-text,
+      .sidebar:hover .nav-text,
+      body.sidebar-expanded .nav-text {
+        opacity: 1;
+      }
+
+      .main-content,
+      .sidebar:hover ~ .main-content,
+      body.sidebar-expanded .main-content {
+        margin-left: 0;
+        width: 100%;
+        padding: 14px;
+        padding-top: 70px;
+      }
+
+      .overview-cards { grid-template-columns: 1fr 1fr; }
+      .grid-3 { grid-template-columns: 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .top-bar-time { font-size: 1.8rem; }
+      body.mobile-sidebar-open { overflow: hidden; }
     }
 
     @media (max-width: 520px) {
-      .hero-time { font-size: 2.35rem; }
-      .hero-greeting { font-size: 1rem; }
+      .overview-cards { grid-template-columns: 1fr; }
+      .top-bar { padding: 16px; }
+      .top-bar-time { font-size: 1.5rem; }
+      .btn-call-tech { font-size: 0.8rem; padding: 8px 16px; }
     }
   </style>
 </head>
 <body>
-  <div class="container" id="sidebar-container">
-    <!-- ===== SIDEBAR ===== -->
-    <aside class="sidebar">
-      <div class="sidebar-logo">
-        <i class="fas fa-bolt"></i>
-        <span>Gen-Track</span>
-      </div>
-      <ul class="sidebar-nav">
-        <li class="active">
-          <a href="#"><i class="fas fa-tachometer-alt"></i><span class="nav-text">Dashboard Publik</span></a>
-        </li>
-        <li>
-          <a href="#"><i class="fas fa-chart-bar"></i><span class="nav-text">Statistik</span></a>
-        </li>
-        <li>
-          <a href="#"><i class="fas fa-history"></i><span class="nav-text">Riwayat</span></a>
-        </li>
-      </ul>
-      <div class="sidebar-footer">
-        <i class="fas fa-user-circle"></i>
-        <span class="footer-text" id="sidebarUserName">Warga</span>
-      </div>
-    </aside>
+  <!-- MOBILE MENU TOGGLE -->
+  <button class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Toggle menu">
+    <i class="fas fa-bars"></i>
+  </button>
 
-    <!-- ===== TOP BAR ===== -->
-    <header class="top-bar" id="topBar">
-      <div class="top-bar-left">
-        <div class="top-bar-logo">
-          <i class="fas fa-bolt"></i>
-          <span>Gen-Track</span>
-        </div>
-      </div>
-      <div class="top-bar-center">
-        <div class="top-bar-time" id="topBarTime">--:--</div>
-        <div class="top-bar-greeting">Selamat Datang, <span id="topBarUserName">Warga</span></div>
-        <div class="top-bar-jargon">"Generator Monitoring System — Pantau Performa, Jaga Efisiensi"</div>
-      </div>
-      <div class="top-bar-right">
-        <div style="position: relative;">
-          <button class="user-profile-btn" id="userProfileBtn" title="Profil User">
+  <!-- SIDEBAR OVERLAY -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <i class="fas fa-bolt"></i>
+    </div>
+    
+    <div class="nav-items-wrapper">
+      <a href="#" class="nav-item active" id="link-dashboard">
+        <span class="nav-icon"><i class="fas fa-home"></i></span>
+        <span class="nav-text">Dashboard</span>
+      </a>
+      
+      <a href="#" class="nav-item" id="link-stats">
+        <span class="nav-icon"><i class="fas fa-chart-bar"></i></span>
+        <span class="nav-text">Statistik</span>
+      </a>
+      
+      <a href="#" class="nav-item" id="link-history">
+        <span class="nav-icon"><i class="fas fa-history"></i></span>
+        <span class="nav-text">Riwayat</span>
+      </a>
+      
+      <a href="#" class="nav-item" id="link-info">
+        <span class="nav-icon"><i class="fas fa-info-circle"></i></span>
+        <span class="nav-text">Informasi</span>
+      </a>
+      
+      <a href="#" class="nav-item logout-btn" id="logoutBtn">
+        <span class="nav-icon"><i class="fas fa-sign-out-alt"></i></span>
+        <span class="nav-text">Keluar</span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="main-content" id="mainContent">
+    <div class="dashboard-container">
+      <!-- TOP BAR -->
+      <div class="top-bar">
+        <div class="top-bar-left">
+          <div class="top-bar-avatar">
             <i class="fas fa-user"></i>
+          </div>
+          <div class="top-bar-info">
+            <h2 id="topBarGreeting">Selamat Datang, <span id="topBarUserName">Warga</span></h2>
+            <span id="topBarRole">Masyarakat</span>
+          </div>
+        </div>
+        <div class="top-bar-center">
+          <div class="top-bar-time" id="topBarTime">--:--</div>
+          <div class="top-bar-jargon">"Generator Monitoring System — Pantau Performa, Jaga Efisiensi"</div>
+        </div>
+        <div class="top-bar-right">
+          <button class="btn-call-tech" id="btnCallTechnician" title="Panggil Teknisi">
+            <i class="fas fa-headset"></i> Panggil Teknisi
           </button>
-          <div class="user-dropdown" id="userDropdown">
-            <div class="user-info">
-              <div class="user-name-drop" id="dropdownUserName">Warga</div>
-              <div class="user-role-drop" id="dropdownUserRole">Masyarakat</div>
-            </div>
-            <button onclick="handleLogout()">
-              <i class="fas fa-sign-out-alt"></i> Keluar
-            </button>
+        </div>
+      </div>
+
+      <!-- OVERVIEW CARDS -->
+      <div class="overview-cards">
+        <div class="overview-card">
+          <div class="overview-icon icon-prm"><i class="fas fa-tachometer-alt"></i></div>
+          <div>
+            <div class="overview-value" id="valRpm">--</div>
+            <div class="overview-label">Kecepatan Mesin</div>
+            <div class="overview-sub">RPM</div>
+          </div>
+        </div>
+        <div class="overview-card">
+          <div class="overview-icon icon-sec"><i class="fas fa-thermometer-half"></i></div>
+          <div>
+            <div class="overview-value" id="valTemp">--</div>
+            <div class="overview-label">Suhu Pendingin</div>
+            <div class="overview-sub">°C</div>
+          </div>
+        </div>
+        <div class="overview-card">
+          <div class="overview-icon icon-wrn"><i class="fas fa-gas-pump"></i></div>
+          <div>
+            <div class="overview-value" id="valFuel">--</div>
+            <div class="overview-label">Bahan Bakar</div>
+            <div class="overview-sub" id="fuelSub">-</div>
+          </div>
+        </div>
+        <div class="overview-card">
+          <div class="overview-icon icon-dng"><i class="fas fa-bolt"></i></div>
+          <div>
+            <div class="overview-value" id="valVolt">--</div>
+            <div class="overview-label">Tegangan</div>
+            <div class="overview-sub">Volt</div>
           </div>
         </div>
       </div>
-    </header>
 
-    <!-- ===== MAIN CONTENT ===== -->
-    <main class="main-content">
-      <div class="dashboard-container">
-        <!-- HERO SECTION -->
-        <div class="hero">
-          <div class="hero-center">
-            <div class="hero-time" id="heroTime">--:--</div>
-            <div class="hero-greeting">Selamat Datang, <span id="heroUserName">Warga</span></div>
-            <div class="hero-subtitle">"Generator Monitoring System — Pantau Performa, Jaga Efisiensi"</div>
+      <!-- GRID 3: Spesifikasi, Health Index, Notifikasi Terbaru (SWITCHED) -->
+      <div class="grid-3">
+        <!-- Spesifikasi Mesin & Generator -->
+        <div class="card" id="specsCard">
+          <h3><i class="fas fa-cogs"></i> Spesifikasi Mesin & Generator</h3>
+          <div class="loading-overlay" id="specsLoading">
+            <div class="spinner"></div> Memuat spesifikasi...
           </div>
+          <div class="specs-grid" id="specsContent" style="display:none;"></div>
         </div>
 
-        <!-- OVERVIEW CARDS -->
-        <div class="overview-cards">
-          <div class="overview-card">
-            <div class="overview-icon icon-prm"><i class="fas fa-tachometer-alt"></i></div>
-            <div>
-              <div class="overview-value" id="valRpm">--</div>
-              <div class="overview-label">Kecepatan Mesin (RPM)</div>
-            </div>
+        <!-- Health Index -->
+        <div class="card" id="healthCard">
+          <h3 class="card-header-green"><i class="fas fa-heartbeat"></i> Health Index</h3>
+          <div class="loading-overlay" id="healthLoading">
+            <div class="spinner"></div> Menghitung...
           </div>
-          <div class="overview-card">
-            <div class="overview-icon icon-sec"><i class="fas fa-thermometer-half"></i></div>
-            <div>
-              <div class="overview-value" id="valTemp">--</div>
-              <div class="overview-label">Suhu Pendingin (°C)</div>
+          <div id="healthContent" style="display:none; text-align:center;">
+            <div class="health-circle">
+              <div class="progress-ring" id="healthRing">
+                <span id="healthScore">--%</span>
+              </div>
             </div>
-          </div>
-          <div class="overview-card">
-            <div class="overview-icon icon-wrn"><i class="fas fa-gas-pump"></i></div>
-            <div>
-              <div class="overview-value" id="valFuel">--</div>
-              <div class="overview-label">Bahan Bakar (%)</div>
-            </div>
-          </div>
-          <div class="overview-card">
-            <div class="overview-icon icon-dng"><i class="fas fa-bolt"></i></div>
-            <div>
-              <div class="overview-value" id="valVolt">--</div>
-              <div class="overview-label">Tegangan (Volt)</div>
+            <div class="health-label" id="healthLabel">-</div>
+            <div class="health-details">
+              <div class="health-detail-item"><span class="dot" style="background:#10b981;"></span> Kompresi</div>
+              <div class="health-detail-item"><span class="dot" style="background:#f59e0b;"></span> Oli</div>
+              <div class="health-detail-item"><span class="dot" style="background:#ef4444;"></span> Getaran</div>
             </div>
           </div>
         </div>
 
-        <!-- GRID 3: Spesifikasi, Health Index, Maintenance -->
-        <div class="grid-3">
-          <!-- Spesifikasi Mesin & Generator -->
-          <div class="card" id="specsCard">
-            <h3><i class="fas fa-cogs"></i> Spesifikasi Mesin & Generator</h3>
-            <div class="loading-overlay" id="specsLoading">
-              <div class="spinner"></div> Memuat...
-            </div>
-            <div class="specs-grid" id="specsContent" style="display:none;"></div>
+        <!-- Notifikasi Terbaru (PINDAH KE SINI) -->
+        <div class="card" id="alertsCard">
+          <h3 class="card-header-orange"><i class="fas fa-bell"></i> Notifikasi Terbaru</h3>
+          <div class="alert-list" id="alertContainer">
+            <div class="loading-overlay"><div class="spinner"></div> Memuat notifikasi...</div>
           </div>
+        </div>
+      </div>
 
-          <!-- Health Index -->
-          <div class="card" id="healthCard">
-            <h3><i class="fas fa-heartbeat"></i> Health Index</h3>
-            <div class="loading-overlay" id="healthLoading">
-              <div class="spinner"></div> Menghitung...
+      <!-- GRID 2: Chart & Perawatan/Biaya (SWITCHED) -->
+      <div class="grid-2">
+        <!-- Chart Frekuensi -->
+        <div class="card">
+          <h3 class="card-header-purple"><i class="fas fa-chart-line"></i> Riwayat Frekuensi (7 Hari)</h3>
+          <div class="chart-box">
+            <div class="bar-chart" id="freqChart">
+              <div class="bar" style="height:48%;"></div>
+              <div class="bar" style="height:65%;"></div>
+              <div class="bar" style="height:52%;"></div>
+              <div class="bar" style="height:80%;"></div>
+              <div class="bar" style="height:58%;"></div>
+              <div class="bar" style="height:85%;"></div>
+              <div class="bar" style="height:55%;"></div>
             </div>
-            <div id="healthContent" style="display:none; text-align:center;">
-              <div class="health-circle">
-                <div class="progress-ring" id="healthRing" style="background: conic-gradient(#22c55e 0deg 290deg, #e5e7eb 290deg 360deg);">
-                  <span id="healthScore">81%</span>
-                </div>
-              </div>
-              <div class="health-label" id="healthLabel">Sistem Sehat</div>
-            </div>
-          </div>
-
-          <!-- Upcoming Maintenance & Cost -->
-          <div class="card" id="maintenanceCard">
-            <h3><i class="fas fa-tools"></i> Perawatan & Biaya</h3>
-            <div class="loading-overlay" id="maintLoading">
-              <div class="spinner"></div> Memuat...
-            </div>
-            <div id="maintContent" style="display:none;">
-              <div class="maintenance-list" id="maintList"></div>
-              <div style="margin-top:1rem; font-weight:700; display:flex; justify-content:space-between; background:#f0fdf4; padding:10px; border-radius:10px;">
-                <span>Estimasi Biaya:</span>
-                <span class="cost-badge" id="estCost">Rp 0</span>
-              </div>
+            <div class="chart-labels">
+              <span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span>
             </div>
           </div>
         </div>
 
-        <!-- GRID 2: Status Mesin & Chart -->
-        <div class="grid-2">
-          <!-- Status Mesin -->
-          <div class="section-block">
-            <div class="section-heading">
-              <div>
-                <div class="section-eyebrow">STATUS</div>
-                <h2>Status Mesin</h2>
-              </div>
-            </div>
-            <div class="list-row">
-              <span>Status Operasi</span>
-              <span id="engineStatusText" class="st-err">-</span>
-            </div>
-            <div class="list-row">
-              <span>Sinkronisasi</span>
-              <span id="syncStatusText">-</span>
-            </div>
-            <div class="list-row">
-              <span>Total Jam Operasi</span>
-              <span id="totalHoursText">0 jam</span>
-            </div>
+        <!-- Perawatan & Biaya (PINDAH KE SINI) -->
+        <div class="card" id="maintenanceCard">
+          <h3><i class="fas fa-tools"></i> Perawatan & Biaya</h3>
+          <div class="loading-overlay" id="maintLoading">
+            <div class="spinner"></div> Memuat data perawatan...
           </div>
-
-          <!-- Chart Frekuensi -->
-          <div class="section-block">
-            <div class="section-heading">
-              <div>
-                <div class="section-eyebrow">TREN</div>
-                <h2>Riwayat Frekuensi (7 Hari)</h2>
-              </div>
-            </div>
-            <div class="chart-box">
-              <div class="bar-chart" id="freqChart">
-                <div class="bar" style="height:45%;"></div>
-                <div class="bar" style="height:65%;"></div>
-                <div class="bar" style="height:50%;"></div>
-                <div class="bar" style="height:78%;"></div>
-                <div class="bar" style="height:58%;"></div>
-                <div class="bar" style="height:82%;"></div>
-                <div class="bar" style="height:55%;"></div>
-              </div>
-              <div class="chart-labels">
-                <span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- GRID 2: Alerts & System Status -->
-        <div class="grid-2">
-          <!-- Alerts -->
-          <div class="card">
-            <h3><i class="fas fa-bell"></i> Notifikasi Terbaru</h3>
-            <div id="alertContainer">
-              <div class="loading-overlay"><div class="spinner"></div> Memuat alert...</div>
-            </div>
-          </div>
-
-          <!-- System Status -->
-          <div class="card">
-            <h3><i class="fas fa-microchip"></i> Status Sistem</h3>
-            <div id="systemStatusContainer">
-              <div class="loading-overlay"><div class="spinner"></div> Memuat status...</div>
+          <div id="maintContent" style="display:none;">
+            <div class="maintenance-list" id="maintList"></div>
+            <div style="margin-top:1rem; font-weight:700; display:flex; justify-content:space-between; align-items:center; background:#f0fdf4; padding:14px; border-radius:12px;">
+              <span style="color:#065f46;">Estimasi Biaya Perawatan:</span>
+              <span class="cost-badge" id="estCost">Rp 0</span>
             </div>
           </div>
         </div>
       </div>
-    </main>
+
+      <!-- GRID 2: Status Mesin & System Status -->
+      <div class="grid-2">
+        <!-- Status Mesin -->
+        <div class="card">
+          <h3><i class="fas fa-engine"></i> Status Mesin</h3>
+          <div class="list-row">
+            <span>Status Operasi</span>
+            <span id="engineStatusText" class="st-err">-</span>
+          </div>
+          <div class="list-row">
+            <span>Sinkronisasi</span>
+            <span id="syncStatusText">-</span>
+          </div>
+          <div class="list-row">
+            <span>Total Jam Operasi</span>
+            <span id="totalHoursText" style="font-weight:700;">0 jam</span>
+          </div>
+          <div class="list-row">
+            <span>Tekanan Oli</span>
+            <span id="oilPressureText">-</span>
+          </div>
+          <div class="list-row">
+            <span>Suhu Udara Masuk</span>
+            <span id="iatText">-</span>
+          </div>
+        </div>
+
+        <!-- System Status -->
+        <div class="card">
+          <h3 class="card-header-green"><i class="fas fa-microchip"></i> Status Sistem</h3>
+          <div id="systemStatusContainer">
+            <div class="loading-overlay"><div class="spinner"></div> Memuat status sistem...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- MODAL CALL TECHNICIAN -->
+  <div class="modal-overlay" id="callTechModal">
+    <div class="modal">
+      <h2><i class="fas fa-headset" style="color:var(--primary);"></i> Panggil Teknisi</h2>
+      <p>Isi formulir di bawah untuk memanggil teknisi. Tim kami akan segera merespons.</p>
+      <form id="callTechForm">
+        <div class="form-group">
+          <label for="techName">Nama Anda</label>
+          <input type="text" id="techName" placeholder="Masukkan nama Anda" required>
+        </div>
+        <div class="form-group">
+          <label for="techPhone">Nomor Telepon</label>
+          <input type="tel" id="techPhone" placeholder="Contoh: 08123456789" required>
+        </div>
+        <div class="form-group">
+          <label for="techPriority">Prioritas</label>
+          <select id="techPriority" required>
+            <option value="">Pilih prioritas...</option>
+            <option value="low">Rendah - Pertanyaan umum</option>
+            <option value="medium">Sedang - Gangguan ringan</option>
+            <option value="high">Tinggi - Mesin mati total</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="techMessage">Deskripsi Masalah</label>
+          <textarea id="techMessage" placeholder="Jelaskan masalah yang Anda alami..." required></textarea>
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-secondary" id="btnCancelCall">Batal</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-paper-plane"></i> Kirim Panggilan
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATION -->
+  <div class="toast" id="toastNotification">
+    <i class="fas fa-check-circle"></i>
+    <span id="toastMessage">Panggilan teknisi berhasil dikirim!</span>
   </div>
 
   <script>
@@ -1100,49 +1268,45 @@
     }
 
     // ==================== CLOCK ====================
-    function updateAllClocks() {
+    function updateClock() {
       const now = new Date();
       let h = now.getHours();
       const m = String(now.getMinutes()).padStart(2, '0');
       const ampm = h >= 12 ? 'PM' : 'AM';
       h = h % 12 || 12;
-      const timeStr = `${h}:${m} ${ampm}`;
-      
-      document.getElementById('heroTime').textContent = timeStr;
-      document.getElementById('topBarTime').textContent = timeStr;
+      document.getElementById('topBarTime').textContent = `${h}:${m} ${ampm}`;
     }
 
     // ==================== UPDATE USER UI ====================
     function updateUserUI() {
       const user = getUserData();
-      const userName = user.name;
-      const userRole = user.role;
-      
-      // Hero
-      document.getElementById('heroUserName').textContent = userName;
-      // Top bar
-      document.getElementById('topBarUserName').textContent = userName;
-      // Sidebar footer
-      document.getElementById('sidebarUserName').textContent = userName;
-      // Dropdown
-      document.getElementById('dropdownUserName').textContent = userName;
-      document.getElementById('dropdownUserRole').textContent = userRole;
-      // Title
-      document.title = `Gen-Track Publik | ${userName}`;
+      document.getElementById('topBarUserName').textContent = user.name;
+      document.getElementById('topBarRole').textContent = user.role || 'Masyarakat';
+      document.title = `Gen-Track Publik | ${user.name}`;
     }
 
-    // ==================== USER DROPDOWN ====================
-    function setupUserDropdown() {
-      const btn = document.getElementById('userProfileBtn');
-      const dropdown = document.getElementById('userDropdown');
+    // ==================== MOBILE SIDEBAR TOGGLE ====================
+    function setupMobileSidebar() {
+      const toggle = document.getElementById('mobileMenuToggle');
+      const overlay = document.getElementById('sidebarOverlay');
       
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        dropdown.classList.toggle('show');
+      if (!toggle || !overlay) return;
+      
+      toggle.addEventListener('click', () => {
+        document.body.classList.toggle('mobile-sidebar-open');
       });
       
-      document.addEventListener('click', () => {
-        dropdown.classList.remove('show');
+      overlay.addEventListener('click', () => {
+        document.body.classList.remove('mobile-sidebar-open');
+      });
+
+      // Close sidebar on nav item click (mobile)
+      document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => {
+          if (window.innerWidth <= 768) {
+            document.body.classList.remove('mobile-sidebar-open');
+          }
+        });
       });
     }
 
@@ -1164,7 +1328,7 @@
         fetchAPI('/api/engine-data/latest'),
         fetchAPI('/api/public/dashboard'),
         fetchAPI('/api/generator-specs'),
-        fetchAPI('/api/alerts?limit=10'),
+        fetchAPI('/api/alerts?limit=8'),
         fetchAPI('/api/maintenance')
       ]);
 
@@ -1181,7 +1345,14 @@
     function updateEngineStats(data) {
       document.getElementById('valRpm').textContent = data.rpm || 0;
       document.getElementById('valTemp').textContent = (data.temp || data.coolant || 0).toFixed(1);
-      document.getElementById('valFuel').textContent = (data.fuel || 0) + '%';
+      
+      const fuel = data.fuel || 0;
+      document.getElementById('valFuel').textContent = fuel + '%';
+      const fuelSub = document.getElementById('fuelSub');
+      if (fuel > 50) fuelSub.textContent = 'Cukup';
+      else if (fuel > 20) fuelSub.textContent = 'Menipis';
+      else fuelSub.textContent = 'Segera isi!';
+      
       document.getElementById('valVolt').textContent = (data.volt || 0).toFixed(1);
 
       const status = String(data.status || '').toUpperCase();
@@ -1194,11 +1365,8 @@
         statusEl.className = 'st-err';
       }
       document.getElementById('syncStatusText').textContent = data.sync || 'OFF-GRID';
-      
-      if (data.engineHours) {
-        document.getElementById('totalHoursText').textContent = 
-          parseFloat(data.engineHours).toFixed(1) + ' jam';
-      }
+      document.getElementById('oilPressureText').textContent = (data.oil || 0).toFixed(1) + ' Bar';
+      document.getElementById('iatText').textContent = (data.iat || 0).toFixed(1) + ' °C';
     }
 
     // ==================== UPDATE PUBLIC DASHBOARD ====================
@@ -1212,7 +1380,7 @@
         
         const ring = document.getElementById('healthRing');
         const deg = (score / 100) * 360;
-        let color = score >= 80 ? '#22c55e' : (score >= 50 ? '#f59e0b' : '#ef4444');
+        let color = score >= 80 ? '#10b981' : (score >= 50 ? '#f59e0b' : '#ef4444');
         ring.style.background = `conic-gradient(${color} 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`;
       }
 
@@ -1222,15 +1390,16 @@
         document.getElementById('totalHoursText').textContent = 
           (pubData.maintenance.totalHours || 0) + ' jam';
         
-        const urgencyColors = { good: '#10b981', warning: '#f59e0b', danger: '#ef4444' };
-        const maintColor = urgencyColors[pubData.maintenance.urgency] || '#6b7280';
+        const urgencyClass = pubData.maintenance.urgency || 'good';
+        const urgencyLabel = { good: 'Aman', warning: 'Waspada', danger: 'Bahaya' };
         
         document.getElementById('maintList').innerHTML = `
           <div class="maint-item">
             <div class="maint-info">
-              <i class="fas fa-info-circle" style="color:${maintColor};"></i>
+              <i class="fas fa-clipboard-check" style="color:var(--primary);"></i>
               <span>${pubData.maintenance.message}</span>
             </div>
+            <span class="maint-urgency ${urgencyClass}">${urgencyLabel[urgencyClass] || urgencyClass}</span>
           </div>
         `;
       }
@@ -1257,7 +1426,11 @@
     function updateAlerts(alerts) {
       const container = document.getElementById('alertContainer');
       if (!alerts || alerts.length === 0) {
-        container.innerHTML = '<p style="color:var(--muted); padding:12px;">Tidak ada notifikasi aktif.</p>';
+        container.innerHTML = `
+          <div style="text-align:center; padding:20px; color:var(--muted);">
+            <i class="fas fa-check-circle" style="font-size:2rem; color:#10b981; margin-bottom:8px; display:block;"></i>
+            Tidak ada notifikasi aktif
+          </div>`;
         return;
       }
       
@@ -1272,7 +1445,7 @@
             <div class="ac-icon"><i class="fas ${iconClass}"></i></div>
             <div class="ac-content">
               <div class="ac-title">${a.parameter?.toUpperCase() || 'SYSTEM'}</div>
-              <div class="ac-desc">${a.message || 'Nilai di luar batas normal'}</div>
+              <div class="ac-desc">${a.message || 'Nilai di luar batas'}</div>
             </div>
             <div class="ac-date">${new Date(a.timestamp).toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</div>
           </div>
@@ -1291,14 +1464,15 @@
         <div class="maint-item">
           <div class="maint-info">
             <i class="fas fa-wrench" style="color:var(--primary);"></i>
-            <span>${item.task || 'Perawatan'}</span>
+            <span>${item.task || 'Perawatan Rutin'}</span>
           </div>
           <span style="font-size:0.8rem; color:var(--muted);">${item.dueDate ? new Date(item.dueDate).toLocaleDateString('id-ID') : '-'}</span>
         </div>
       `).join('');
       
       if (items) {
-        document.getElementById('maintList').innerHTML = items + document.getElementById('maintList').innerHTML;
+        const existingContent = document.getElementById('maintList').innerHTML;
+        document.getElementById('maintList').innerHTML = items + existingContent;
         document.getElementById('maintLoading').style.display = 'none';
         document.getElementById('maintContent').style.display = 'block';
       }
@@ -1316,11 +1490,11 @@
         { label: 'Tegangan', value: d.volt || 0, unit: 'V', min: 190, max: 250 },
         { label: 'Arus', value: d.amp || 0, unit: 'A', max: 100 },
         { label: 'Frekuensi', value: d.freq || 0, unit: 'Hz', min: 48, max: 52 },
-        { label: 'Tekanan Oli', value: d.oil || 0, unit: 'Bar', min: 1 },
         { label: 'Suhu Pendingin', value: d.coolant || d.temp || 0, unit: '°C', max: 95 },
-        { label: 'Suhu Udara Masuk', value: d.iat || 0, unit: '°C', max: 60 },
         { label: 'Bahan Bakar', value: d.fuel || 0, unit: '%', min: 20 },
+        { label: 'Baterai', value: d.batt || 0, unit: 'V', min: 11.8, max: 14.8 },
         { label: 'Rasio Udara-BBM', value: d.afr || 0, unit: '', min: 12, max: 16 },
+        { label: 'TPS', value: d.tps || 0, unit: '%', max: 100 },
       ];
 
       container.innerHTML = statuses.map(s => {
@@ -1335,10 +1509,77 @@
         return `
           <div class="list-row">
             <span>${s.label}</span>
-            <span class="${statusClass}">${s.value} ${s.unit} (${statusText})</span>
+            <span class="${statusClass}">${typeof s.value === 'number' ? s.value.toFixed(1) : s.value} ${s.unit} <small>(${statusText})</small></span>
           </div>
         `;
       }).join('');
+    }
+
+    // ==================== CALL TECHNICIAN MODAL ====================
+    function setupCallTechnician() {
+      const btnCall = document.getElementById('btnCallTechnician');
+      const modal = document.getElementById('callTechModal');
+      const btnCancel = document.getElementById('btnCancelCall');
+      const form = document.getElementById('callTechForm');
+      const toast = document.getElementById('toastNotification');
+      const toastMsg = document.getElementById('toastMessage');
+
+      btnCall.addEventListener('click', () => {
+        modal.classList.add('show');
+        document.getElementById('techName').value = getUserData().name || '';
+        document.getElementById('techName').focus();
+      });
+
+      btnCancel.addEventListener('click', () => {
+        modal.classList.remove('show');
+      });
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.remove('show');
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const payload = {
+          name: document.getElementById('techName').value,
+          phone: document.getElementById('techPhone').value,
+          priority: document.getElementById('techPriority').value,
+          message: document.getElementById('techMessage').value,
+          timestamp: new Date().toISOString(),
+          deviceStatus: document.getElementById('engineStatusText').textContent
+        };
+
+        console.log('📞 Panggilan Teknisi:', payload);
+
+        // Tutup modal
+        modal.classList.remove('show');
+        form.reset();
+
+        // Tampilkan toast
+        toastMsg.textContent = 'Panggilan teknisi berhasil dikirim! Tim kami akan segera menghubungi Anda.';
+        toast.classList.add('show');
+        
+        setTimeout(() => {
+          toast.classList.remove('show');
+        }, 4000);
+      });
+    }
+
+    // ==================== SIDEBAR NAVIGATION ====================
+    function setupSidebarNav() {
+      document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', function(e) {
+          if (this.classList.contains('logout-btn')) {
+            e.preventDefault();
+            handleLogout();
+            return;
+          }
+          
+          document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+          this.classList.add('active');
+        });
+      });
     }
 
     // ==================== INISIALISASI ====================
@@ -1356,9 +1597,11 @@
       }
 
       updateUserUI();
-      updateAllClocks();
-      setInterval(updateAllClocks, 30000);
-      setupUserDropdown();
+      updateClock();
+      setInterval(updateClock, 30000);
+      setupMobileSidebar();
+      setupSidebarNav();
+      setupCallTechnician();
 
       await loadAllData();
 
