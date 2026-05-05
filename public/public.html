@@ -4,269 +4,657 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
   <title>Gen-Track | Monitoring Publik</title>
-  <!-- Auth Guard - harus di-load PERTAMA -->
+  <!-- Auth Guard -->
   <script src="js/auth-guard.js"></script>
   
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
+    /* === GLOBAL RESET & VARIABLES === */
     :root {
       --primary: #1745a5;
       --primary-light: #3b6bdf;
       --secondary: #10b981;
+      --secondary-dark: #047857;
       --warning: #f97316;
       --danger: #ef4444;
       --muted: #6b7280;
       --light: #f8fafc;
       --dark: #0f172a;
-      --card-bg: #ffffff;
-      --bg-main: #f1f5f9;
-      --sidebar-bg: #0f1e30;
-      --sidebar-hover: #1e3a5f;
-      --border-color: #e2e8f0;
+      --card-bg: #fff;
+      --border: #d0d7e1;
+      --sidebar-width: 80px;
+      --sidebar-expanded: 220px;
     }
 
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      background: var(--bg-main);
-      display: flex;
-      height: 100vh;
-      overflow: hidden;
+      font-family: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+      background: #f1f5f9;
+      color: var(--dark);
+      overflow-x: hidden;
+      min-height: 100vh;
     }
 
-    /* ===== SIDEBAR DINAMIS ===== */
-    .sidebar {
-      width: 260px;
-      background: var(--sidebar-bg);
-      display: flex;
-      flex-direction: column;
-      padding: 1.8rem 1.2rem;
-      color: #ccdbe9;
-      box-shadow: 4px 0 20px rgba(0,0,0,0.3);
-      transition: all 0.3s ease;
-      z-index: 10;
+    .container { 
+      display: flex; 
+      min-height: 100vh; 
+      width: 100%; 
+      position: relative;
     }
 
-    .sidebar .logo-area {
+    /* ===== TOP BAR (HERO HEADER) ===== */
+    .top-bar {
+      position: fixed;
+      top: 0;
+      left: var(--sidebar-width);
+      right: 0;
+      height: 80px;
+      background: linear-gradient(135deg, #1a3bb5 0%, #2f58e8 50%, #3b6bdf 100%);
+      z-index: 100;
       display: flex;
       align-items: center;
-      gap: 12px;
-      margin-bottom: 2.5rem;
-      border-bottom: 1px solid #2a4058;
-      padding-bottom: 1.5rem;
+      justify-content: space-between;
+      padding: 0 28px;
+      box-shadow: 0 4px 24px rgba(23, 69, 165, 0.25);
+      transition: left 0.3s ease;
     }
 
-    .logo-area i {
-      font-size: 2.2rem;
-      color: #3b82f6;
-      filter: drop-shadow(0 0 6px #2563eb);
+    #sidebar-container:hover ~ .top-bar {
+      left: var(--sidebar-expanded);
     }
 
-    .logo-area span {
+    .top-bar-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .top-bar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .top-bar-logo i {
+      font-size: 1.8rem;
+      color: #fff;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.2));
+    }
+
+    .top-bar-logo span {
       font-weight: 700;
-      font-size: 1.4rem;
-      letter-spacing: 0.5px;
-      background: linear-gradient(to right, #e0f2fe, #60a5fa);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .nav-menu {
-      list-style: none;
-      flex: 1;
-    }
-
-    .nav-menu li {
-      margin-bottom: 0.5rem;
-      border-radius: 12px;
-    }
-
-    .nav-menu li a {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      padding: 0.9rem 1rem;
-      text-decoration: none;
-      color: #b0c7e0;
-      font-weight: 500;
-      border-radius: 12px;
-      transition: all 0.25s;
-    }
-
-    .nav-menu li a i {
-      width: 22px;
       font-size: 1.2rem;
+      color: #fff;
+      letter-spacing: 0.5px;
+      display: none;
+    }
+
+    @media (min-width: 768px) {
+      .top-bar-logo span {
+        display: inline;
+      }
+    }
+
+    .top-bar-center {
       text-align: center;
+      color: #fff;
     }
 
-    .nav-menu li:hover a,
-    .nav-menu li.active a {
-      background: var(--sidebar-hover);
-      color: white;
-      box-shadow: 0 8px 18px rgba(0,40,70,0.4);
-      transform: translateX(4px);
+    .top-bar-time {
+      font-size: 2rem;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.02em;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.2);
     }
 
-    .user-profile-sidebar {
-      margin-top: auto;
+    .top-bar-greeting {
+      font-size: 0.95rem;
+      font-weight: 400;
+      color: rgba(255,255,255,0.9);
+      margin-top: 2px;
+    }
+
+    .top-bar-greeting span {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .top-bar-jargon {
+      font-size: 0.78rem;
+      color: rgba(255,255,255,0.65);
+      font-style: italic;
+      margin-top: 1px;
+    }
+
+    .top-bar-right {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 1rem;
-      background: #12273f;
-      border-radius: 16px;
-      border: 1px solid #2e4561;
+      gap: 16px;
     }
 
-    .user-profile-sidebar i {
-      font-size: 2.2rem;
-      color: #90cdf4;
-    }
-
-    .user-name {
-      font-weight: 700;
-      font-size: 1rem;
-      color: white;
-    }
-
-    .user-role {
-      font-size: 0.75rem;
-      color: #8ba9cc;
-    }
-
-    .btn-logout {
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid #ef4444;
-      color: #fca5a5;
-      padding: 0.5rem 1rem;
-      border-radius: 20px;
+    .user-profile-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      border: 2px solid rgba(255,255,255,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
-      font-size: 0.8rem;
+      transition: all 0.25s;
+      color: #fff;
+      font-size: 1.2rem;
+      position: relative;
+    }
+
+    .user-profile-btn:hover {
+      background: rgba(255,255,255,0.25);
+      border-color: rgba(255,255,255,0.5);
+      transform: scale(1.05);
+    }
+
+    .user-dropdown {
+      position: absolute;
+      top: 54px;
+      right: 0;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.18);
+      min-width: 200px;
+      padding: 12px;
+      display: none;
+      z-index: 200;
+      border: 1px solid var(--border);
+    }
+
+    .user-dropdown.show {
+      display: block;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .user-dropdown .user-info {
+      padding: 8px 12px;
+      border-bottom: 1px solid #f1f5f9;
+      margin-bottom: 8px;
+    }
+
+    .user-dropdown .user-name-drop {
+      font-weight: 700;
+      color: var(--dark);
+      font-size: 0.9rem;
+    }
+
+    .user-dropdown .user-role-drop {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .user-dropdown button {
+      width: 100%;
+      padding: 10px 12px;
+      border: none;
+      background: #fef2f2;
+      color: var(--danger);
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.85rem;
       display: flex;
       align-items: center;
-      gap: 6px;
-      margin-top: 0.5rem;
+      gap: 8px;
       transition: 0.2s;
     }
 
-    .btn-logout:hover {
-      background: #ef4444;
-      color: white;
+    .user-dropdown button:hover {
+      background: #fee2e2;
+    }
+
+    /* ===== SIDEBAR ===== */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: var(--sidebar-width);
+      background: linear-gradient(180deg, #0f1e30 0%, #12273f 50%, #0b1a2f 100%);
+      z-index: 150;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px 0;
+      transition: width 0.3s ease;
+      overflow: hidden;
+      box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+    }
+
+    #sidebar-container:hover .sidebar {
+      width: var(--sidebar-expanded);
+      align-items: flex-start;
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+      padding: 0 8px;
+      white-space: nowrap;
+    }
+
+    .sidebar-logo i {
+      font-size: 1.8rem;
+      color: #3b82f6;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 8px rgba(59,130,246,0.5));
+    }
+
+    .sidebar-logo span {
+      font-weight: 700;
+      font-size: 1.2rem;
+      color: #e0f2fe;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    #sidebar-container:hover .sidebar-logo span {
+      opacity: 1;
+    }
+
+    .sidebar-nav {
+      list-style: none;
+      width: 100%;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 0 8px;
+    }
+
+    .sidebar-nav li a {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 10px;
+      text-decoration: none;
+      color: #94a3b8;
+      border-radius: 10px;
+      transition: all 0.25s;
+      white-space: nowrap;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .sidebar-nav li a i {
+      width: 22px;
+      text-align: center;
+      font-size: 1.1rem;
+      flex-shrink: 0;
+    }
+
+    .sidebar-nav li a .nav-text {
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    #sidebar-container:hover .sidebar-nav li a .nav-text {
+      opacity: 1;
+    }
+
+    .sidebar-nav li:hover a,
+    .sidebar-nav li.active a {
+      background: rgba(59,130,246,0.2);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 12px 8px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      white-space: nowrap;
+    }
+
+    .sidebar-footer i {
+      font-size: 1.5rem;
+      color: #94a3b8;
+      flex-shrink: 0;
+    }
+
+    .sidebar-footer .footer-text {
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      font-size: 0.8rem;
+      color: #94a3b8;
+    }
+
+    #sidebar-container:hover .sidebar-footer .footer-text {
+      opacity: 1;
     }
 
     /* ===== MAIN CONTENT ===== */
     .main-content {
       flex: 1;
-      overflow-y: auto;
-      padding: 1.5rem 2rem;
-      background: #f1f5f9;
+      margin-left: var(--sidebar-width);
+      padding: 24px;
+      padding-top: 104px; /* top-bar height + padding */
+      transition: margin-left 0.3s ease;
+      width: calc(100% - var(--sidebar-width));
+      min-height: 100vh;
     }
 
-    .top-header {
+    #sidebar-container:hover ~ .main-content {
+      margin-left: var(--sidebar-expanded);
+      width: calc(100% - var(--sidebar-expanded));
+    }
+
+    .dashboard-container {
+      width: min(100%, 1320px);
+      margin: 0 auto;
+      display: grid;
+      gap: 24px;
+    }
+
+    /* ===== HERO SECTION (di bawah top bar) ===== */
+    .hero {
+      background: linear-gradient(135deg, #1a3bb5 0%, #2f58e8 50%, #3b6bdf 100%);
+      min-height: 140px;
+      border-radius: 16px;
+      box-shadow: 0 12px 30px rgba(23, 69, 165, 0.22);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px 24px;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 110%, rgba(255,255,255,0.08) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 20% -10%, rgba(255,255,255,0.10) 0%, transparent 60%);
+      z-index: 1;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: -60px;
+      left: -60px;
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.05);
+      z-index: 1;
+    }
+
+    .hero-center {
+      position: relative;
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      color: #fff;
+      gap: 6px;
+    }
+
+    .hero-time {
+      font-size: clamp(3rem, 6vw, 3.8rem);
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.02em;
+      color: #fff;
+      text-shadow: 0 2px 16px rgba(0,0,0,0.2);
+    }
+
+    .hero-greeting {
+      font-size: clamp(1.1rem, 2vw, 1.3rem);
+      font-weight: 400;
+      color: rgba(255,255,255,0.92);
+      margin-top: 8px;
+      line-height: 1.3;
+    }
+
+    .hero-greeting span {
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(0.8rem, 1.2vw, 0.9rem);
+      color: rgba(255,255,255,0.68);
+      margin-top: 4px;
+      font-style: italic;
+      letter-spacing: 0.01em;
+    }
+
+    /* ===== SECTION BLOCK ===== */
+    .section-block {
+      background: #fff;
+      border: 1px solid rgba(208, 215, 225, 0.9);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+    }
+
+    .section-heading {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1.5rem;
+      align-items: flex-end;
+      gap: 18px;
+      margin-bottom: 18px;
     }
 
-    .welcome-text h1 {
-      font-size: 1.8rem;
-      font-weight: 600;
+    .section-heading h2 {
+      font-size: clamp(1.1rem, 2vw, 1.35rem);
       color: var(--dark);
+    }
+
+    .section-eyebrow {
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--primary);
+    }
+
+    /* ===== OVERVIEW CARDS ===== */
+    .overview-cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .overview-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      border-radius: 20px;
+      padding: 20px;
+      min-height: 112px;
+      box-shadow: 0 12px 28px rgba(15,23,42,0.06);
+      border: 1px solid rgba(208, 215, 225, 0.9);
       display: flex;
       align-items: center;
+      gap: 15px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .overview-card:hover { 
+      transform: translateY(-4px); 
+      box-shadow: 0 16px 32px rgba(15,23,42,0.09); 
+    }
+
+    .overview-icon {
+      width: 60px; 
+      height: 60px; 
+      border-radius: 12px;
+      display: flex; 
+      align-items: center; 
+      justify-content: center;
+      font-size: 22px; 
+      color: white; 
+      flex-shrink: 0;
+    }
+
+    .icon-prm { background: linear-gradient(135deg, var(--primary), var(--primary-light)); }
+    .icon-sec { background: linear-gradient(135deg, var(--secondary), var(--secondary-dark)); }
+    .icon-wrn { background: linear-gradient(135deg, var(--warning), #fdba74); }
+    .icon-dng { background: linear-gradient(135deg, var(--danger), #fca5a5); }
+
+    .overview-value { 
+      font-size: 1.5rem; 
+      font-weight: 700; 
+      color: var(--dark); 
+      margin-bottom: 2px; 
+    }
+
+    .overview-label { 
+      font-size: 0.85rem; 
+      color: var(--muted); 
+    }
+
+    /* ===== GRID LAYOUTS ===== */
+    .grid-3 { 
+      display: grid; 
+      grid-template-columns: repeat(3, minmax(0, 1fr)); 
+      gap: 20px; 
+    }
+
+    .grid-2 { 
+      display: grid; 
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 20px; 
+    }
+
+    /* ===== CARD ===== */
+    .card {
+      background: white; 
+      border-radius: 20px; 
+      padding: 20px;
+      box-shadow: 0 14px 32px rgba(15,23,42,0.05); 
+      border: 1px solid rgba(208, 215, 225, 0.9);
+      height: 100%; 
+      display: flex; 
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .card h3 {
+      background: linear-gradient(135deg, var(--primary), var(--primary-light)); 
+      color: white;
+      padding: 14px 16px; 
+      border-radius: 12px 12px 0 0;
+      margin: -20px -20px 18px -20px;
+      font-size: 0.95rem; 
+      display: flex; 
+      align-items: center; 
+      gap: 10px;
+      font-weight: 600;
+    }
+
+    .list-row {
+      display: flex; 
+      justify-content: space-between; 
+      padding: 12px 0;
+      border-bottom: 1px solid #f1f5f9; 
+      font-size: 0.9rem; 
+      color: var(--dark);
+    }
+
+    .list-row:last-child { border-bottom: none; }
+    .list-row span:first-child { color: var(--muted); font-weight: 500; }
+    .list-row span:last-child { font-weight: 600; }
+
+    .st-ok { color: var(--secondary); font-weight: 700; }
+    .st-err { color: var(--danger); font-weight: 700; }
+    .st-warn { color: var(--warning); font-weight: 700; }
+
+    /* ===== ALERT CARD ===== */
+    #alertContainer {
+      display: flex;
+      flex-direction: column;
       gap: 12px;
     }
 
-    .welcome-text span {
-      color: var(--primary);
-      font-weight: 700;
-    }
-
-    .time-badge {
-      background: white;
-      padding: 0.5rem 1.4rem;
-      border-radius: 30px;
-      color: var(--dark);
-      font-weight: 600;
-      font-size: 0.9rem;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    .alert-card {
       display: flex;
       align-items: center;
-      gap: 8px;
-    }
-
-    .dashboard-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1.2rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .stat-card {
-      background: white;
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      padding: 1.3rem;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+      padding: 15px;
+      border-radius: 12px;
+      background: #fff;
+      position: relative;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.02);
       transition: transform 0.2s;
     }
 
-    .stat-card:hover {
-      transform: translateY(-3px);
-      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    .alert-card:hover {
+      transform: translateX(5px);
     }
 
-    .card-label {
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: var(--muted);
-      margin-bottom: 0.4rem;
-    }
+    .ac-critical { background: #fff5f5; border-left: 6px solid #ef4444; }
+    .ac-warning  { background: #fffaf0; border-left: 6px solid #f97316; }
+    .ac-info     { background: #eff6ff; border-left: 6px solid #3b82f6; }
 
-    .card-value {
-      font-size: 2.1rem;
-      font-weight: 700;
-      color: var(--dark);
-    }
-
-    .card-sub {
-      font-size: 0.8rem;
-      color: var(--muted);
-      margin-top: 0.2rem;
-    }
-
-    .row-cards {
-      display: grid;
-      grid-template-columns: 1.2fr 1fr 1fr;
-      gap: 1.2rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .card-panel {
-      background: white;
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      padding: 1.3rem;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.04);
-    }
-
-    .card-panel h3 {
-      font-size: 1rem;
-      font-weight: 700;
-      color: var(--dark);
-      margin-bottom: 1rem;
+    .ac-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
-      gap: 8px;
+      justify-content: center;
+      color: white;
+      font-size: 0.85rem;
+      margin-right: 15px;
+      flex-shrink: 0;
     }
 
+    .ac-critical .ac-icon { background: #ef4444; }
+    .ac-warning .ac-icon  { background: #f97316; }
+    .ac-info .ac-icon     { background: #3b82f6; }
+
+    .ac-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ac-title {
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: #1e293b;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+    }
+
+    .ac-desc {
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+
+    .ac-date {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      font-weight: 600;
+      margin-left: 10px;
+    }
+
+    /* ===== SPECS GRID ===== */
     .specs-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -293,6 +681,7 @@
       color: var(--dark);
     }
 
+    /* ===== HEALTH INDEX ===== */
     .health-circle {
       display: flex;
       align-items: center;
@@ -333,6 +722,7 @@
       margin-top: 0.3rem;
     }
 
+    /* ===== MAINTENANCE ===== */
     .maintenance-list {
       display: flex;
       flex-direction: column;
@@ -364,45 +754,18 @@
       font-size: 0.85rem;
     }
 
-    .alert-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 10px;
-      background: #fef2f2;
-      border-radius: 8px;
-      margin-bottom: 6px;
-      font-size: 0.82rem;
+    /* ===== CHART BOX ===== */
+    .chart-box { 
+      position: relative; 
+      flex: 1; 
+      width: 100%; 
     }
-
-    .alert-item.warning {
-      background: #fffbeb;
-    }
-
-    .system-status-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-top: 0.5rem;
-    }
-
-    .status-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 0;
-      border-bottom: 1px solid #f1f5f9;
-      font-size: 0.85rem;
-    }
-
-    .status-normal { color: #10b981; font-weight: 600; }
-    .status-warning { color: #f59e0b; font-weight: 600; }
-    .status-critical { color: #ef4444; font-weight: 600; }
 
     .bar-chart {
       display: flex;
       align-items: flex-end;
       gap: 6px;
-      height: 80px;
+      height: 100px;
       margin-top: 0.5rem;
     }
 
@@ -410,7 +773,7 @@
       flex: 1;
       background: var(--primary-light);
       border-radius: 6px 6px 0 0;
-      min-width: 20px;
+      min-width: 14px;
       transition: height 0.4s;
     }
 
@@ -422,6 +785,7 @@
       margin-top: 6px;
     }
 
+    /* ===== LOADING ===== */
     .loading-overlay {
       display: flex;
       align-items: center;
@@ -444,168 +808,281 @@
       to { transform: rotate(360deg); }
     }
 
-    @media (max-width: 1000px) {
-      .row-cards {
-        grid-template-columns: 1fr;
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 1200px) {
+      .overview-cards { grid-template-columns: repeat(2, 1fr); }
+      .grid-3, .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 992px) {
+      .top-bar {
+        left: 0;
+        padding: 0 16px;
+      }
+      #sidebar-container:hover ~ .top-bar {
+        left: 0;
+      }
+      .main-content {
+        margin-left: 0;
+        width: 100%;
+        padding-top: 104px;
+      }
+      #sidebar-container:hover ~ .main-content {
+        margin-left: 0;
+        width: 100%;
       }
       .sidebar {
-        width: 220px;
+        width: 0;
+        padding: 0;
       }
+      #sidebar-container:hover .sidebar {
+        width: var(--sidebar-expanded);
+        padding: 20px 16px;
+      }
+      .grid-2 { grid-template-columns: 1fr; }
+      .hero-time { font-size: 2.5rem; }
+    }
+
+    @media (max-width: 768px) {
+      .main-content { padding: 14px; padding-top: 96px; }
+      .dashboard-container { gap: 18px; }
+      .section-block { padding: 16px; border-radius: 20px; }
+      .hero { min-height: auto; padding: 24px 16px; border-radius: 16px; }
+      .overview-cards, .grid-3, .grid-2 { grid-template-columns: 1fr; gap: 14px; }
+      .overview-card { min-height: 96px; padding: 16px; }
+      .overview-icon { width: 52px; height: 52px; }
+      .card { border-radius: 18px; }
+      .chart-box { min-height: 220px; }
+      .top-bar-time { font-size: 1.5rem; }
+      .top-bar-greeting { font-size: 0.8rem; }
+      .top-bar-jargon { font-size: 0.7rem; }
+    }
+
+    @media (max-width: 520px) {
+      .hero-time { font-size: 2.35rem; }
+      .hero-greeting { font-size: 1rem; }
     }
   </style>
 </head>
 <body>
-  <!-- SIDEBAR -->
-  <aside class="sidebar" id="dynamicSidebar">
-    <div class="logo-area">
-      <i class="fas fa-bolt"></i>
-      <span>Gen-Track</span>
-    </div>
-    <ul class="nav-menu">
-      <li class="active"><a href="#"><i class="fas fa-tachometer-alt"></i> Dashboard Publik</a></li>
-      <li><a href="#"><i class="fas fa-chart-bar"></i> Statistik</a></li>
-      <li><a href="#"><i class="fas fa-history"></i> Riwayat</a></li>
-    </ul>
-    <div class="user-profile-sidebar">
-      <i class="fas fa-user-circle"></i>
-      <div class="user-info-sidebar">
-        <span class="user-name" id="sidebarUserName">Warga</span>
-        <span class="user-role">Masyarakat</span>
+  <div class="container" id="sidebar-container">
+    <!-- ===== SIDEBAR ===== -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <i class="fas fa-bolt"></i>
+        <span>Gen-Track</span>
       </div>
-    </div>
-    <button class="btn-logout" onclick="handleLogout()">
-      <i class="fas fa-sign-out-alt"></i> Keluar
-    </button>
-  </aside>
+      <ul class="sidebar-nav">
+        <li class="active">
+          <a href="#"><i class="fas fa-tachometer-alt"></i><span class="nav-text">Dashboard Publik</span></a>
+        </li>
+        <li>
+          <a href="#"><i class="fas fa-chart-bar"></i><span class="nav-text">Statistik</span></a>
+        </li>
+        <li>
+          <a href="#"><i class="fas fa-history"></i><span class="nav-text">Riwayat</span></a>
+        </li>
+      </ul>
+      <div class="sidebar-footer">
+        <i class="fas fa-user-circle"></i>
+        <span class="footer-text" id="sidebarUserName">Warga</span>
+      </div>
+    </aside>
 
-  <!-- MAIN CONTENT -->
-  <main class="main-content">
-    <div class="top-header">
-      <div class="welcome-text">
-        <h1><i class="fas fa-broadcast-tower" style="color:var(--primary);"></i> Monitoring Publik <span id="displayUserName">Warga</span></h1>
-      </div>
-      <div class="time-badge">
-        <i class="far fa-clock"></i> <span id="liveTime">--:--</span>
-      </div>
-    </div>
-
-    <!-- KARTU UTAMA: RPM, Suhu, BBM, Tegangan -->
-    <div class="dashboard-grid" id="mainStatsCards">
-      <div class="stat-card">
-        <div class="card-label"><i class="fas fa-tachometer-alt"></i> Kecepatan Mesin</div>
-        <div class="card-value" id="valRpm">--</div>
-        <div class="card-sub">RPM</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label"><i class="fas fa-thermometer-half"></i> Suhu Pendingin</div>
-        <div class="card-value" id="valTemp">--</div>
-        <div class="card-sub">°C</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label"><i class="fas fa-gas-pump"></i> Bahan Bakar</div>
-        <div class="card-value" id="valFuel">--</div>
-        <div class="card-sub" id="fuelDesc">-</div>
-      </div>
-      <div class="stat-card">
-        <div class="card-label"><i class="fas fa-bolt"></i> Tegangan</div>
-        <div class="card-value" id="valVolt">--</div>
-        <div class="card-sub">Volt</div>
-      </div>
-    </div>
-
-    <!-- BARIS: Spesifikasi Mesin, Health Index, Maintenance -->
-    <div class="row-cards">
-      <!-- SPESIFIKASI MESIN & GENERATOR -->
-      <div class="card-panel" id="specsPanel">
-        <h3><i class="fas fa-cogs"></i> Spesifikasi Mesin & Generator</h3>
-        <div class="loading-overlay" id="specsLoading">
-          <div class="spinner"></div> Memuat spesifikasi...
-        </div>
-        <div class="specs-grid" id="specsContent" style="display:none;">
-          <!-- Diisi dari API -->
+    <!-- ===== TOP BAR ===== -->
+    <header class="top-bar" id="topBar">
+      <div class="top-bar-left">
+        <div class="top-bar-logo">
+          <i class="fas fa-bolt"></i>
+          <span>Gen-Track</span>
         </div>
       </div>
-
-      <!-- HEALTH INDEX -->
-      <div class="card-panel" id="healthPanel">
-        <h3><i class="fas fa-heartbeat"></i> Health Index</h3>
-        <div class="loading-overlay" id="healthLoading">
-          <div class="spinner"></div> Menghitung...
+      <div class="top-bar-center">
+        <div class="top-bar-time" id="topBarTime">--:--</div>
+        <div class="top-bar-greeting">Selamat Datang, <span id="topBarUserName">Warga</span></div>
+        <div class="top-bar-jargon">"Generator Monitoring System — Pantau Performa, Jaga Efisiensi"</div>
+      </div>
+      <div class="top-bar-right">
+        <div style="position: relative;">
+          <button class="user-profile-btn" id="userProfileBtn" title="Profil User">
+            <i class="fas fa-user"></i>
+          </button>
+          <div class="user-dropdown" id="userDropdown">
+            <div class="user-info">
+              <div class="user-name-drop" id="dropdownUserName">Warga</div>
+              <div class="user-role-drop" id="dropdownUserRole">Masyarakat</div>
+            </div>
+            <button onclick="handleLogout()">
+              <i class="fas fa-sign-out-alt"></i> Keluar
+            </button>
+          </div>
         </div>
-        <div id="healthContent" style="display:none; text-align:center;">
-          <div class="health-circle">
-            <div class="progress-ring" id="healthRing" style="background: conic-gradient(#22c55e 0deg 290deg, #e5e7eb 290deg 360deg);">
-              <span id="healthScore">81%</span>
+      </div>
+    </header>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <main class="main-content">
+      <div class="dashboard-container">
+        <!-- HERO SECTION -->
+        <div class="hero">
+          <div class="hero-center">
+            <div class="hero-time" id="heroTime">--:--</div>
+            <div class="hero-greeting">Selamat Datang, <span id="heroUserName">Warga</span></div>
+            <div class="hero-subtitle">"Generator Monitoring System — Pantau Performa, Jaga Efisiensi"</div>
+          </div>
+        </div>
+
+        <!-- OVERVIEW CARDS -->
+        <div class="overview-cards">
+          <div class="overview-card">
+            <div class="overview-icon icon-prm"><i class="fas fa-tachometer-alt"></i></div>
+            <div>
+              <div class="overview-value" id="valRpm">--</div>
+              <div class="overview-label">Kecepatan Mesin (RPM)</div>
             </div>
           </div>
-          <div class="health-label" id="healthLabel">Sistem Sehat</div>
+          <div class="overview-card">
+            <div class="overview-icon icon-sec"><i class="fas fa-thermometer-half"></i></div>
+            <div>
+              <div class="overview-value" id="valTemp">--</div>
+              <div class="overview-label">Suhu Pendingin (°C)</div>
+            </div>
+          </div>
+          <div class="overview-card">
+            <div class="overview-icon icon-wrn"><i class="fas fa-gas-pump"></i></div>
+            <div>
+              <div class="overview-value" id="valFuel">--</div>
+              <div class="overview-label">Bahan Bakar (%)</div>
+            </div>
+          </div>
+          <div class="overview-card">
+            <div class="overview-icon icon-dng"><i class="fas fa-bolt"></i></div>
+            <div>
+              <div class="overview-value" id="valVolt">--</div>
+              <div class="overview-label">Tegangan (Volt)</div>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <!-- UPCOMING MAINTENANCE & COST -->
-      <div class="card-panel" id="maintenancePanel">
-        <h3><i class="fas fa-tools"></i> Perawatan & Biaya</h3>
-        <div class="loading-overlay" id="maintLoading">
-          <div class="spinner"></div> Memuat data...
+        <!-- GRID 3: Spesifikasi, Health Index, Maintenance -->
+        <div class="grid-3">
+          <!-- Spesifikasi Mesin & Generator -->
+          <div class="card" id="specsCard">
+            <h3><i class="fas fa-cogs"></i> Spesifikasi Mesin & Generator</h3>
+            <div class="loading-overlay" id="specsLoading">
+              <div class="spinner"></div> Memuat...
+            </div>
+            <div class="specs-grid" id="specsContent" style="display:none;"></div>
+          </div>
+
+          <!-- Health Index -->
+          <div class="card" id="healthCard">
+            <h3><i class="fas fa-heartbeat"></i> Health Index</h3>
+            <div class="loading-overlay" id="healthLoading">
+              <div class="spinner"></div> Menghitung...
+            </div>
+            <div id="healthContent" style="display:none; text-align:center;">
+              <div class="health-circle">
+                <div class="progress-ring" id="healthRing" style="background: conic-gradient(#22c55e 0deg 290deg, #e5e7eb 290deg 360deg);">
+                  <span id="healthScore">81%</span>
+                </div>
+              </div>
+              <div class="health-label" id="healthLabel">Sistem Sehat</div>
+            </div>
+          </div>
+
+          <!-- Upcoming Maintenance & Cost -->
+          <div class="card" id="maintenanceCard">
+            <h3><i class="fas fa-tools"></i> Perawatan & Biaya</h3>
+            <div class="loading-overlay" id="maintLoading">
+              <div class="spinner"></div> Memuat...
+            </div>
+            <div id="maintContent" style="display:none;">
+              <div class="maintenance-list" id="maintList"></div>
+              <div style="margin-top:1rem; font-weight:700; display:flex; justify-content:space-between; background:#f0fdf4; padding:10px; border-radius:10px;">
+                <span>Estimasi Biaya:</span>
+                <span class="cost-badge" id="estCost">Rp 0</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div id="maintContent" style="display:none;">
-          <div class="maintenance-list" id="maintList"></div>
-          <div style="margin-top:1rem; font-weight:700; display:flex; justify-content:space-between; background:#f0fdf4; padding:10px; border-radius:10px;">
-            <span>Estimasi Biaya:</span>
-            <span class="cost-badge" id="estCost">Rp 0</span>
+
+        <!-- GRID 2: Status Mesin & Chart -->
+        <div class="grid-2">
+          <!-- Status Mesin -->
+          <div class="section-block">
+            <div class="section-heading">
+              <div>
+                <div class="section-eyebrow">STATUS</div>
+                <h2>Status Mesin</h2>
+              </div>
+            </div>
+            <div class="list-row">
+              <span>Status Operasi</span>
+              <span id="engineStatusText" class="st-err">-</span>
+            </div>
+            <div class="list-row">
+              <span>Sinkronisasi</span>
+              <span id="syncStatusText">-</span>
+            </div>
+            <div class="list-row">
+              <span>Total Jam Operasi</span>
+              <span id="totalHoursText">0 jam</span>
+            </div>
+          </div>
+
+          <!-- Chart Frekuensi -->
+          <div class="section-block">
+            <div class="section-heading">
+              <div>
+                <div class="section-eyebrow">TREN</div>
+                <h2>Riwayat Frekuensi (7 Hari)</h2>
+              </div>
+            </div>
+            <div class="chart-box">
+              <div class="bar-chart" id="freqChart">
+                <div class="bar" style="height:45%;"></div>
+                <div class="bar" style="height:65%;"></div>
+                <div class="bar" style="height:50%;"></div>
+                <div class="bar" style="height:78%;"></div>
+                <div class="bar" style="height:58%;"></div>
+                <div class="bar" style="height:82%;"></div>
+                <div class="bar" style="height:55%;"></div>
+              </div>
+              <div class="chart-labels">
+                <span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- GRID 2: Alerts & System Status -->
+        <div class="grid-2">
+          <!-- Alerts -->
+          <div class="card">
+            <h3><i class="fas fa-bell"></i> Notifikasi Terbaru</h3>
+            <div id="alertContainer">
+              <div class="loading-overlay"><div class="spinner"></div> Memuat alert...</div>
+            </div>
+          </div>
+
+          <!-- System Status -->
+          <div class="card">
+            <h3><i class="fas fa-microchip"></i> Status Sistem</h3>
+            <div id="systemStatusContainer">
+              <div class="loading-overlay"><div class="spinner"></div> Memuat status...</div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-
-    <!-- BARIS BAWAH: Status & Grafik -->
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.2rem; margin-bottom:1.5rem;">
-      <div class="card-panel">
-        <h3><i class="fas fa-engine"></i> Status Mesin</h3>
-        <div id="engineStatusContent">
-          <p>Status: <strong id="engineStatusText">-</strong></p>
-          <p>Sinkronisasi: <strong id="syncStatusText">-</strong></p>
-        </div>
-      </div>
-      <div class="card-panel">
-        <h3><i class="fas fa-chart-line"></i> Riwayat Frekuensi (7 Hari)</h3>
-        <div class="bar-chart" id="freqChart">
-          <div class="bar" style="height:40%;"></div>
-          <div class="bar" style="height:60%;"></div>
-          <div class="bar" style="height:45%;"></div>
-          <div class="bar" style="height:75%;"></div>
-          <div class="bar" style="height:55%;"></div>
-          <div class="bar" style="height:80%;"></div>
-          <div class="bar" style="height:50%;"></div>
-        </div>
-        <div class="chart-labels">
-          <span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Alert & System Status -->
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.2rem;">
-      <div class="card-panel">
-        <h3><i class="fas fa-bell"></i> Notifikasi Terbaru</h3>
-        <div id="alertsContent">
-          <div class="loading-overlay"><div class="spinner"></div> Memuat alert...</div>
-        </div>
-      </div>
-      <div class="card-panel">
-        <h3><i class="fas fa-microchip"></i> Status Sistem</h3>
-        <div id="systemStatusContent">
-          <div class="loading-overlay"><div class="spinner"></div> Memuat status...</div>
-        </div>
-      </div>
-    </div>
-  </main>
+    </main>
+  </div>
 
   <script>
     // ==================== KONFIGURASI ====================
     const API_BASE = window.location.origin;
     
-    // ==================== AMBIL DATA USER DARI LOCALSTORAGE ====================
+    // ==================== USER DATA ====================
     function getUserData() {
       return {
         name: localStorage.getItem('username') || 'Warga',
@@ -622,25 +1099,54 @@
       window.location.replace('login.html');
     }
 
-    // ==================== UPDATE UI DENGAN NAMA USER ====================
-    function updateUserUI() {
-      const user = getUserData();
-      document.getElementById('displayUserName').textContent = user.name;
-      document.getElementById('sidebarUserName').textContent = user.name;
-      document.title = `Gen-Track Publik | ${user.name}`;
-    }
-
-    // ==================== CLOCK REAL-TIME ====================
-    function updateClock() {
+    // ==================== CLOCK ====================
+    function updateAllClocks() {
       const now = new Date();
       let h = now.getHours();
       const m = String(now.getMinutes()).padStart(2, '0');
       const ampm = h >= 12 ? 'PM' : 'AM';
       h = h % 12 || 12;
-      document.getElementById('liveTime').textContent = `${h}:${m} ${ampm}`;
+      const timeStr = `${h}:${m} ${ampm}`;
+      
+      document.getElementById('heroTime').textContent = timeStr;
+      document.getElementById('topBarTime').textContent = timeStr;
     }
 
-    // ==================== FETCH DATA DARI API ====================
+    // ==================== UPDATE USER UI ====================
+    function updateUserUI() {
+      const user = getUserData();
+      const userName = user.name;
+      const userRole = user.role;
+      
+      // Hero
+      document.getElementById('heroUserName').textContent = userName;
+      // Top bar
+      document.getElementById('topBarUserName').textContent = userName;
+      // Sidebar footer
+      document.getElementById('sidebarUserName').textContent = userName;
+      // Dropdown
+      document.getElementById('dropdownUserName').textContent = userName;
+      document.getElementById('dropdownUserRole').textContent = userRole;
+      // Title
+      document.title = `Gen-Track Publik | ${userName}`;
+    }
+
+    // ==================== USER DROPDOWN ====================
+    function setupUserDropdown() {
+      const btn = document.getElementById('userProfileBtn');
+      const dropdown = document.getElementById('userDropdown');
+      
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        dropdown.classList.toggle('show');
+      });
+      
+      document.addEventListener('click', () => {
+        dropdown.classList.remove('show');
+      });
+    }
+
+    // ==================== API FETCH ====================
     async function fetchAPI(endpoint) {
       try {
         const res = await fetch(`${API_BASE}${endpoint}`);
@@ -652,37 +1158,23 @@
       }
     }
 
-    // ==================== LOAD SEMUA DATA ====================
+    // ==================== LOAD ALL DATA ====================
     async function loadAllData() {
-      // 1. Data engine real-time
-      const engineRes = await fetchAPI('/api/engine-data/latest');
-      if (engineRes.success && engineRes.data) {
-        updateEngineStats(engineRes.data);
-      }
+      const [engineRes, publicRes, specsRes, alertsRes, maintRes] = await Promise.all([
+        fetchAPI('/api/engine-data/latest'),
+        fetchAPI('/api/public/dashboard'),
+        fetchAPI('/api/generator-specs'),
+        fetchAPI('/api/alerts?limit=10'),
+        fetchAPI('/api/maintenance')
+      ]);
 
-      // 2. Data dashboard publik (health, maintenance, specs, parameters)
-      const publicRes = await fetchAPI('/api/public/dashboard');
-      if (publicRes.success && publicRes.data) {
-        updatePublicDashboard(publicRes.data);
-      }
+      if (engineRes.success && engineRes.data) updateEngineStats(engineRes.data);
+      if (publicRes.success && publicRes.data) updatePublicDashboard(publicRes.data);
+      if (specsRes.success && specsRes.data) updateSpecs(specsRes.data);
+      if (alertsRes.success && alertsRes.data) updateAlerts(alertsRes.data);
+      if (maintRes.success && maintRes.data) updateMaintenance(maintRes.data);
 
-      // 3. Spesifikasi generator (dari endpoint terpisah)
-      const specsRes = await fetchAPI('/api/generator-specs');
-      if (specsRes.success && specsRes.data) {
-        updateSpecs(specsRes.data);
-      }
-
-      // 4. Alert terbaru
-      const alertsRes = await fetchAPI('/api/alerts?limit=10');
-      if (alertsRes.success && alertsRes.data) {
-        updateAlerts(alertsRes.data);
-      }
-
-      // 5. Maintenance dari database
-      const maintRes = await fetchAPI('/api/maintenance');
-      if (maintRes.success && maintRes.data) {
-        updateMaintenance(maintRes.data);
-      }
+      await loadSystemStatus();
     }
 
     // ==================== UPDATE ENGINE STATS ====================
@@ -692,23 +1184,25 @@
       document.getElementById('valFuel').textContent = (data.fuel || 0) + '%';
       document.getElementById('valVolt').textContent = (data.volt || 0).toFixed(1);
 
-      // Fuel description
-      const fuel = data.fuel || 0;
-      const fuelDesc = document.getElementById('fuelDesc');
-      if (fuel > 50) fuelDesc.textContent = 'Bahan bakar cukup';
-      else if (fuel > 20) fuelDesc.textContent = 'Mulai menipis';
-      else fuelDesc.textContent = 'Segera isi!';
-
-      // Engine status
       const status = String(data.status || '').toUpperCase();
-      document.getElementById('engineStatusText').textContent = 
-        (status === 'RUNNING' || data.rpm > 0) ? 'AKTIF / MENYALA' : 'TIDAK AKTIF / MATI';
+      const statusEl = document.getElementById('engineStatusText');
+      if (status === 'RUNNING' || data.rpm > 0) {
+        statusEl.textContent = 'AKTIF / MENYALA';
+        statusEl.className = 'st-ok';
+      } else {
+        statusEl.textContent = 'TIDAK AKTIF / MATI';
+        statusEl.className = 'st-err';
+      }
       document.getElementById('syncStatusText').textContent = data.sync || 'OFF-GRID';
+      
+      if (data.engineHours) {
+        document.getElementById('totalHoursText').textContent = 
+          parseFloat(data.engineHours).toFixed(1) + ' jam';
+      }
     }
 
     // ==================== UPDATE PUBLIC DASHBOARD ====================
     function updatePublicDashboard(pubData) {
-      // Health Index
       if (pubData.health) {
         document.getElementById('healthLoading').style.display = 'none';
         document.getElementById('healthContent').style.display = 'block';
@@ -722,36 +1216,27 @@
         ring.style.background = `conic-gradient(${color} 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`;
       }
 
-      // Maintenance prediction
       if (pubData.maintenance) {
         document.getElementById('maintLoading').style.display = 'none';
         document.getElementById('maintContent').style.display = 'block';
+        document.getElementById('totalHoursText').textContent = 
+          (pubData.maintenance.totalHours || 0) + ' jam';
         
-        const maintList = document.getElementById('maintList');
-        maintList.innerHTML = `
+        const urgencyColors = { good: '#10b981', warning: '#f59e0b', danger: '#ef4444' };
+        const maintColor = urgencyColors[pubData.maintenance.urgency] || '#6b7280';
+        
+        document.getElementById('maintList').innerHTML = `
           <div class="maint-item">
             <div class="maint-info">
-              <i class="fas fa-info-circle" style="color:${pubData.maintenance.urgency === 'danger' ? '#ef4444' : '#f59e0b'};"></i>
+              <i class="fas fa-info-circle" style="color:${maintColor};"></i>
               <span>${pubData.maintenance.message}</span>
-            </div>
-          </div>
-          <div class="maint-item">
-            <div class="maint-info">
-              <i class="fas fa-clock"></i>
-              <span>Total Jam Operasi: <strong>${pubData.maintenance.totalHours || 0} jam</strong></span>
             </div>
           </div>
         `;
       }
-
-      // Parameters (untuk deskripsi tambahan)
-      if (pubData.parameters) {
-        const p = pubData.parameters;
-        if (p.fuel) document.getElementById('fuelDesc').textContent = p.fuel.description || '-';
-      }
     }
 
-    // ==================== UPDATE SPESIFIKASI ====================
+    // ==================== UPDATE SPECS ====================
     function updateSpecs(specs) {
       document.getElementById('specsLoading').style.display = 'none';
       const content = document.getElementById('specsContent');
@@ -763,26 +1248,33 @@
         <div class="spec-item"><strong>Tegangan</strong><span>${specs.tegangan || '-'} V</span></div>
         <div class="spec-item"><strong>Frekuensi</strong><span>${specs.frekuensi || '-'} Hz</span></div>
         <div class="spec-item"><strong>Tipe Mesin</strong><span>${specs.tipeMesin || '-'}</span></div>
-        <div class="spec-item"><strong>Kapasitas Mesin</strong><span>${specs.kapasitasMesin || '-'}</span></div>
+        <div class="spec-item"><strong>Kap. Mesin</strong><span>${specs.kapasitasMesin || '-'}</span></div>
         <div class="spec-item"><strong>Kap. Tangki</strong><span>${specs.kapasitasTangki || '-'} L</span></div>
       `;
     }
 
     // ==================== UPDATE ALERTS ====================
     function updateAlerts(alerts) {
-      const container = document.getElementById('alertsContent');
+      const container = document.getElementById('alertContainer');
       if (!alerts || alerts.length === 0) {
-        container.innerHTML = '<p style="color:var(--muted);">Tidak ada notifikasi aktif.</p>';
+        container.innerHTML = '<p style="color:var(--muted); padding:12px;">Tidak ada notifikasi aktif.</p>';
         return;
       }
+      
       container.innerHTML = alerts.slice(0, 6).map(a => {
-        const severityClass = a.severity === 'critical' ? '' : 'warning';
-        const icon = a.severity === 'critical' ? 'fa-exclamation-circle' : 'fa-exclamation-triangle';
+        let severityClass = 'ac-info';
+        let iconClass = 'fa-info-circle';
+        if (a.severity === 'critical') { severityClass = 'ac-critical'; iconClass = 'fa-exclamation-circle'; }
+        else if (a.severity === 'high') { severityClass = 'ac-warning'; iconClass = 'fa-exclamation-triangle'; }
+        
         return `
-          <div class="alert-item ${severityClass}">
-            <i class="fas ${icon}" style="color:${a.severity === 'critical' ? '#ef4444' : '#f59e0b'};"></i>
-            <span><strong>${a.parameter?.toUpperCase() || '-'}</strong>: ${a.message || 'Nilai di luar batas'} 
-            <small>(${new Date(a.timestamp).toLocaleDateString('id-ID')})</small></span>
+          <div class="alert-card ${severityClass}">
+            <div class="ac-icon"><i class="fas ${iconClass}"></i></div>
+            <div class="ac-content">
+              <div class="ac-title">${a.parameter?.toUpperCase() || 'SYSTEM'}</div>
+              <div class="ac-desc">${a.message || 'Nilai di luar batas normal'}</div>
+            </div>
+            <div class="ac-date">${new Date(a.timestamp).toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</div>
           </div>
         `;
       }).join('');
@@ -790,19 +1282,12 @@
 
     // ==================== UPDATE MAINTENANCE ====================
     function updateMaintenance(maintData) {
-      const list = document.getElementById('maintList');
-      if (!maintData || maintData.length === 0) {
-        // Biarkan data dari public dashboard yang tampil
-        return;
-      }
+      if (!maintData || maintData.length === 0) return;
       
-      // Hitung total biaya
       const totalCost = maintData.reduce((sum, item) => sum + (item.cost || 0), 0);
-      document.getElementById('estCost').textContent = 
-        'Rp ' + totalCost.toLocaleString('id-ID');
-
-      // Tampilkan 3 item maintenance terbaru
-      const items = maintData.slice(0, 3).map(item => `
+      document.getElementById('estCost').textContent = 'Rp ' + totalCost.toLocaleString('id-ID');
+      
+      const items = maintData.slice(0, 2).map(item => `
         <div class="maint-item">
           <div class="maint-info">
             <i class="fas fa-wrench" style="color:var(--primary);"></i>
@@ -814,42 +1299,41 @@
       
       if (items) {
         document.getElementById('maintList').innerHTML = items + document.getElementById('maintList').innerHTML;
+        document.getElementById('maintLoading').style.display = 'none';
+        document.getElementById('maintContent').style.display = 'block';
       }
     }
 
-    // ==================== SYSTEM STATUS (dari data terbaru) ====================
+    // ==================== LOAD SYSTEM STATUS ====================
     async function loadSystemStatus() {
       const engineRes = await fetchAPI('/api/engine-data/latest');
       if (!engineRes.success || !engineRes.data) return;
       
       const d = engineRes.data;
-      const container = document.getElementById('systemStatusContent');
+      const container = document.getElementById('systemStatusContainer');
       
       const statuses = [
-        { label: 'Tegangan', value: d.volt || 0, min: 190, max: 250, unit: 'V' },
-        { label: 'Arus', value: d.amp || 0, max: 100, unit: 'A' },
-        { label: 'Frekuensi', value: d.freq || 0, min: 48, max: 52, unit: 'Hz' },
-        { label: 'Tekanan Oli', value: d.oil || 0, min: 1, unit: 'Bar' },
-        { label: 'Suhu Pendingin', value: d.coolant || d.temp || 0, max: 95, unit: '°C' },
-        { label: 'Suhu Udara Masuk', value: d.iat || 0, max: 60, unit: '°C' },
-        { label: 'Bahan Bakar', value: d.fuel || 0, min: 20, unit: '%' },
-        { label: 'Rasio Udara-BBM', value: d.afr || 0, min: 12, max: 16, unit: '' },
+        { label: 'Tegangan', value: d.volt || 0, unit: 'V', min: 190, max: 250 },
+        { label: 'Arus', value: d.amp || 0, unit: 'A', max: 100 },
+        { label: 'Frekuensi', value: d.freq || 0, unit: 'Hz', min: 48, max: 52 },
+        { label: 'Tekanan Oli', value: d.oil || 0, unit: 'Bar', min: 1 },
+        { label: 'Suhu Pendingin', value: d.coolant || d.temp || 0, unit: '°C', max: 95 },
+        { label: 'Suhu Udara Masuk', value: d.iat || 0, unit: '°C', max: 60 },
+        { label: 'Bahan Bakar', value: d.fuel || 0, unit: '%', min: 20 },
+        { label: 'Rasio Udara-BBM', value: d.afr || 0, unit: '', min: 12, max: 16 },
       ];
 
       container.innerHTML = statuses.map(s => {
-        let statusClass = 'status-normal';
+        let statusClass = 'st-ok';
         let statusText = 'Normal';
         
-        if (s.max !== undefined && s.value > s.max) {
-          statusClass = 'status-critical';
+        if ((s.max !== undefined && s.value > s.max) || (s.min !== undefined && s.value < s.min)) {
+          statusClass = 'st-err';
           statusText = 'Kritis';
-        } else if (s.min !== undefined && s.value < s.min) {
-          statusClass = 'status-warning';
-          statusText = 'Warning';
         }
         
         return `
-          <div class="status-row">
+          <div class="list-row">
             <span>${s.label}</span>
             <span class="${statusClass}">${s.value} ${s.unit} (${statusText})</span>
           </div>
@@ -857,55 +1341,31 @@
       }).join('');
     }
 
-    // ==================== SIDEBAR NAVIGATION ====================
-    function setupSidebar() {
-      document.querySelectorAll('.nav-menu li a').forEach(link => {
-        link.addEventListener('click', function(e) {
-          e.preventDefault();
-          document.querySelectorAll('.nav-menu li').forEach(li => li.classList.remove('active'));
-          this.parentElement.classList.add('active');
-        });
-      });
-    }
-
     // ==================== INISIALISASI ====================
     async function init() {
-      // Verifikasi user sudah login sebagai warga
       const user = getUserData();
       if (!user.isLoggedIn) {
         window.location.replace('login.html');
         return;
       }
       
-      // Pastikan role adalah masyarakat (auth-guard.js sudah handle, tapi double-check)
       const role = (user.role || '').toLowerCase();
       if (role !== 'masyarakat' && role !== 'user' && role !== 'viewer') {
-        // Jika bukan role publik, redirect ke index (auth-guard juga handle ini)
         window.location.replace('index.html');
         return;
       }
 
       updateUserUI();
-      updateClock();
-      setInterval(updateClock, 30000);
-      setupSidebar();
+      updateAllClocks();
+      setInterval(updateAllClocks, 30000);
+      setupUserDropdown();
 
-      // Load semua data
-      await Promise.all([
-        loadAllData(),
-        loadSystemStatus()
-      ]);
+      await loadAllData();
 
-      // Refresh data setiap 30 detik
-      setInterval(async () => {
-        await Promise.all([
-          loadAllData(),
-          loadSystemStatus()
-        ]);
-      }, 30000);
+      // Refresh setiap 30 detik
+      setInterval(loadAllData, 30000);
     }
 
-    // Jalankan saat halaman siap
     document.addEventListener('DOMContentLoaded', init);
   </script>
 </body>
