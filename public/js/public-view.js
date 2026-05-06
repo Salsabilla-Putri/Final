@@ -7,9 +7,8 @@ function updateClock() {
     if (el) {
         const now = new Date();
         el.innerText = now.toLocaleTimeString('id-ID', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            second: '2-digit'
+            hour: '2-digit',
+            minute: '2-digit'
         }) + ' WIB';
     }
 }
@@ -262,12 +261,6 @@ function updateSpecificationsSection(specs) {
                 <li><span>Daya Maks</span><span>${specs.dayaMaks || '--'} kW</span></li>
                 <li><span>Tegangan</span><span>${specs.tegangan || '--'} V</span></li>
                 <li><span>Frekuensi</span><span>${specs.frekuensi || '--'} Hz</span></li>
-                <li><span>Tipe Mesin</span><span>${specs.tipeMesin || '--'}</span></li>
-                <li><span>Kapasitas Mesin</span><span>${specs.kapasitasMesin || '--'}</span></li>
-                <li><span>Kapasitas Tangki</span><span>${specs.kapasitasTangki || '--'} L</span></li>
-                <li><span>Konsumsi BBM</span><span>${specs.konsumsiBbm || '--'} L/jam</span></li>
-                <li><span>Sistem Start</span><span>${specs.sistemStart || '--'}</span></li>
-                <li><span>Oli Mesin</span><span>${specs.oliMesin || '--'}</span></li>
             </ul>
         `;
     }

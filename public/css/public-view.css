@@ -15,15 +15,7 @@ body {
 }
 
 .main-content {
-  margin-left: 80px;
-  width: calc(100% - 80px);
   padding: 92px 24px 24px;
-}
-
-#sidebar-container:hover ~ .main-content,
-body.sidebar-expanded .main-content {
-  margin-left: 220px;
-  width: calc(100% - 220px);
 }
 
 .public-container {
@@ -126,9 +118,7 @@ canvas { width: 100% !important; max-width: 100%; }
 }
 
 @media (max-width: 900px) {
-  .main-content,
-  #sidebar-container:hover ~ .main-content,
-  body.sidebar-expanded .main-content { margin-left: 0; width: 100%; padding: 90px 14px 18px; }
+  .main-content { padding: 90px 14px 18px; }
   .public-container { gap: 14px; }
   .hero.public-hero { padding: 30px 18px; }
   .section-block { padding: 16px; }
