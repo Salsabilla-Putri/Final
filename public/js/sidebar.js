@@ -102,7 +102,15 @@ function renderSidebarMenu() {
       { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
     ];
   } else if (isMasyarakat) {
-    menuItems = [
+    const isPublicPage = (window.location.pathname.split('/').pop() || '') === 'public.html';
+    menuItems = isPublicPage ? [
+      { icon: 'fa-home', text: 'Overview', link: '#', onclick: "document.querySelector('.section-overview')?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-cogs', text: 'Operations', link: '#', onclick: "document.querySelectorAll('.section-block')[1]?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-chart-line', text: 'Analytics', link: '#', onclick: "document.querySelector('.section-analytics')?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-chart-bar', text: 'Performance', link: '#', onclick: "document.querySelectorAll('.section-block')[3]?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-info-circle', text: 'Information', link: '#', onclick: "document.querySelectorAll('.section-block')[4]?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
+    ] : [
       { icon: 'fa-home', text: 'Dashboard Warga', link: 'public.html' },
       { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
     ];
@@ -113,7 +121,7 @@ function renderSidebarMenu() {
   }
 
   const menuHtml = menuItems.map(item => `
-    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}(); return false;"` : ''}>
+    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}; return false;"` : ''}>
       <i class="fas ${item.icon}"></i> ${item.text}
     </a>
   `).join('');

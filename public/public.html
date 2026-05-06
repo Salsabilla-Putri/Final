@@ -85,6 +85,13 @@
                             <div class="overview-label">System Voltage</div>
                         </div>
                     </div>
+                    <div class="overview-card">
+                        <div class="overview-icon icon-prm"><i class="fas fa-plug"></i></div>
+                        <div class="overview-content">
+                            <div class="overview-value" id="val-power">--</div>
+                            <div class="overview-label">Output Power</div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -126,16 +133,10 @@
                     </div>
 
                     <div class="card">
-                        <h3><i class="fas fa-heartbeat"></i> System Health</h3>
-                        <div id="systemHealthContainer" style="text-align: center; padding: 20px;">
-                            <div style="font-size: 3rem; font-weight: 700; color: #10b981;" id="healthScore">--</div>
-                            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
+                        <h3><i class="fas fa-bell"></i> Recent Alerts</h3>
+                        <div id="alertContainer">
+                            <div style="text-align:center; padding:20px; color:#aaa">Loading alerts...</div>
                         </div>
-                        <div class="list-row"><span>Voltage:</span> <span id="st-volt">--</span></div>
-                        <div class="list-row"><span>Current:</span> <span id="st-amp">--</span></div>
-                        <div class="list-row"><span>Frequency:</span> <span id="st-freq">--</span></div>
-                        <div class="list-row"><span>Fuel Level:</span> <span id="st-fuel">--</span></div>
-                        <div class="list-row"><span>AFR:</span> <span id="st-afr">--</span></div>
                     </div>
                 </div>
             </section>
@@ -155,10 +156,16 @@
                         </div>
                     </div>
                     <div class="card">
-                        <h3><i class="fas fa-bell"></i> Recent Alerts</h3>
-                        <div id="alertContainer">
-                            <div style="text-align:center; padding:20px; color:#aaa">Loading alerts...</div>
+                        <h3><i class="fas fa-heartbeat"></i> System Health</h3>
+                        <div id="systemHealthContainer" style="text-align: center; padding: 20px;">
+                            <div style="font-size: 3rem; font-weight: 700; color: #10b981;" id="healthScore">--</div>
+                            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
                         </div>
+                        <div class="list-row"><span>Voltage:</span> <span id="st-volt">--</span></div>
+                        <div class="list-row"><span>Current:</span> <span id="st-amp">--</span></div>
+                        <div class="list-row"><span>Frequency:</span> <span id="st-freq">--</span></div>
+                        <div class="list-row"><span>Fuel Level:</span> <span id="st-fuel">--</span></div>
+                        <div class="list-row"><span>AFR:</span> <span id="st-afr">--</span></div>
                     </div>
                 </div>
             </section>
@@ -176,11 +183,7 @@
                         <div class="chart-box">
                             <canvas id="chartSystem"></canvas>
                         </div>
-                        <div class="list-row"><span>Voltage:</span> <span id="perf-volt">--</span></div>
-                        <div class="list-row"><span>Current:</span> <span id="perf-amp">--</span></div>
-                        <div class="list-row"><span>Frequency:</span> <span id="perf-freq">--</span></div>
-                        <div class="list-row"><span>Fuel Level:</span> <span id="perf-fuel">--</span></div>
-                        <div class="list-row"><span>Temperature:</span> <span id="perf-temp">--</span></div>
+                        <div id="perfStatusList"></div>
                     </div>
                     <div class="card">
                         <h3><i class="fas fa-tools"></i> Upcoming Maintenance</h3>
@@ -224,12 +227,23 @@
                             <p style="font-weight: 600; font-size: 1.1rem; color: #0f172a;">+62 123 456 7890</p>
                             <p style="color: #6b7280; margin-top: 10px;">Technical Support:</p>
                             <p style="font-weight: 600; font-size: 1.1rem; color: #0f172a;">support@gentrack.com</p>
+                            <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+                                <a href="tel:+621234567890" class="user-info" style="text-decoration:none; background:#10b981;">
+                                    <i class="fas fa-phone"></i><span>Quick Call</span>
+                                </a>
+                                <a href="https://www.google.com/maps/search/dealer+genset+terdekat/" target="_blank" rel="noopener" class="user-info" style="text-decoration:none; background:#f59e0b;">
+                                    <i class="fas fa-map-marker-alt"></i><span>Dealer Maps</span>
+                                </a>
+                            </div>
                         </div>
                     </div>
                 </div>
             </section>
         </div>
     </div>
+    <a href="tel:+621234567890" class="quick-tech-call" aria-label="Quick call teknisi">
+        <i class="fas fa-phone-alt"></i>
+    </a>
 
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
