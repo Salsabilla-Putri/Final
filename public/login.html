@@ -482,12 +482,16 @@
           alertMessage.className = 'alert alert-success';
           alertMessage.style.display = 'block';
 
-          localStorage.setItem('userRole', result.user.role);
+          const normalizedRole = String(result.user.role || '').trim().toLowerCase();
+          const isWargaRole = normalizedRole === 'warga' || normalizedRole === 'masyarakat';
+          const storedRole = isWargaRole ? 'warga' : normalizedRole;
+
+          localStorage.setItem('userRole', storedRole);
           localStorage.setItem('username', result.user.name || result.user.email || email);
           localStorage.setItem('isLoggedIn', 'true');
 
           setTimeout(() => {
-            window.location.href = result.user.redirectTo || (result.user.role === 'Masyarakat' ? 'public.html' : 'index.html');
+            window.location.href = result.user.redirectTo || (isWargaRole ? 'public.html' : 'index.html');
           }, 1000);
         } else {
           alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
