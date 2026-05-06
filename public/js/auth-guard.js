@@ -4,7 +4,8 @@
   const isLoginPage = page.includes('login.html');
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
   const role = localStorage.getItem('userRole') || '';
-  const isPublicRole = role.toLowerCase() === 'masyarakat';
+  const normalizedRole = role.toLowerCase();
+  const isPublicRole = normalizedRole === 'warga';
   const isPublicPage = page.includes('public.html');
 
   if (!isLoginPage && !isLoggedIn) {
