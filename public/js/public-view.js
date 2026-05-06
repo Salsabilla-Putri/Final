@@ -140,6 +140,24 @@ function updateOperationsSection(data) {
         healthScore.innerText = health + '%';
         healthScore.style.color = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
     }
+    const warningItems = [];
+    const temp = data.coolant || data.temp || 0;
+    if (temp > 95) warningItems.push({ name: 'Coolant Temperature', level: 'danger' });
+    else if (temp > 85) warningItems.push({ name: 'Coolant Temperature', level: 'warn' });
+    if ((data.fuel || 0) < 20) warningItems.push({ name: 'Fuel Level', level: 'warn' });
+    if ((data.volt || 0) < 190 || (data.volt || 0) > 250) warningItems.push({ name: 'Voltage', level: 'danger' });
+
+    const healthContainer = document.getElementById('systemHealthContainer');
+    if (healthContainer) {
+        const warningHTML = warningItems.length
+            ? warningItems.map((item) => `<span class="status-pill ${item.level}">${item.name}</span>`).join('')
+            : '<span class="status-pill ok">Semua komponen aman</span>';
+        healthContainer.innerHTML = `
+            <div style="font-size: 3rem; font-weight: 700; color: ${health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444'};" id="healthScore">${health}%</div>
+            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
+            <div class="health-warning-wrap">${warningHTML}</div>
+        `;
+    }
 }
 
 function calculateHealth(data) {
@@ -172,7 +190,7 @@ function updateAlertsSection(alerts) {
         return;
     }
     
-    container.innerHTML = alerts.slice(0, 5).map(alert => `
+    container.innerHTML = alerts.slice(0, 3).map(alert => `
         <div class="alert-item ${alert.severity === 'critical' ? '' : (alert.severity === 'high' ? 'warning' : 'info')}">
             <div class="alert-time">
                 ${new Date(alert.timestamp).toLocaleString('id-ID')}
@@ -213,21 +231,26 @@ function updatePerformanceSection(data) {
     if (data.parameters) {
         const params = data.parameters;
         const status = (value, low, high) => {
-            if (value == null) return 'Tidak ada data';
-            if (value < low) return 'Rendah (Perlu perhatian)';
-            if (value > high) return 'Tinggi (Perlu perhatian)';
-            return 'Aman / Normal';
+            if (value == null) return { text: 'Tidak ada data', cls: 'muted' };
+            if (value < low) return { text: 'Rendah', cls: 'warn' };
+            if (value > high) return { text: 'Tinggi', cls: 'danger' };
+            return { text: 'Aman/Normal', cls: 'ok' };
+        };
+        const setStatus = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.className = `status-pill ${val.cls}`;
+            el.innerText = val.text;
         };
 
-        document.getElementById('perf-volt').innerText = status(params.voltage?.value, 200, 240);
-        document.getElementById('perf-fuel').innerText = status(params.fuel?.percent, 20, 100);
-        document.getElementById('perf-temp').innerText = status(params.temperature?.value, 40, 90);
-        const ampEl = document.getElementById('perf-amp');
-        const freqEl = document.getElementById('perf-freq');
-        if (ampEl) ampEl.innerText = status(params.current?.value, 0, 100);
-        if (freqEl) freqEl.innerText = status(params.frequency?.value, 48, 52);
+        setStatus('perf-volt', status(params.voltage?.value, 200, 240));
+        setStatus('perf-fuel', status(params.fuel?.percent, 20, 100));
+        setStatus('perf-temp', status(params.temperature?.value, 40, 90));
+        setStatus('perf-amp', status(params.current?.value, 0, 100));
+        setStatus('perf-freq', status(params.frequency?.value, 48, 52));
     }
 }
+
 
 function updateSpecificationsSection(specs) {
     const genContainer = document.getElementById('generatorSpecContainer');
@@ -297,51 +320,73 @@ function updateMaintenanceSection(data) {
 function updateActiveTimeChart(rows) {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) return;
-    const dayLabels = [];
-    const map = {};
-    for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        d.setDate(d.getDate() - i);
-        const key = d.toISOString().slice(0, 10);
-        dayLabels.push(key);
-        map[key] = 0;
-    }
 
-    (rows || []).forEach((r) => {
-        const start = new Date(r.startedAt);
-        const end = r.endedAt ? new Date(r.endedAt) : new Date();
-        const key = start.toISOString().slice(0, 10);
-        if (map[key] !== undefined) map[key] += Math.max(0, (end - start) / 3600000);
-    });
-
-    const labels = dayLabels.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' }));
-    const dataPoints = dayLabels.map((k) => Number(map[k].toFixed(2)));
-
-    if (activeChart) activeChart.destroy();
-    activeChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels,
-            datasets: [{
-                label: 'Jam Aktif',
-                data: dataPoints,
-                backgroundColor: '#1745a5',
-                borderRadius: 6,
-                barPercentage: 0.6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                y: { beginAtZero: true, max: 24, ticks: { callback: (v) => `${v}h` } },
-                x: { grid: { display: false } }
+    const renderChart = (labels, dataPoints, highlightIndex = -1) => {
+        if (activeChart) activeChart.destroy();
+        activeChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Jam Aktif',
+                    data: dataPoints,
+                    backgroundColor: dataPoints.map((_, idx) => idx === highlightIndex ? '#f97316' : '#1745a5'),
+                    borderRadius: 6,
+                    barPercentage: 0.6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, max: 24, ticks: { callback: (v) => `${v}h` } },
+                    x: { grid: { display: false } }
+                }
             }
+        });
+    };
+
+    Promise.all([
+        fetch('/api/daily-active-time?days=7').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/daily-active-time/today').then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([histJson, todayJson]) => {
+        if (histJson?.success && Array.isArray(histJson.data)) {
+            const dayMap = {};
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date(Date.now() + 7 * 60 * 60 * 1000 - i * 86400000);
+                dayMap[d.toISOString().slice(0, 10)] = 0;
+            }
+            histJson.data.forEach((r) => {
+                if (dayMap.hasOwnProperty(r.date)) dayMap[r.date] = r.activeHours || 0;
+            });
+            const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            if (todayJson?.success) dayMap[todayWib] = todayJson.activeHours || dayMap[todayWib];
+            const keys = Object.keys(dayMap);
+            renderChart(keys.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' })), keys.map((k) => Number((dayMap[k] || 0).toFixed(2))), keys.findIndex((k) => k === todayWib));
+            return;
         }
+
+        const dayLabels = [];
+        const map = {};
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() - i);
+            const key = d.toISOString().slice(0, 10);
+            dayLabels.push(key);
+            map[key] = 0;
+        }
+        (rows || []).forEach((r) => {
+            const start = new Date(r.startedAt);
+            const end = r.endedAt ? new Date(r.endedAt) : new Date();
+            const key = start.toISOString().slice(0, 10);
+            if (map[key] !== undefined) map[key] += Math.max(0, (end - start) / 3600000);
+        });
+        renderChart(dayLabels.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' })), dayLabels.map((k) => Number(map[k].toFixed(2))), 6);
     });
 }
+
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', async () => {
