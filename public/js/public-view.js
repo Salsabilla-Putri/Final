@@ -96,13 +96,10 @@ function updateOverviewCards(data) {
     const rpm = data.rpm || 0;
     const temp = data.coolant || data.temp || 0;
     const volt = data.volt || 0;
-    const power = data.power || 0;
     
     document.getElementById('val-rpm').innerText = rpm + ' RPM';
     document.getElementById('val-temp').innerText = temp + '°C';
     document.getElementById('val-volt').innerText = volt + ' V';
-    const powerEl = document.getElementById('val-power');
-    if (powerEl) powerEl.innerText = power + ' kW';
     
     // Update active alerts count
     fetch('/api/alerts?limit=100')
@@ -120,17 +117,6 @@ function updateOperationsSection(data) {
     document.getElementById('engStat').innerText = data.status || '--';
     document.getElementById('fuelLevel').innerText = (data.fuel || 0) + '%';
 
-    const syncBadge = document.getElementById('syncBadge');
-    if (syncBadge) {
-        const syncOk = ['ON-GRID','SYNCHRONIZED'].includes(String(data.sync || '').toUpperCase());
-        syncBadge.className = `status-pill ${syncOk ? 'ok' : 'warn'}`;
-        syncBadge.innerText = `Sinkronisasi: ${syncOk ? 'Normal' : (data.sync || 'Belum sinkron')}`;
-    }
-    const updatedBadge = document.getElementById('updatedBadge');
-    if (updatedBadge) {
-        updatedBadge.className = 'status-pill muted';
-        updatedBadge.innerText = `Update: ${new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })}`;
-    }
     
     // Update System Health data
     document.getElementById('st-volt').innerText = (data.volt || '--') + ' V';

@@ -256,7 +256,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       // Event untuk tombol user di topbar (jika ada)
       document.addEventListener('click', function (e) {
-        const userBtn = e.target.closest('#user-btn') || e.target.closest('.user-info');
+        const userBtn = e.target.closest('#user-btn');
         if (userBtn && !window.location.pathname.includes('login.html')) {
           window.location.href = 'user.html';
         }
