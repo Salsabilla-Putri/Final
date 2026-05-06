@@ -1,30 +1,7 @@
 'use strict';
 
-// Check authentication
-function checkAuth() {
-    const userData = sessionStorage.getItem('userData');
-    if (!userData) {
-        window.location.href = '/login.html';
-        return null;
-    }
-    
-    try {
-        const user = JSON.parse(userData);
-        if (user.role !== 'warg' && user.role !== 'masyarakat') {
-            window.location.href = '/login.html';
-            return null;
-        }
-        return user;
-    } catch (e) {
-        window.location.href = '/login.html';
-        return null;
-    }
-}
-
-function logout() {
-    sessionStorage.removeItem('userData');
-    window.location.href = '/login.html';
-}
+// HAPUS fungsi checkAuth() dan logout() dari sini
+// Karena sudah ditangani oleh auth-guard.js
 
 // Update clock
 function updateClock() {
@@ -37,6 +14,28 @@ function updateClock() {
             second: '2-digit'
         }) + ' WIB';
     }
+}
+
+// Update user info from localStorage
+function updateUserInfo() {
+    const username = localStorage.getItem('username') || 'Pengguna';
+    const role = localStorage.getItem('userRole') || 'Masyarakat';
+    
+    const userNameEl = document.getElementById('userName');
+    const userRoleEl = document.getElementById('userRole');
+    const welcomeMsg = document.getElementById('welcomeMessage');
+    
+    if (userNameEl) userNameEl.innerText = username;
+    if (userRoleEl) userRoleEl.innerText = role;
+    if (welcomeMsg) welcomeMsg.innerText = `Welcome, ${username}!`;
+}
+
+// Fungsi logout yang menggunakan localStorage (sesuai auth-guard.js)
+function logout() {
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('username');
+    window.location.href = 'login.html';
 }
 
 // Navigation
@@ -194,7 +193,6 @@ function calculateHealth(data) {
 }
 
 function updateAnalyticsSection(data) {
-    // Update health info
     if (data.health) {
         const healthScore = document.getElementById('systemHealth');
         if (healthScore) {
@@ -285,7 +283,6 @@ function updateSpecificationsSection(specs) {
         `;
     }
     
-    // Engine specs (hardcoded)
     const engineContainer = document.getElementById('engineSpecContent');
     if (engineContainer) {
         engineContainer.innerHTML = `
@@ -330,14 +327,8 @@ function updateMaintenanceSection(data) {
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', async () => {
-    // Check authentication
-    const user = checkAuth();
-    if (!user) return;
-    
-    // Update user info
-    document.getElementById('userName').innerText = user.name || 'Pengguna';
-    document.getElementById('userRole').innerText = user.role || 'Warga';
-    document.getElementById('welcomeMessage').innerText = `Welcome, ${user.name || 'Pengguna'}!`;
+    // Update user info from localStorage
+    updateUserInfo();
     
     // Initialize components
     updateClock();
