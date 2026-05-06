@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", function() {
             if (container) {
                 container.innerHTML = data;
                 setActiveLink();
+                initMobileMenu();
             }
         })
         .catch(err => console.error("Gagal memuat sidebar:", err));
@@ -21,12 +22,9 @@ document.addEventListener("DOMContentLoaded", function() {
 document.addEventListener('click', function(e) {
     
     // --- A. LOGIKA TOMBOL USER PROFILE ---
-    // Mencari elemen user-btn atau user-info (termasuk icon/text di dalamnya)
     const userBtn = e.target.closest('#user-btn') || e.target.closest('.user-info');
     
-    // Pastikan userBtn ada DAN kita sedang tidak di halaman login (untuk mencegah loop jika ada error)
     if (userBtn && !window.location.pathname.includes('login.html')) {
-        // Redirect ke halaman user
         window.location.href = 'user.html';
         return; 
     }
@@ -38,12 +36,10 @@ document.addEventListener('click', function(e) {
         e.preventDefault(); 
         
         if (confirm("Apakah Anda yakin ingin keluar?")) {
-            // Hapus data sesi login
             localStorage.removeItem('isLoggedIn');
             localStorage.removeItem('userRole');
             localStorage.removeItem('username');
 
-            // Redirect ke login
             window.location.replace('login.html'); 
         }
     }
@@ -64,4 +60,31 @@ function setActiveLink() {
     else if(page.includes('reports')) document.getElementById('link-reports')?.classList.add('active');
     else if(page.includes('maintenance')) document.getElementById('link-maintenance')?.classList.add('active');
     else if(page.includes('alarm')) document.getElementById('link-alarm')?.classList.add('active');
+}
+
+// 4. MOBILE MENU TOGGLE
+function initMobileMenu() {
+    const toggleBtn = document.querySelector('.mobile-menu-toggle');
+    const overlay = document.querySelector('.sidebar-overlay');
+    
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', function() {
+            document.body.classList.toggle('mobile-sidebar-open');
+        });
+    }
+    
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            document.body.classList.remove('mobile-sidebar-open');
+        });
+    }
+    
+    // Tutup sidebar saat klik link di mobile
+    document.querySelectorAll('#sidebar-container .nav-item').forEach(link => {
+        link.addEventListener('click', function() {
+            if (window.innerWidth <= 768) {
+                document.body.classList.remove('mobile-sidebar-open');
+            }
+        });
+    });
 }

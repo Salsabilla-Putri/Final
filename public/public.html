@@ -1,183 +1,262 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta charset="utf-8" />
-    <title>Generator Monitoring Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gen-Track — Public Monitoring</title>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    
+    <!-- Auth Guard -->
     <script src="js/auth-guard.js"></script>
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="sidebar.css" />
+    <link rel="stylesheet" href="css/topbar.css" />
     <link rel="stylesheet" href="css/public-view.css" />
+    <link rel="stylesheet" href="css/typography.css" />
 </head>
 <body>
-    <div class="app-container">
-        <!-- Sidebar -->
-        <aside class="sidebar" role="navigation" aria-label="Main navigation">
-            <div class="sidebar-header">
-                <div class="logo">GENMON</div>
-                <p class="sidebar-subtitle">Generator Monitoring</p>
+    <!-- Overlay untuk mobile -->
+    <div class="sidebar-overlay"></div>
+    
+    <!-- Tombol toggle mobile -->
+    <button class="mobile-menu-toggle" aria-label="Toggle menu">
+        <i class="fas fa-bars"></i>
+    </button>
+    
+    <!-- Sidebar Container (dimuat dinamis) -->
+    <div id="sidebar-container"></div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Topbar -->
+        <div class="topbar">
+            <div class="topbar-title">Public Monitor</div>
+            <div class="user-info" id="user-btn" style="cursor: pointer;">
+                <i class="fas fa-user"></i> <span>Pengguna</span>
             </div>
-            <nav class="sidebar-nav">
-                <a href="#overview" class="nav-item active" data-section="overview">
-                    <span class="nav-icon">📊</span>
-                    <span>Overview</span>
-                </a>
-                <a href="#operations" class="nav-item" data-section="operations">
-                    <span class="nav-icon">⚙️</span>
-                    <span>Operations</span>
-                </a>
-                <a href="#analytics" class="nav-item" data-section="analytics">
-                    <span class="nav-icon">📈</span>
-                    <span>Analytics</span>
-                </a>
-                <a href="#performance" class="nav-item" data-section="performance">
-                    <span class="nav-icon">⚡</span>
-                    <span>Performance</span>
-                </a>
-                <a href="#information" class="nav-item" data-section="information">
-                    <span class="nav-icon">ℹ️</span>
-                    <span>Information</span>
-                </a>
-            </nav>
-            <div class="sidebar-footer">
-                <div class="user-info">
-                    <span class="user-name" id="userName">Pengguna</span>
-                    <span class="user-role" id="userRole">Warga</span>
+        </div>
+
+        <div class="public-container">
+            <!-- Header -->
+            <section class="hero public-hero">
+                <div class="hero-center">
+                    <div id="liveClock" class="hero-time">--:--</div>
+                    <div class="hero-greeting">Welcome, <span id="welcome-user">Pengguna</span>!</div>
+                    <div class="hero-subtitle"><em>"Live Monitoring for Generator Health &amp; Efficiency"</em></div>
                 </div>
-                <button class="logout-btn" onclick="logout()">Logout</button>
-            </div>
-        </aside>
+            </section>
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <div class="dashboard-content">
-                <!-- Header -->
-                <header class="dashboard-header" id="overview">
-                    <time id="liveClock" class="header-clock">--:--</time>
-                    <h1 class="header-title" id="welcomeMessage">Welcome, Pengguna!</h1>
-                    <p class="header-subtitle">"Live Monitoring for Generator Health & Efficiency"</p>
-                </header>
-
-                <!-- OVERVIEW Section -->
-                <section class="dashboard-section" id="overview-section">
-                    <h2 class="section-title">OVERVIEW</h2>
-                    <div class="overview-grid">
-                        <div class="card overview-card">
-                            <div class="card-icon" style="background: linear-gradient(145deg, #1745A5, #3B6BDF);">⚙️</div>
-                            <output class="card-value" id="engineSpeed">--</output>
-                            <p class="card-label">Engine Speed</p>
-                        </div>
-                        <div class="card overview-card">
-                            <div class="card-icon" style="background: linear-gradient(145deg, #10B981, #047857);">🌡️</div>
-                            <output class="card-value" id="coolantTemp">--</output>
-                            <p class="card-label">Coolant Temp</p>
-                        </div>
-                        <div class="card overview-card">
-                            <div class="card-icon" style="background: linear-gradient(145deg, #F97316, #FDBA74);">⚠️</div>
-                            <output class="card-value" id="activeAlerts">0</output>
-                            <p class="card-label">Active Alerts</p>
-                        </div>
-                        <div class="card overview-card">
-                            <div class="card-icon" style="background: linear-gradient(145deg, #EF4444, #FCA5A5);">⚡</div>
-                            <output class="card-value" id="systemVoltage">--</output>
-                            <p class="card-label">System Voltage</p>
+            <!-- OVERVIEW Section -->
+            <section class="section-block section-overview">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-eyebrow">Overview</p>
+                    </div>
+                </div>
+                <div class="overview-cards">
+                    <div class="overview-card">
+                        <div class="overview-icon icon-prm"><i class="fas fa-tachometer-alt"></i></div>
+                        <div class="overview-content">
+                            <div class="overview-value" id="val-rpm">--</div>
+                            <div class="overview-label">Engine Speed</div>
                         </div>
                     </div>
-                </section>
-
-                <!-- OPERATIONS Section -->
-                <section class="dashboard-section" id="operations">
-                    <h2 class="section-title">OPERATIONS</h2>
-                    <div class="operations-grid">
-                        <div class="card engine-status-card">
-                            <div class="card-header">🔧 Engine Status</div>
-                            <div class="status-row"><span>Sync Status:</span> <output id="syncStatus">--</output></div>
-                            <div class="status-row"><span>Engine State:</span> <output id="engineState">--</output></div>
-                            <div class="status-row"><span>Today's Active:</span> <output id="todayActive">0h 0m</output></div>
-                            <div class="status-row"><span>Fuel Level:</span> <output id="fuelLevel">--%</output></div>
-                        </div>
-                        <div class="card recent-activity-card">
-                            <div class="card-header">📋 Recent Activity</div>
-                            <div id="recentActivityContent" class="card-content centered-message">
-                                <span>📄</span>
-                                <p>Loading data...</p>
-                            </div>
-                        </div>
-                        <div class="card system-health-card">
-                            <div class="card-header">💚 System Health</div>
-                            <output id="systemHealth" class="health-value">--</output>
+                    <div class="overview-card">
+                        <div class="overview-icon icon-sec"><i class="fas fa-thermometer-half"></i></div>
+                        <div class="overview-content">
+                            <div class="overview-value" id="val-temp">--</div>
+                            <div class="overview-label">Coolant Temp</div>
                         </div>
                     </div>
-                </section>
-
-                <!-- ANALYTICS Section -->
-                <section class="dashboard-section" id="analytics">
-                    <h2 class="section-title">ANALYTICS</h2>
-                    <div class="analytics-grid">
-                        <div class="card active-time-card">
-                            <div class="card-header">📊 Active Time History</div>
-                            <div id="activeTimeChart" class="chart-placeholder">[ Chart Area ]</div>
+                    <div class="overview-card">
+                        <div class="overview-icon icon-wrn"><i class="fas fa-exclamation-triangle"></i></div>
+                        <div class="overview-content">
+                            <div class="overview-value" id="val-alerts">0</div>
+                            <div class="overview-label">Active Alerts</div>
                         </div>
-                        <div class="card recent-alerts-card">
-                            <div class="card-header">🔔 Recent Alerts</div>
-                            <div id="recentAlertsContent" class="card-content centered-message">
-                                <p>Loading alerts...</p>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-icon icon-dng"><i class="fas fa-bolt"></i></div>
+                        <div class="overview-content">
+                            <div class="overview-value" id="val-volt">--</div>
+                            <div class="overview-label">System Voltage</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- OPERATIONS Section -->
+            <section class="section-block">
+                <div class="section-heading compact">
+                    <div>
+                        <p class="section-eyebrow">Operations</p>
+                    </div>
+                </div>
+                <div class="grid-3">
+                    <div class="card">
+                        <h3><i class="fas fa-cogs"></i> Engine Status</h3>
+                        <div class="list-row">
+                            <span>Sync Status:</span>
+                            <span id="engSync" class="st-err">--</span>
+                        </div>
+                        <div class="list-row">
+                            <span>Engine State:</span>
+                            <span id="engStat" class="st-err">--</span>
+                        </div>
+                        <div class="list-row">
+                            <span>Today's Active:</span>
+                            <span id="engToday" class="st-ok">0h 0m</span>
+                        </div>
+                        <div class="list-row">
+                            <span>Fuel Level:</span>
+                            <span id="fuelLevel" class="st-ok">--%</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3><i class="fas fa-clipboard-list"></i> Recent Activity</h3>
+                        <div id="recentActivityContainer">
+                            <div style="text-align:center; padding:20px; color:#aaa">
+                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
                             </div>
                         </div>
                     </div>
-                </section>
 
-                <!-- PERFORMANCE Section -->
-                <section class="dashboard-section" id="performance">
-                    <h2 class="section-title">PERFORMANCE</h2>
-                    <div class="performance-grid">
-                        <div class="card system-status-card">
-                            <div class="card-header">📊 System Status</div>
-                            <div id="systemStatusChart" class="chart-placeholder">[ Chart Area ]</div>
-                            <div class="status-params">
-                                <div class="status-row"><span>Voltage:</span> <output id="voltageValue">--</output></div>
-                                <div class="status-row"><span>Current:</span> <output id="currentValue">--</output></div>
-                                <div class="status-row"><span>Frequency:</span> <output id="frequencyValue">--</output></div>
-                                <div class="status-row"><span>Fuel Level:</span> <output id="fuelLevelValue">--</output></div>
-                                <div class="status-row"><span>Temp:</span> <output id="tempValue">--</output></div>
-                            </div>
+                    <div class="card">
+                        <h3><i class="fas fa-heartbeat"></i> System Health</h3>
+                        <div id="systemHealthContainer" style="text-align: center; padding: 20px;">
+                            <div style="font-size: 3rem; font-weight: 700; color: #10b981;" id="healthScore">--</div>
+                            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
                         </div>
-                        <div class="card upcoming-maintenance-card">
-                            <div class="card-header">🔔 Upcoming Maintenance</div>
-                            <div id="upcomingMaintenanceContent" class="card-content centered-message">
-                                <p>Loading data...</p>
+                        <div class="list-row"><span>Voltage:</span> <span id="st-volt">--</span></div>
+                        <div class="list-row"><span>Current:</span> <span id="st-amp">--</span></div>
+                        <div class="list-row"><span>Frequency:</span> <span id="st-freq">--</span></div>
+                        <div class="list-row"><span>Fuel Level:</span> <span id="st-fuel">--</span></div>
+                        <div class="list-row"><span>AFR:</span> <span id="st-afr">--</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ANALYTICS Section -->
+            <section class="section-block section-analytics">
+                <div class="section-heading compact">
+                    <div>
+                        <p class="section-eyebrow">Analytics</p>
+                    </div>
+                </div>
+                <div class="grid-2">
+                    <div class="card">
+                        <h3><i class="fas fa-chart-line"></i> Active Time History</h3>
+                        <div class="chart-box">
+                            <canvas id="chartActive"></canvas>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-bell"></i> Recent Alerts</h3>
+                        <div id="alertContainer">
+                            <div style="text-align:center; padding:20px; color:#aaa">Loading alerts...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- PERFORMANCE Section -->
+            <section class="section-block">
+                <div class="section-heading compact">
+                    <div>
+                        <p class="section-eyebrow">Performance</p>
+                    </div>
+                </div>
+                <div class="grid-2">
+                    <div class="card">
+                        <h3><i class="fas fa-chart-bar"></i> System Status</h3>
+                        <div class="chart-box">
+                            <canvas id="chartSystem"></canvas>
+                        </div>
+                        <div class="list-row"><span>Voltage:</span> <span id="perf-volt">--</span></div>
+                        <div class="list-row"><span>Current:</span> <span id="perf-amp">--</span></div>
+                        <div class="list-row"><span>Frequency:</span> <span id="perf-freq">--</span></div>
+                        <div class="list-row"><span>Fuel Level:</span> <span id="perf-fuel">--</span></div>
+                        <div class="list-row"><span>Temperature:</span> <span id="perf-temp">--</span></div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-tools"></i> Upcoming Maintenance</h3>
+                        <div id="maintenanceContainer">
+                            <div style="text-align:center; padding:20px; color:#aaa">
+                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
                             </div>
                         </div>
                     </div>
-                </section>
+                </div>
+            </section>
 
-                <!-- INFORMATION Section -->
-                <section class="dashboard-section" id="information">
-                    <h2 class="section-title">INFORMATION</h2>
-                    <div class="information-grid">
-                        <div class="card engine-spec-card">
-                            <div class="card-header">🔧 Engine Specification</div>
-                            <div id="engineSpecContent" class="spec-content"></div>
-                        </div>
-                        <div class="card generator-spec-card">
-                            <div class="card-header">📋 Generator Specifications</div>
-                            <div id="generatorSpecContent" class="spec-content centered-message">
-                                <span>📄</span>
-                                <p>Loading data...</p>
-                            </div>
-                        </div>
-                        <div class="card call-help-card">
-                            <div class="card-header">💚 Call & Help</div>
-                            <div class="help-content">
-                                <p>Emergency Contact:</p>
-                                <p class="help-phone">+62 123 456 7890</p>
-                                <p>Technical Support:</p>
-                                <p class="help-email">support@genmon.com</p>
+            <!-- INFORMATION Section -->
+            <section class="section-block">
+                <div class="section-heading compact">
+                    <div>
+                        <p class="section-eyebrow">Information</p>
+                    </div>
+                </div>
+                <div class="grid-3">
+                    <div class="card">
+                        <h3><i class="fas fa-microchip"></i> Engine Specification</h3>
+                        <div id="engineSpecContainer">
+                            <div style="text-align:center; padding:20px; color:#aaa">
+                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
                             </div>
                         </div>
                     </div>
-                </section>
-            </div>
-        </main>
+                    <div class="card">
+                        <h3><i class="fas fa-industry"></i> Generator Specifications</h3>
+                        <div id="generatorSpecContainer">
+                            <div style="text-align:center; padding:20px; color:#aaa">
+                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-phone-alt"></i> Call &amp; Help</h3>
+                        <div class="help-content" style="padding: 15px;">
+                            <p style="color: #6b7280;">Emergency Contact:</p>
+                            <p style="font-weight: 600; font-size: 1.1rem; color: #0f172a;">+62 123 456 7890</p>
+                            <p style="color: #6b7280; margin-top: 10px;">Technical Support:</p>
+                            <p style="font-weight: 600; font-size: 1.1rem; color: #0f172a;">support@gentrack.com</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
     </div>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Scripts -->
+    <script src="js/sidebar.js"></script>
     <script src="js/public-view.js"></script>
+
+    <script>
+        /* ── Hero: Sync username dari topbar ── */
+        (function() {
+            function syncUsername() {
+                const topbarSpan = document.querySelector('#user-btn span');
+                const heroSpan = document.getElementById('welcome-user');
+                if (topbarSpan && heroSpan) {
+                    const name = topbarSpan.textContent.trim();
+                    if (name) heroSpan.textContent = name;
+                }
+            }
+
+            syncUsername();
+            const topbarTarget = document.querySelector('#user-btn span');
+            if (topbarTarget) {
+                new MutationObserver(syncUsername)
+                    .observe(topbarTarget, { childList: true, characterData: true, subtree: true });
+            }
+        })();
+    </script>
 </body>
 </html>
