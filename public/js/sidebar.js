@@ -5,6 +5,7 @@ function handleLogout() {
   if (confirm('Apakah Anda yakin ingin keluar?')) {
     localStorage.removeItem('isLoggedIn');
     localStorage.removeItem('userRole');
+    localStorage.removeItem('hasLoginSession');
     localStorage.removeItem('username');
     localStorage.removeItem('user'); // hapus juga key user
     window.location.replace('login.html');
@@ -88,7 +89,7 @@ function renderSidebarMenu() {
   const user = getUserData();
   const role = user?.role?.toLowerCase() || '';
   const isTeknisi = role === 'teknisi' || role === 'admin';
-  const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+  const isMasyarakat = role === 'masyarakat' || role === 'warga' || role === 'user' || role === 'viewer';
 
   let menuItems = [];
   if (isTeknisi) {

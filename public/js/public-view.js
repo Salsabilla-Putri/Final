@@ -28,6 +28,7 @@ function updateUserInfo() {
 function logout() {
     localStorage.removeItem('isLoggedIn');
     localStorage.removeItem('userRole');
+    localStorage.removeItem('hasLoginSession');
     localStorage.removeItem('username');
     window.location.href = 'login.html';
 }
