@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>Gen-Track — Login</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/role-utils.js"></script>
   <script src="js/auth-guard.js"></script>
   
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -482,9 +483,9 @@
           alertMessage.className = 'alert alert-success';
           alertMessage.style.display = 'block';
 
-          const normalizedRole = String(result.user.role || '').trim().toLowerCase();
-          const isWargaRole = normalizedRole === 'warga' || normalizedRole === 'masyarakat';
-          const storedRole = isWargaRole ? 'warga' : normalizedRole;
+          const normalizedRole = window.RoleUtils.normalizeRole(result.user.role);
+          const isWargaRole = window.RoleUtils.isPublicRole(normalizedRole);
+          const storedRole = window.RoleUtils.canonicalRole(normalizedRole);
 
           localStorage.setItem('userRole', storedRole);
           localStorage.setItem('username', result.user.name || result.user.email || email);

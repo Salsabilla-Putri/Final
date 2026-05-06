@@ -1,5 +1,17 @@
 // File: public/js/sidebar.js
 
+const roleUtils = window.RoleUtils || {
+  normalizeRole: (role) => String(role || '').trim().toLowerCase(),
+  isPublicRole: (role) => {
+    const normalized = String(role || '').trim().toLowerCase();
+    return normalized === 'warga' || normalized === 'masyarakat';
+  },
+  canonicalRole: (role) => {
+    const normalized = String(role || '').trim().toLowerCase();
+    return normalized === 'masyarakat' ? 'warga' : normalized;
+  }
+};
+
 // Fungsi untuk logout
 function handleLogout() {
   if (confirm('Apakah Anda yakin ingin keluar?')) {
@@ -17,14 +29,14 @@ function getUserData() {
   if (userStr) {
     try {
       const user = JSON.parse(userStr);
-      return { role: user.role, username: user.name || user.email };
+      return { role: roleUtils.canonicalRole(user.role), username: user.name || user.email };
     } catch(e) {}
   }
   // fallback ke isLoggedIn style
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
   if (!isLoggedIn) return null;
   return {
-    role: localStorage.getItem('userRole') || 'masyarakat',
+    role: roleUtils.canonicalRole(localStorage.getItem('userRole') || 'warga'),
     username: localStorage.getItem('username') || 'Pengguna'
   };
 }
@@ -86,9 +98,9 @@ function setupMobileSidebarControls() {
 // Render sidebar berdasarkan role (dipanggil setelah konten sidebar dimuat)
 function renderSidebarMenu() {
   const user = getUserData();
-  const role = user?.role?.toLowerCase() || '';
+  const role = roleUtils.normalizeRole(user?.role);
   const isTeknisi = role === 'teknisi' || role === 'admin';
-  const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+  const isWarga = roleUtils.isPublicRole(role) || role === 'user' || role === 'viewer';
 
   let menuItems = [];
   if (isTeknisi) {
@@ -100,7 +112,7 @@ function renderSidebarMenu() {
       { icon: 'fa-file-alt', text: 'Laporan', link: 'reports.html' },
       { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
     ];
-  } else if (isMasyarakat) {
+  } else if (isWarga) {
     menuItems = [
       { icon: 'fa-home', text: 'Dashboard Warga', link: 'public.html' },
       { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
