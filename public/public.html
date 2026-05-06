@@ -46,6 +46,7 @@
                     <div id="liveClock" class="hero-time">--:--</div>
                     <div class="hero-greeting">Welcome, <span id="welcome-user">Pengguna</span>!</div>
                     <div class="hero-subtitle"><em>"Live Monitoring for Generator Health &amp; Efficiency"</em></div>
+                    <div class="status-pill ok" style="margin-top:8px;">Auto-Sync Monitoring Aktif</div>
                 </div>
             </section>
 
@@ -180,6 +181,9 @@
                 <div class="grid-2">
                     <div class="card">
                         <h3><i class="fas fa-chart-bar"></i> System Status</h3>
+                        <div class="chart-box">
+                            <canvas id="chartSystem"></canvas>
+                        </div>
                         <div id="perfStatusList"></div>
                     </div>
                     <div class="card">
