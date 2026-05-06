@@ -96,10 +96,13 @@ function updateOverviewCards(data) {
     const rpm = data.rpm || 0;
     const temp = data.coolant || data.temp || 0;
     const volt = data.volt || 0;
+    const power = data.power || 0;
     
     document.getElementById('val-rpm').innerText = rpm + ' RPM';
     document.getElementById('val-temp').innerText = temp + '°C';
     document.getElementById('val-volt').innerText = volt + ' V';
+    const powerEl = document.getElementById('val-power');
+    if (powerEl) powerEl.innerText = power + ' kW';
     
     // Update active alerts count
     fetch('/api/alerts?limit=100')
@@ -242,11 +245,22 @@ function updatePerformanceSection(data) {
             el.innerText = val.text;
         };
 
-        setStatus('perf-volt', status(params.voltage?.value, 200, 240));
-        setStatus('perf-fuel', status(params.fuel?.percent, 20, 100));
-        setStatus('perf-temp', status(params.temperature?.value, 40, 90));
-        setStatus('perf-amp', status(params.current?.value, 0, 100));
-        setStatus('perf-freq', status(params.frequency?.value, 48, 52));
+        const list = document.getElementById('perfStatusList');
+        if (!list) return;
+        const rows = [
+            ['Voltage', status(params.voltage?.value, 200, 240)],
+            ['Current', status(params.current?.value, 0, 100)],
+            ['Frequency', status(params.frequency?.value, 48, 52)],
+            ['Fuel Level', status(params.fuel?.percent, 20, 100)],
+            ['Temperature', status(params.temperature?.value, 40, 90)],
+            ['RPM', status(params.rpm?.value, 600, 3200)],
+            ['Oil Pressure', status(params.oil?.value, 20, 80)],
+            ['Battery', status(params.battery?.value, 11.8, 14.8)],
+            ['AFR', status(params.afr?.value, 10, 18)]
+        ];
+        list.innerHTML = rows.map(([name, st]) => `
+            <div class="list-row"><span>${name}:</span><span class="status-pill ${st.cls}">${st.text}</span></div>
+        `).join('');
     }
 }
 

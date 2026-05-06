@@ -85,6 +85,13 @@
                             <div class="overview-label">System Voltage</div>
                         </div>
                     </div>
+                    <div class="overview-card">
+                        <div class="overview-icon icon-prm"><i class="fas fa-plug"></i></div>
+                        <div class="overview-content">
+                            <div class="overview-value" id="val-power">--</div>
+                            <div class="overview-label">Output Power</div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -173,11 +180,10 @@
                 <div class="grid-2">
                     <div class="card">
                         <h3><i class="fas fa-chart-bar"></i> System Status</h3>
-                        <div class="list-row"><span>Voltage:</span> <span id="perf-volt">--</span></div>
-                        <div class="list-row"><span>Current:</span> <span id="perf-amp">--</span></div>
-                        <div class="list-row"><span>Frequency:</span> <span id="perf-freq">--</span></div>
-                        <div class="list-row"><span>Fuel Level:</span> <span id="perf-fuel">--</span></div>
-                        <div class="list-row"><span>Temperature:</span> <span id="perf-temp">--</span></div>
+                        <div class="chart-box">
+                            <canvas id="chartSystem"></canvas>
+                        </div>
+                        <div id="perfStatusList"></div>
                     </div>
                     <div class="card">
                         <h3><i class="fas fa-tools"></i> Upcoming Maintenance</h3>
@@ -235,6 +241,9 @@
             </section>
         </div>
     </div>
+    <a href="tel:+621234567890" class="quick-tech-call" aria-label="Quick call teknisi">
+        <i class="fas fa-phone-alt"></i>
+    </a>
 
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
