@@ -150,3 +150,11 @@ canvas { width: 100% !important; max-width: 100%; }
   box-shadow: 0 10px 24px rgba(16,185,129,.35);
   text-decoration: none;
 }
+
+
+.status-pill { display:inline-flex; align-items:center; padding:4px 10px; border-radius:999px; font-size:.78rem; font-weight:700; line-height:1.2; white-space:nowrap; }
+.status-pill.ok { background:#dcfce7; color:#166534; }
+.status-pill.warn { background:#fef3c7; color:#92400e; }
+.status-pill.danger { background:#fee2e2; color:#991b1b; }
+.status-pill.muted { background:#e2e8f0; color:#475569; }
+.health-warning-wrap { margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; }
