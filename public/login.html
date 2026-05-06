@@ -489,6 +489,7 @@
           localStorage.setItem('userRole', storedRole);
           localStorage.setItem('username', result.user.name || result.user.email || email);
           localStorage.setItem('isLoggedIn', 'true');
+          localStorage.setItem('hasLoginSession', 'true');
 
           setTimeout(() => {
             window.location.href = result.user.redirectTo || (isWargaRole ? 'public.html' : 'index.html');
