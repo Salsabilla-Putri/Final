@@ -409,4 +409,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Real-time updates
     setInterval(fetchDashboardData, 5000);
+
+    const userBtn = document.getElementById('user-btn');
+    userBtn?.addEventListener('click', () => {
+        window.location.href = 'user.html';
+    });
 });

@@ -121,13 +121,16 @@ function renderSidebarMenu() {
   }
 
   const menuHtml = menuItems.map(item => `
-    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}; return false;"` : ''}>
-      <i class="fas ${item.icon}"></i> ${item.text}
+    <a href="${item.link}" class="nav-item sidebar-item" ${item.onclick ? `onclick="${item.onclick}; return false;"` : ''}>
+      <span class="nav-icon"><i class="fas ${item.icon}"></i></span>
+      <span class="nav-text">${item.text}</span>
     </a>
   `).join('');
 
   const sidebarMenu = document.querySelector('.sidebar-menu');
+  const navWrapper = document.querySelector('.nav-items-wrapper');
   if (sidebarMenu) sidebarMenu.innerHTML = menuHtml;
+  else if (navWrapper) navWrapper.innerHTML = menuHtml;
 
   // Pasang ulang event listener untuk logout
   document.querySelectorAll('.sidebar-item[onclick*="handleLogout"]').forEach(el => {

@@ -180,6 +180,9 @@
                 <div class="grid-2">
                     <div class="card">
                         <h3><i class="fas fa-chart-bar"></i> System Status</h3>
+                        <div class="chart-box">
+                            <canvas id="chartSystem"></canvas>
+                        </div>
                         <div id="perfStatusList"></div>
                     </div>
                     <div class="card">
@@ -231,6 +234,15 @@
                                 <a href="https://www.google.com/maps/search/dealer+genset+terdekat/" target="_blank" rel="noopener" class="user-info" style="text-decoration:none; background:#f59e0b;">
                                     <i class="fas fa-map-marker-alt"></i><span>Dealer Maps</span>
                                 </a>
+                            </div>
+                            <div class="indicator-guide">
+                                <p style="margin-top:12px; font-weight:600; color:#0f172a;">Panduan Indikator</p>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                                    <span class="status-pill ok">Aman</span>
+                                    <span class="status-pill warn">Waspada</span>
+                                    <span class="status-pill danger">Bahaya</span>
+                                    <span class="status-pill muted">Belum Ada Data</span>
+                                </div>
                             </div>
                         </div>
                     </div>
