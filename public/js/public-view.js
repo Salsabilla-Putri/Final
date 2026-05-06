@@ -1,4 +1,5 @@
 'use strict';
+let activeChart = null;
 
 // Update clock
 function updateClock() {
@@ -6,9 +7,8 @@ function updateClock() {
     if (el) {
         const now = new Date();
         el.innerText = now.toLocaleTimeString('id-ID', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            second: '2-digit'
+            hour: '2-digit',
+            minute: '2-digit'
         }) + ' WIB';
     }
 }
@@ -71,15 +71,16 @@ async function fetchDashboardData() {
         }
         
         // Fetch active time history
-        const activeTimeRes = await fetch('/api/generator-active-time/history?limit=5');
+        const activeTimeRes = await fetch('/api/generator-active-time/history?limit=30');
         const activeTimeData = await activeTimeRes.json();
         
         if (activeTimeData.success) {
             updateRecentActivity(activeTimeData.data);
+            updateActiveTimeChart(activeTimeData.data);
         }
         
         // Fetch maintenance data
-        const maintenanceRes = await fetch('/api/maintenance/suggestion');
+        const maintenanceRes = await fetch('/api/maintenance');
         const maintenanceData = await maintenanceRes.json();
         
         if (maintenanceData.success) {
@@ -138,6 +139,24 @@ function updateOperationsSection(data) {
         healthScore.innerText = health + '%';
         healthScore.style.color = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
     }
+    const warningItems = [];
+    const temp = data.coolant || data.temp || 0;
+    if (temp > 95) warningItems.push({ name: 'Coolant Temperature', level: 'danger' });
+    else if (temp > 85) warningItems.push({ name: 'Coolant Temperature', level: 'warn' });
+    if ((data.fuel || 0) < 20) warningItems.push({ name: 'Fuel Level', level: 'warn' });
+    if ((data.volt || 0) < 190 || (data.volt || 0) > 250) warningItems.push({ name: 'Voltage', level: 'danger' });
+
+    const healthContainer = document.getElementById('systemHealthContainer');
+    if (healthContainer) {
+        const warningHTML = warningItems.length
+            ? warningItems.map((item) => `<span class="status-pill ${item.level}">${item.name}</span>`).join('')
+            : '<span class="status-pill ok">Semua komponen aman</span>';
+        healthContainer.innerHTML = `
+            <div style="font-size: 3rem; font-weight: 700; color: ${health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444'};" id="healthScore">${health}%</div>
+            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
+            <div class="health-warning-wrap">${warningHTML}</div>
+        `;
+    }
 }
 
 function calculateHealth(data) {
@@ -170,7 +189,7 @@ function updateAlertsSection(alerts) {
         return;
     }
     
-    container.innerHTML = alerts.slice(0, 5).map(alert => `
+    container.innerHTML = alerts.slice(0, 3).map(alert => `
         <div class="alert-item ${alert.severity === 'critical' ? '' : (alert.severity === 'high' ? 'warning' : 'info')}">
             <div class="alert-time">
                 ${new Date(alert.timestamp).toLocaleString('id-ID')}
@@ -194,7 +213,7 @@ function updateRecentActivity(activities) {
         return;
     }
     
-    container.innerHTML = activities.slice(0, 5).map(activity => `
+    container.innerHTML = activities.slice(0, 4).map(activity => `
         <div class="activity-item">
             <div class="activity-time">
                 ${new Date(activity.startedAt).toLocaleString('id-ID')}
@@ -210,12 +229,27 @@ function updateRecentActivity(activities) {
 function updatePerformanceSection(data) {
     if (data.parameters) {
         const params = data.parameters;
-        
-        document.getElementById('perf-volt').innerText = (params.voltage?.value || '--') + ' V';
-        document.getElementById('perf-fuel').innerText = (params.fuel?.percent || '--') + '%';
-        document.getElementById('perf-temp').innerText = (params.temperature?.value || '--') + '°C';
+        const status = (value, low, high) => {
+            if (value == null) return { text: 'Tidak ada data', cls: 'muted' };
+            if (value < low) return { text: 'Rendah', cls: 'warn' };
+            if (value > high) return { text: 'Tinggi', cls: 'danger' };
+            return { text: 'Aman/Normal', cls: 'ok' };
+        };
+        const setStatus = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.className = `status-pill ${val.cls}`;
+            el.innerText = val.text;
+        };
+
+        setStatus('perf-volt', status(params.voltage?.value, 200, 240));
+        setStatus('perf-fuel', status(params.fuel?.percent, 20, 100));
+        setStatus('perf-temp', status(params.temperature?.value, 40, 90));
+        setStatus('perf-amp', status(params.current?.value, 0, 100));
+        setStatus('perf-freq', status(params.frequency?.value, 48, 52));
     }
 }
+
 
 function updateSpecificationsSection(specs) {
     const genContainer = document.getElementById('generatorSpecContainer');
@@ -227,12 +261,6 @@ function updateSpecificationsSection(specs) {
                 <li><span>Daya Maks</span><span>${specs.dayaMaks || '--'} kW</span></li>
                 <li><span>Tegangan</span><span>${specs.tegangan || '--'} V</span></li>
                 <li><span>Frekuensi</span><span>${specs.frekuensi || '--'} Hz</span></li>
-                <li><span>Tipe Mesin</span><span>${specs.tipeMesin || '--'}</span></li>
-                <li><span>Kapasitas Mesin</span><span>${specs.kapasitasMesin || '--'}</span></li>
-                <li><span>Kapasitas Tangki</span><span>${specs.kapasitasTangki || '--'} L</span></li>
-                <li><span>Konsumsi BBM</span><span>${specs.konsumsiBbm || '--'} L/jam</span></li>
-                <li><span>Sistem Start</span><span>${specs.sistemStart || '--'}</span></li>
-                <li><span>Oli Mesin</span><span>${specs.oliMesin || '--'}</span></li>
             </ul>
         `;
     }
@@ -255,23 +283,103 @@ function updateMaintenanceSection(data) {
     const container = document.getElementById('maintenanceContainer');
     if (!container) return;
     
-    if (data && data.decisionStatus) {
-        const statusClass = data.decisionStatus.toLowerCase();
-        
-        container.innerHTML = `
-            <div class="maintenance-status ${statusClass}">
-                Status: ${data.decisionStatus}
-            </div>
-            <div class="maintenance-message">
-                ${data.message || ''}
-            </div>
-            <div class="maintenance-recommendation">
-                <strong>Rekomendasi:</strong><br>
-                ${data.recommendation || ''}
-            </div>
-        `;
+    if (Array.isArray(data) && data.length) {
+        const upcoming = data
+            .filter((m) => String(m.status || '').toLowerCase() !== 'completed')
+            .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
+            .slice(0, 4);
+
+        if (!upcoming.length) {
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa">No upcoming maintenance</div>';
+            return;
+        }
+
+        container.innerHTML = upcoming.map((m) => {
+            const due = new Date(m.dueDate || m.createdAt).toLocaleDateString('id-ID');
+            const estCost = m.cost != null ? `Rp ${Number(m.cost).toLocaleString('id-ID')}` : 'Biaya belum tersedia';
+            return `
+                <div class="maintenance-item" style="border:1px solid #e2e8f0;">
+                    <div style="font-weight:700; color:#0f172a;">${m.task || 'Maintenance Task'}</div>
+                    <div style="font-size:.85rem; color:#64748b; margin-top:4px;">
+                        Due: ${due} • Status: ${(m.status || 'scheduled')}
+                    </div>
+                    <div style="font-size:.85rem; color:#1745a5; margin-top:6px;">Estimasi Cost: ${estCost}</div>
+                </div>
+            `;
+        }).join('');
     }
 }
+
+function updateActiveTimeChart(rows) {
+    const ctx = document.getElementById('chartActive')?.getContext('2d');
+    if (!ctx) return;
+
+    const renderChart = (labels, dataPoints, highlightIndex = -1) => {
+        if (activeChart) activeChart.destroy();
+        activeChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Jam Aktif',
+                    data: dataPoints,
+                    backgroundColor: dataPoints.map((_, idx) => idx === highlightIndex ? '#f97316' : '#1745a5'),
+                    borderRadius: 6,
+                    barPercentage: 0.6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, max: 24, ticks: { callback: (v) => `${v}h` } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+    };
+
+    Promise.all([
+        fetch('/api/daily-active-time?days=7').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/daily-active-time/today').then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([histJson, todayJson]) => {
+        if (histJson?.success && Array.isArray(histJson.data)) {
+            const dayMap = {};
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date(Date.now() + 7 * 60 * 60 * 1000 - i * 86400000);
+                dayMap[d.toISOString().slice(0, 10)] = 0;
+            }
+            histJson.data.forEach((r) => {
+                if (dayMap.hasOwnProperty(r.date)) dayMap[r.date] = r.activeHours || 0;
+            });
+            const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            if (todayJson?.success) dayMap[todayWib] = todayJson.activeHours || dayMap[todayWib];
+            const keys = Object.keys(dayMap);
+            renderChart(keys.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' })), keys.map((k) => Number((dayMap[k] || 0).toFixed(2))), keys.findIndex((k) => k === todayWib));
+            return;
+        }
+
+        const dayLabels = [];
+        const map = {};
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() - i);
+            const key = d.toISOString().slice(0, 10);
+            dayLabels.push(key);
+            map[key] = 0;
+        }
+        (rows || []).forEach((r) => {
+            const start = new Date(r.startedAt);
+            const end = r.endedAt ? new Date(r.endedAt) : new Date();
+            const key = start.toISOString().slice(0, 10);
+            if (map[key] !== undefined) map[key] += Math.max(0, (end - start) / 3600000);
+        });
+        renderChart(dayLabels.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' })), dayLabels.map((k) => Number(map[k].toFixed(2))), 6);
+    });
+}
+
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', async () => {
