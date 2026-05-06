@@ -89,7 +89,7 @@ function renderSidebarMenu() {
   const user = getUserData();
   const role = user?.role?.toLowerCase() || '';
   const isTeknisi = role === 'teknisi' || role === 'admin';
-  const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+  const isMasyarakat = role === 'masyarakat' || role === 'warga' || role === 'user' || role === 'viewer';
 
   let menuItems = [];
   if (isTeknisi) {
