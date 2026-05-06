@@ -1,10 +1,18 @@
 (function () {
+  const roleUtils = window.RoleUtils || {
+    normalizeRole: (role) => String(role || '').trim().toLowerCase(),
+    isPublicRole: (role) => {
+      const normalized = String(role || '').trim().toLowerCase();
+      return normalized === 'warga' || normalized === 'masyarakat';
+    }
+  };
   const path = window.location.pathname;
   const page = path.split('/').pop() || 'index.html';
   const isLoginPage = page.includes('login.html');
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
   const role = localStorage.getItem('userRole') || '';
-  const isPublicRole = role.toLowerCase() === 'masyarakat';
+  const normalizedRole = roleUtils.normalizeRole(role);
+  const isPublicRole = roleUtils.isPublicRole(normalizedRole);
   const isPublicPage = page.includes('public.html');
 
   if (!isLoginPage && !isLoggedIn) {
