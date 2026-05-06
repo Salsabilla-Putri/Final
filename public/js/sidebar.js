@@ -102,7 +102,15 @@ function renderSidebarMenu() {
       { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
     ];
   } else if (isMasyarakat) {
-    menuItems = [
+    const isPublicPage = (window.location.pathname.split('/').pop() || '') === 'public.html';
+    menuItems = isPublicPage ? [
+      { icon: 'fa-home', text: 'Overview', link: '#', onclick: "document.querySelector('.section-overview')?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-cogs', text: 'Operations', link: '#', onclick: "document.querySelectorAll('.section-block')[1]?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-chart-line', text: 'Analytics', link: '#', onclick: "document.querySelector('.section-analytics')?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-chart-bar', text: 'Performance', link: '#', onclick: "document.querySelectorAll('.section-block')[3]?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-info-circle', text: 'Information', link: '#', onclick: "document.querySelectorAll('.section-block')[4]?.scrollIntoView({behavior:'smooth'})" },
+      { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
+    ] : [
       { icon: 'fa-home', text: 'Dashboard Warga', link: 'public.html' },
       { icon: 'fa-sign-out-alt', text: 'Logout', link: '#', onclick: 'handleLogout' }
     ];
@@ -113,7 +121,7 @@ function renderSidebarMenu() {
   }
 
   const menuHtml = menuItems.map(item => `
-    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}(); return false;"` : ''}>
+    <a href="${item.link}" class="sidebar-item" ${item.onclick ? `onclick="${item.onclick}; return false;"` : ''}>
       <i class="fas ${item.icon}"></i> ${item.text}
     </a>
   `).join('');
@@ -129,6 +137,43 @@ function renderSidebarMenu() {
       handleLogout();
     });
   });
+}
+
+
+function applyPublicSectionSidebar() {
+  const page = window.location.pathname.split('/').pop() || 'index.html';
+  const role = (getUserData()?.role || '').toLowerCase();
+  const isPublicUser = ['masyarakat','warga','user','viewer'].includes(role);
+  if (page !== 'public.html' || !isPublicUser) return;
+
+  const wrap = document.querySelector('.sidebar .nav-items-wrapper');
+  if (!wrap) return;
+  const sections = [
+    { icon: 'fa-home', text: 'Overview', selector: '.section-overview' },
+    { icon: 'fa-cogs', text: 'Operations', selector: '.section-block:nth-of-type(2)' },
+    { icon: 'fa-chart-line', text: 'Analytics', selector: '.section-analytics' },
+    { icon: 'fa-chart-bar', text: 'Performance', selector: '.section-block:nth-of-type(4)' },
+    { icon: 'fa-info-circle', text: 'Information', selector: '.section-block:nth-of-type(5)' }
+  ];
+
+  wrap.innerHTML = sections.map((item) => `
+    <a href="#" class="nav-item public-section-link" data-target="${item.selector}">
+      <span class="nav-icon"><i class="fas ${item.icon}"></i></span>
+      <span class="nav-text">${item.text}</span>
+    </a>`).join('') + `
+    <a href="#" id="logout-btn" class="nav-item">
+      <span class="nav-icon"><i class="fas fa-sign-out-alt"></i></span>
+      <span class="nav-text">Logout</span>
+    </a>`;
+
+  wrap.querySelectorAll('.public-section-link').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const target = document.querySelector(el.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+  document.getElementById('logout-btn')?.addEventListener('click', (e) => { e.preventDefault(); handleLogout(); });
 }
 
 // Inisialisasi sidebar (load template, lalu render menu)
@@ -156,6 +201,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       // Render menu dinamis berdasarkan role
       renderSidebarMenu();
+      applyPublicSectionSidebar();
 
       // Inisialisasi event lain
       setActiveLink();
