@@ -84,6 +84,50 @@ function setupMobileSidebarControls() {
   window.addEventListener('resize', () => { if (window.innerWidth > 768) closeMobileSidebar(); });
 }
 
+function customizePublicSidebarForCitizen() {
+  const page = window.location.pathname.split('/').pop() || '';
+  const user = getUserData();
+  const role = user?.role?.toLowerCase() || '';
+  const isMasyarakat = ['masyarakat', 'warga', 'user', 'viewer'].includes(role);
+  if (page !== 'public.html' || !isMasyarakat) return;
+
+  const wrap = document.querySelector('.sidebar .nav-items-wrapper');
+  if (!wrap) return;
+
+  const items = [
+    { icon: 'fa-home', text: 'Overview', target: '.section-overview' },
+    { icon: 'fa-cogs', text: 'Operations', target: '.section-block:nth-of-type(2)' },
+    { icon: 'fa-chart-line', text: 'Analytics', target: '.section-analytics' },
+    { icon: 'fa-chart-bar', text: 'Performance', target: '.section-block:nth-of-type(4)' },
+    { icon: 'fa-info-circle', text: 'Information', target: '.section-block:nth-of-type(5)' }
+  ];
+
+  wrap.innerHTML = items.map((item) => `
+    <a href="#" class="nav-item public-nav-item" data-target="${item.target}">
+      <span class="nav-icon"><i class="fas ${item.icon}"></i></span>
+      <span class="nav-text">${item.text}</span>
+    </a>
+  `).join('') + `
+    <a href="#" id="logout-btn" class="nav-item">
+      <span class="nav-icon"><i class="fas fa-sign-out-alt"></i></span>
+      <span class="nav-text">Logout</span>
+    </a>
+  `;
+
+  wrap.querySelectorAll('.public-nav-item').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const t = document.querySelector(el.dataset.target);
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      closeMobileSidebar();
+    });
+  });
+  wrap.querySelector('#logout-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    handleLogout();
+  });
+}
+
 // Render sidebar berdasarkan role (dipanggil setelah konten sidebar dimuat)
 function renderSidebarMenu() {
   const user = getUserData();
@@ -204,6 +248,7 @@ document.addEventListener('DOMContentLoaded', function () {
       applyPublicSectionSidebar();
 
       // Inisialisasi event lain
+      customizePublicSidebarForCitizen();
       setActiveLink();
       setupSidebarHoverState();
       setupMobileSidebarControls();
