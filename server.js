@@ -1476,6 +1476,48 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+// Di server.js, tambahkan middleware untuk public.html
+app.get('/public.html', (req, res) => {
+    // Hanya serve file, autentikasi dilakukan di client-side
+    res.sendFile(path.join(__dirname, 'public', 'public.html'));
+});
+
+// Modifikasi login response untuk memastikan role 'warg' bisa akses
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const email = String(req.body?.email || '').trim().toLowerCase();
+        const password = String(req.body?.password || '');
+
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
+        }
+
+        const user = await User.findOne({ email }).lean();
+        if (!user || user.password !== password) {
+            return res.status(401).json({ success: false, message: 'Email atau password tidak valid.' });
+        }
+
+        const role = String(user.role || '').toLowerCase();
+        // Allow both 'masyarakat' and 'warg' to access public.html
+        const isPublic = role === 'masyarakat' || role === 'warg' || role === 'user' || role === 'viewer';
+        const redirectTo = isPublic ? 'public.html' : 'index.html';
+
+        return res.json({
+            success: true,
+            user: {
+                name: user.name || user.email.split('@')[0],
+                email: user.email,
+                role: user.role,
+                redirectTo
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
+    }
+});
+
+
+
 
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());

@@ -1,179 +1,237 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta charset="utf-8" />
-<title>Generator Monitoring Dashboard</title>
-<link rel="stylesheet" href="css/public-view.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="utf-8" />
+    <title>Generator Monitoring Dashboard</title>
+    <link rel="stylesheet" href="css/public-view.css" />
 </head>
 <body>
-<main class="box">
-<div class="group">
-<header class="section-3" role="banner" aria-label="Dashboard hero">
-<div class="gradient" aria-hidden="true"></div>
-<div class="overlay" aria-hidden="true"></div>
-<time class="text-wrapper-17" aria-label="Current time">--:--</time>
-<h1 class="text-wrapper-18">Welcome, Pengguna!</h1>
-<p class="emphasis-live">"Live Monitoring for Generator Health &amp; Efficiency"</p>
-</header>
-<section class="section" aria-labelledby="overview-title">
-<h2 class="overview" id="overview-title">OVERVIEW</h2>
-<article class="background-border" aria-label="Engine Speed overview card">
-<div class="background" aria-hidden="true">
-<div class="symbol" aria-hidden="true"></div>
-</div>
-<output class="text-wrapper" aria-label="Engine Speed value">--</output>
-<p class="div">Engine Speed</p>
-</article>
-<article class="background-border-2" aria-label="Coolant Temp overview card">
-<div class="symbol-wrapper" aria-hidden="true">
-<div class="symbol-2" aria-hidden="true"></div>
-</div>
-<output class="text-wrapper" aria-label="Coolant Temp value">--</output>
-<p class="text-wrapper-2">Coolant Temp</p>
-</article>
-<article class="background-border-3" aria-label="Active Alerts overview card">
-<div class="div-wrapper" aria-hidden="true">
-<div class="symbol-3" aria-hidden="true"></div>
-</div>
-<output class="text-wrapper-3" aria-label="Active Alerts value">0</output>
-<p class="text-wrapper-4">Active Alerts</p>
-</article>
-<article class="background-border-4" aria-label="System Voltage overview card">
-<div class="background-2" aria-hidden="true">
-<div class="symbol-4" aria-hidden="true"></div>
-</div>
-<output class="text-wrapper" aria-label="System Voltage value">--</output>
-<p class="text-wrapper-5">System Voltage</p>
-</article>
-</section>
-<section class="section-2" aria-labelledby="operations-title">
-<h2 class="operations" id="operations-title">OPERATIONS</h2>
-<article class="background-border-5" aria-labelledby="engine-status-title">
-<div class="heading">
-<div class="symbol-5" aria-hidden="true"></div>
-<h3 class="text-wrapper-6" id="engine-status-title">Engine Status</h3>
-</div>
-<div class="paragraph" role="group" aria-label="Sync Status">
-<p class="text-wrapper-7">Sync Status:</p>
-<output class="text-wrapper-8" aria-label="Sync Status value">--</output>
-</div>
-<div class="paragraph-2" role="group" aria-label="Engine State">
-<p class="text-wrapper-9">Engine State:</p>
-<output class="text-wrapper-8" aria-label="Engine State value">--</output>
-</div>
-<div class="paragraph-3" role="group" aria-label="Today's Active">
-<p class="today-s-active">Today's Active:</p>
-<output class="text-wrapper-10" aria-label="Today's Active value">0h 0m</output>
-</div>
-<p class="text-wrapper-11">Fuel Level:</p>
-<output class="text-wrapper-12" aria-label="Fuel Level value">--%</output>
-</article>
-<article class="background-border-6" aria-labelledby="recent-activity-title">
-<div class="heading">
-<div class="symbol-6" aria-hidden="true"></div>
-<h3 class="text-wrapper-13" id="recent-activity-title">Recent Activity</h3>
-</div>
-<div class="symbol-7" aria-hidden="true"></div>
-<p class="loading-data" aria-live="polite">Loading data...</p>
-<div class="heading-2" aria-hidden="true">
-<div class="symbol-8"></div>
-<div class="text-wrapper-14">System Health</div>
-</div>
-</article>
-<article class="background-border-7" aria-labelledby="system-health-title">
-<div class="heading-3">
-<div class="symbol-9" aria-hidden="true"></div>
-<h3 class="text-wrapper-15" id="system-health-title">System Health</h3>
-<div class="heading-4" aria-hidden="true">
-<div class="symbol-6"></div>
-<div class="text-wrapper-13">Recent Activity</div>
-</div>
-</div>
-<output class="text-wrapper-16" aria-label="System Health value">--</output>
-</article>
-</section>
-<section class="section-4" aria-labelledby="analytics-title">
-<h2 class="analytics" id="analytics-title">ANALYTICS</h2>
-<article class="background-border-8" aria-labelledby="active-time-history-title">
-<div class="heading-5">
-<div class="symbol-8" aria-hidden="true"></div>
-<h3 class="text-wrapper-19" id="active-time-history-title">Active Time History</h3>
-</div>
-<div class="image" role="img" aria-label="Active Time History chart"></div>
-</article>
-<article class="background-border-9" aria-labelledby="recent-alerts-title">
-<div class="heading-5">
-<div class="symbol-10" aria-hidden="true"></div>
-<h3 class="text-wrapper-20" id="recent-alerts-title">Recent Alerts</h3>
-</div>
-<p class="text-wrapper-21" aria-live="polite">Loading alerts...</p>
-</article>
-</section>
-<div class="frame">
-<section class="section-5" aria-labelledby="performance-title">
-<h2 class="performance" id="performance-title">PERFORMANCE</h2>
-<article class="background-border-10" aria-labelledby="system-status-title">
-<div class="heading-6">
-<div class="symbol-9" aria-hidden="true"></div>
-<h3 class="text-wrapper-22" id="system-status-title">System Status</h3>
-<img class="slice" src="img/slice-1.svg" alt="" aria-hidden="true" />
-</div>
-<div class="image-2" role="img" aria-label="System Status chart"></div>
-<div class="paragraph-4" role="group" aria-label="Voltage">
-<p class="text-wrapper-23">Voltage:</p>
-<output class="text-wrapper-24" aria-label="Voltage value">--</output>
-</div>
-<div class="paragraph-5" role="group" aria-label="Current">
-<p class="text-wrapper-25">Current:</p>
-<output class="text-wrapper-24" aria-label="Current value">--</output>
-</div>
-<div class="paragraph-6" role="group" aria-label="Frequency">
-<p class="text-wrapper-26">Frequency:</p>
-<output class="text-wrapper-24" aria-label="Frequency value">--</output>
-</div>
-<div class="paragraph-7" role="group" aria-label="Fuel Level">
-<p class="text-wrapper-27">Fuel Level:</p>
-<output class="text-wrapper-24" aria-label="Fuel Level value">--</output>
-</div>
-<div class="paragraph-8" role="group" aria-label="Temp">
-<p class="text-wrapper-27">Temp:</p>
-<output class="text-wrapper-24" aria-label="Temp value">--</output>
-</div>
-</article>
-<article class="background-border-9" aria-labelledby="upcoming-maintenance-title">
-<div class="heading-5">
-<div class="symbol-10" aria-hidden="true"></div>
-<h3 class="text-wrapper-28" id="upcoming-maintenance-title">Upcoming Maintenance</h3>
-</div>
-<p class="text-wrapper-21" aria-live="polite">Loading alerts...</p>
-</article>
-</section>
-<section class="section-6" aria-labelledby="information-title">
-<h2 class="information" id="information-title">INFORMATION</h2>
-<article class="heading-wrapper" aria-labelledby="engine-specification-title">
-<div class="heading-7">
-<div class="symbol-5" aria-hidden="true"></div>
-<h3 class="text-wrapper-29" id="engine-specification-title">Engine Specification</h3>
-</div>
-</article>
-<article class="background-border-6" aria-labelledby="generator-specifications-title">
-<div class="heading-8">
-<div class="symbol-6" aria-hidden="true"></div>
-<h3 class="text-wrapper-30" id="generator-specifications-title">Generator Specifications</h3>
-</div>
-<div class="symbol-7" aria-hidden="true"></div>
-<p class="loading-data" aria-live="polite">Loading data...</p>
-</article>
-<article class="background-border-11" aria-labelledby="call-help-title">
-<div class="heading-9">
-<div class="symbol-8" aria-hidden="true"></div>
-<h3 class="text-wrapper-14" id="call-help-title">Call &amp; Help</h3>
-</div>
-</article>
-</section>
-</div>
-</div>
-</main>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" role="navigation" aria-label="Main navigation">
+            <div class="sidebar-header">
+                <div class="logo">GENMON</div>
+                <p class="sidebar-subtitle">Generator Monitoring</p>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#overview" class="nav-item active" data-section="overview">
+                    <span class="nav-icon">📊</span>
+                    <span>Overview</span>
+                </a>
+                <a href="#operations" class="nav-item" data-section="operations">
+                    <span class="nav-icon">⚙️</span>
+                    <span>Operations</span>
+                </a>
+                <a href="#analytics" class="nav-item" data-section="analytics">
+                    <span class="nav-icon">📈</span>
+                    <span>Analytics</span>
+                </a>
+                <a href="#performance" class="nav-item" data-section="performance">
+                    <span class="nav-icon">⚡</span>
+                    <span>Performance</span>
+                </a>
+                <a href="#information" class="nav-item" data-section="information">
+                    <span class="nav-icon">ℹ️</span>
+                    <span>Information</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <span class="user-name" id="userName">Pengguna</span>
+                    <span class="user-role" id="userRole">Warga</span>
+                </div>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="group" id="dashboardContent">
+                <!-- Header Section -->
+                <header class="section-3" role="banner" aria-label="Dashboard hero" id="overview">
+                    <div class="gradient" aria-hidden="true"></div>
+                    <div class="overlay" aria-hidden="true"></div>
+                    <time id="liveClock" class="text-wrapper-17" aria-label="Current time">--:--</time>
+                    <h1 class="text-wrapper-18" id="welcomeMessage">Welcome, Pengguna!</h1>
+                    <p class="emphasis-live">"Live Monitoring for Generator Health & Efficiency"</p>
+                </header>
+
+                <!-- Overview Section -->
+                <section class="section" aria-labelledby="overview-title">
+                    <h2 class="overview" id="overview-title">OVERVIEW</h2>
+                    <article class="background-border" aria-label="Engine Speed overview card">
+                        <div class="background" aria-hidden="true">
+                            <div class="symbol" aria-hidden="true">⚙️</div>
+                        </div>
+                        <output class="text-wrapper" id="engineSpeed" aria-label="Engine Speed value">--</output>
+                        <p class="div">Engine Speed</p>
+                    </article>
+                    <article class="background-border-2" aria-label="Coolant Temp overview card">
+                        <div class="symbol-wrapper" aria-hidden="true">
+                            <div class="symbol-2" aria-hidden="true">🌡️</div>
+                        </div>
+                        <output class="text-wrapper" id="coolantTemp" aria-label="Coolant Temp value">--</output>
+                        <p class="text-wrapper-2">Coolant Temp</p>
+                    </article>
+                    <article class="background-border-3" aria-label="Active Alerts overview card">
+                        <div class="div-wrapper" aria-hidden="true">
+                            <div class="symbol-3" aria-hidden="true">⚠️</div>
+                        </div>
+                        <output class="text-wrapper-3" id="activeAlerts" aria-label="Active Alerts value">0</output>
+                        <p class="text-wrapper-4">Active Alerts</p>
+                    </article>
+                    <article class="background-border-4" aria-label="System Voltage overview card">
+                        <div class="background-2" aria-hidden="true">
+                            <div class="symbol-4" aria-hidden="true">⚡</div>
+                        </div>
+                        <output class="text-wrapper" id="systemVoltage" aria-label="System Voltage value">--</output>
+                        <p class="text-wrapper-5">System Voltage</p>
+                    </article>
+                </section>
+
+                <!-- Operations Section -->
+                <section class="section-2" aria-labelledby="operations-title" id="operations">
+                    <h2 class="operations" id="operations-title">OPERATIONS</h2>
+                    <article class="background-border-5" aria-labelledby="engine-status-title">
+                        <div class="heading">
+                            <div class="symbol-5" aria-hidden="true">🔧</div>
+                            <h3 class="text-wrapper-6" id="engine-status-title">Engine Status</h3>
+                        </div>
+                        <div class="paragraph" role="group" aria-label="Sync Status">
+                            <p class="text-wrapper-7">Sync Status:</p>
+                            <output class="text-wrapper-8" id="syncStatus" aria-label="Sync Status value">--</output>
+                        </div>
+                        <div class="paragraph-2" role="group" aria-label="Engine State">
+                            <p class="text-wrapper-9">Engine State:</p>
+                            <output class="text-wrapper-8" id="engineState" aria-label="Engine State value">--</output>
+                        </div>
+                        <div class="paragraph-3" role="group" aria-label="Today's Active">
+                            <p class="today-s-active">Today's Active:</p>
+                            <output class="text-wrapper-10" id="todayActive" aria-label="Today's Active value">0h 0m</output>
+                        </div>
+                        <p class="text-wrapper-11">Fuel Level:</p>
+                        <output class="text-wrapper-12" id="fuelLevel" aria-label="Fuel Level value">--%</output>
+                    </article>
+                    <article class="background-border-6" aria-labelledby="recent-activity-title">
+                        <div class="heading">
+                            <div class="symbol-6" aria-hidden="true">📋</div>
+                            <h3 class="text-wrapper-13" id="recent-activity-title">Recent Activity</h3>
+                        </div>
+                        <div id="recentActivityContent" aria-live="polite">
+                            <div class="symbol-7" aria-hidden="true">📄</div>
+                            <p class="loading-data">Loading data...</p>
+                        </div>
+                    </article>
+                    <article class="background-border-7" aria-labelledby="system-health-title">
+                        <div class="heading-3">
+                            <div class="symbol-9" aria-hidden="true">💚</div>
+                            <h3 class="text-wrapper-15" id="system-health-title">System Health</h3>
+                        </div>
+                        <output class="text-wrapper-16" id="systemHealth" aria-label="System Health value">--</output>
+                    </article>
+                </section>
+
+                <!-- Analytics Section -->
+                <section class="section-4" aria-labelledby="analytics-title" id="analytics">
+                    <h2 class="analytics" id="analytics-title">ANALYTICS</h2>
+                    <article class="background-border-8" aria-labelledby="active-time-history-title">
+                        <div class="heading-5">
+                            <div class="symbol-8" aria-hidden="true">📊</div>
+                            <h3 class="text-wrapper-19" id="active-time-history-title">Active Time History</h3>
+                        </div>
+                        <div class="image" role="img" aria-label="Active Time History chart" id="activeTimeChart"></div>
+                    </article>
+                    <article class="background-border-9" aria-labelledby="recent-alerts-title">
+                        <div class="heading-5">
+                            <div class="symbol-10" aria-hidden="true">🔔</div>
+                            <h3 class="text-wrapper-20" id="recent-alerts-title">Recent Alerts</h3>
+                        </div>
+                        <div id="recentAlertsContent" aria-live="polite">
+                            <p class="text-wrapper-21">Loading alerts...</p>
+                        </div>
+                    </article>
+                </section>
+
+                <!-- Performance Section -->
+                <div class="frame" id="performance">
+                    <section class="section-5" aria-labelledby="performance-title">
+                        <h2 class="performance" id="performance-title">PERFORMANCE</h2>
+                        <article class="background-border-10" aria-labelledby="system-status-title">
+                            <div class="heading-6">
+                                <div class="symbol-9" aria-hidden="true">📊</div>
+                                <h3 class="text-wrapper-22" id="system-status-title">System Status</h3>
+                            </div>
+                            <div class="image-2" role="img" aria-label="System Status chart" id="systemStatusChart"></div>
+                            <div class="paragraph-4" role="group" aria-label="Voltage">
+                                <p class="text-wrapper-23">Voltage:</p>
+                                <output class="text-wrapper-24" id="voltageValue" aria-label="Voltage value">--</output>
+                            </div>
+                            <div class="paragraph-5" role="group" aria-label="Current">
+                                <p class="text-wrapper-25">Current:</p>
+                                <output class="text-wrapper-24" id="currentValue" aria-label="Current value">--</output>
+                            </div>
+                            <div class="paragraph-6" role="group" aria-label="Frequency">
+                                <p class="text-wrapper-26">Frequency:</p>
+                                <output class="text-wrapper-24" id="frequencyValue" aria-label="Frequency value">--</output>
+                            </div>
+                            <div class="paragraph-7" role="group" aria-label="Fuel Level">
+                                <p class="text-wrapper-27">Fuel Level:</p>
+                                <output class="text-wrapper-24" id="fuelLevelValue" aria-label="Fuel Level value">--</output>
+                            </div>
+                            <div class="paragraph-8" role="group" aria-label="Temp">
+                                <p class="text-wrapper-27">Temp:</p>
+                                <output class="text-wrapper-24" id="tempValue" aria-label="Temp value">--</output>
+                            </div>
+                        </article>
+                        <article class="background-border-9" aria-labelledby="upcoming-maintenance-title">
+                            <div class="heading-5">
+                                <div class="symbol-10" aria-hidden="true">🔔</div>
+                                <h3 class="text-wrapper-28" id="upcoming-maintenance-title">Upcoming Maintenance</h3>
+                            </div>
+                            <div id="upcomingMaintenanceContent" aria-live="polite">
+                                <p class="text-wrapper-21">Loading data...</p>
+                            </div>
+                        </article>
+                    </section>
+
+                    <!-- Information Section -->
+                    <section class="section-6" aria-labelledby="information-title" id="information">
+                        <h2 class="information" id="information-title">INFORMATION</h2>
+                        <article class="heading-wrapper" aria-labelledby="engine-specification-title">
+                            <div class="heading-7">
+                                <div class="symbol-5" aria-hidden="true">🔧</div>
+                                <h3 class="text-wrapper-29" id="engine-specification-title">Engine Specification</h3>
+                            </div>
+                            <div id="engineSpecContent" class="spec-content" aria-live="polite"></div>
+                        </article>
+                        <article class="background-border-6" aria-labelledby="generator-specifications-title">
+                            <div class="heading-8">
+                                <div class="symbol-6" aria-hidden="true">📋</div>
+                                <h3 class="text-wrapper-30" id="generator-specifications-title">Generator Specifications</h3>
+                            </div>
+                            <div id="generatorSpecContent" class="spec-content" aria-live="polite">
+                                <div class="symbol-7" aria-hidden="true">📄</div>
+                                <p class="loading-data">Loading data...</p>
+                            </div>
+                        </article>
+                        <article class="background-border-11" aria-labelledby="call-help-title">
+                            <div class="heading-9">
+                                <div class="symbol-8" aria-hidden="true">💚</div>
+                                <h3 class="text-wrapper-14" id="call-help-title">Call & Help</h3>
+                            </div>
+                            <div class="help-content">
+                                <p>Emergency Contact:</p>
+                                <p class="help-phone">+62 123 456 7890</p>
+                                <p>Technical Support:</p>
+                                <p class="help-email">support@genmon.com</p>
+                            </div>
+                        </article>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="js/public-view.js"></script>
 </body>
 </html>
