@@ -46,7 +46,10 @@
                     <div id="liveClock" class="hero-time">--:--</div>
                     <div class="hero-greeting">Welcome, <span id="welcome-user">Pengguna</span>!</div>
                     <div class="hero-subtitle"><em>"Live Monitoring for Generator Health &amp; Efficiency"</em></div>
-                    <div class="status-pill ok" style="margin-top:8px;">Auto-Sync Monitoring Aktif</div>
+                    <div class="hero-badges">
+                        <span id="syncBadge" class="status-pill muted">Sinkronisasi: Memuat...</span>
+                        <span id="updatedBadge" class="status-pill muted">Update: --</span>
+                    </div>
                 </div>
             </section>
 
@@ -242,7 +245,7 @@
             </section>
         </div>
     </div>
-    <a href="tel:+621234567890" class="quick-tech-call" aria-label="Quick call teknisi">
+    <a href="tel:+621234567890" class="quick-tech-call" aria-label="Quick call teknisi" title="Quick Call Teknisi">
         <i class="fas fa-phone-alt"></i>
     </a>
 

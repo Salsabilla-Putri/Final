@@ -119,6 +119,18 @@ function updateOperationsSection(data) {
     document.getElementById('engSync').innerText = data.sync || '--';
     document.getElementById('engStat').innerText = data.status || '--';
     document.getElementById('fuelLevel').innerText = (data.fuel || 0) + '%';
+
+    const syncBadge = document.getElementById('syncBadge');
+    if (syncBadge) {
+        const syncOk = ['ON-GRID','SYNCHRONIZED'].includes(String(data.sync || '').toUpperCase());
+        syncBadge.className = `status-pill ${syncOk ? 'ok' : 'warn'}`;
+        syncBadge.innerText = `Sinkronisasi: ${syncOk ? 'Normal' : (data.sync || 'Belum sinkron')}`;
+    }
+    const updatedBadge = document.getElementById('updatedBadge');
+    if (updatedBadge) {
+        updatedBadge.className = 'status-pill muted';
+        updatedBadge.innerText = `Update: ${new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })}`;
+    }
     
     // Update System Health data
     document.getElementById('st-volt').innerText = (data.volt || '--') + ' V';
@@ -409,9 +421,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Real-time updates
     setInterval(fetchDashboardData, 5000);
-
-    const userBtn = document.getElementById('user-btn');
-    userBtn?.addEventListener('click', () => {
-        window.location.href = 'user.html';
-    });
 });
