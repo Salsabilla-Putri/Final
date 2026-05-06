@@ -1,4 +1,5 @@
 'use strict';
+let activeChart = null;
 
 // Update clock
 function updateClock() {
@@ -71,15 +72,16 @@ async function fetchDashboardData() {
         }
         
         // Fetch active time history
-        const activeTimeRes = await fetch('/api/generator-active-time/history?limit=5');
+        const activeTimeRes = await fetch('/api/generator-active-time/history?limit=30');
         const activeTimeData = await activeTimeRes.json();
         
         if (activeTimeData.success) {
             updateRecentActivity(activeTimeData.data);
+            updateActiveTimeChart(activeTimeData.data);
         }
         
         // Fetch maintenance data
-        const maintenanceRes = await fetch('/api/maintenance/suggestion');
+        const maintenanceRes = await fetch('/api/maintenance');
         const maintenanceData = await maintenanceRes.json();
         
         if (maintenanceData.success) {
@@ -194,7 +196,7 @@ function updateRecentActivity(activities) {
         return;
     }
     
-    container.innerHTML = activities.slice(0, 5).map(activity => `
+    container.innerHTML = activities.slice(0, 4).map(activity => `
         <div class="activity-item">
             <div class="activity-time">
                 ${new Date(activity.startedAt).toLocaleString('id-ID')}
@@ -210,10 +212,20 @@ function updateRecentActivity(activities) {
 function updatePerformanceSection(data) {
     if (data.parameters) {
         const params = data.parameters;
-        
-        document.getElementById('perf-volt').innerText = (params.voltage?.value || '--') + ' V';
-        document.getElementById('perf-fuel').innerText = (params.fuel?.percent || '--') + '%';
-        document.getElementById('perf-temp').innerText = (params.temperature?.value || '--') + '°C';
+        const status = (value, low, high) => {
+            if (value == null) return 'Tidak ada data';
+            if (value < low) return 'Rendah (Perlu perhatian)';
+            if (value > high) return 'Tinggi (Perlu perhatian)';
+            return 'Aman / Normal';
+        };
+
+        document.getElementById('perf-volt').innerText = status(params.voltage?.value, 200, 240);
+        document.getElementById('perf-fuel').innerText = status(params.fuel?.percent, 20, 100);
+        document.getElementById('perf-temp').innerText = status(params.temperature?.value, 40, 90);
+        const ampEl = document.getElementById('perf-amp');
+        const freqEl = document.getElementById('perf-freq');
+        if (ampEl) ampEl.innerText = status(params.current?.value, 0, 100);
+        if (freqEl) freqEl.innerText = status(params.frequency?.value, 48, 52);
     }
 }
 
@@ -255,22 +267,80 @@ function updateMaintenanceSection(data) {
     const container = document.getElementById('maintenanceContainer');
     if (!container) return;
     
-    if (data && data.decisionStatus) {
-        const statusClass = data.decisionStatus.toLowerCase();
-        
-        container.innerHTML = `
-            <div class="maintenance-status ${statusClass}">
-                Status: ${data.decisionStatus}
-            </div>
-            <div class="maintenance-message">
-                ${data.message || ''}
-            </div>
-            <div class="maintenance-recommendation">
-                <strong>Rekomendasi:</strong><br>
-                ${data.recommendation || ''}
-            </div>
-        `;
+    if (Array.isArray(data) && data.length) {
+        const upcoming = data
+            .filter((m) => String(m.status || '').toLowerCase() !== 'completed')
+            .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
+            .slice(0, 4);
+
+        if (!upcoming.length) {
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa">No upcoming maintenance</div>';
+            return;
+        }
+
+        container.innerHTML = upcoming.map((m) => {
+            const due = new Date(m.dueDate || m.createdAt).toLocaleDateString('id-ID');
+            const estCost = m.cost != null ? `Rp ${Number(m.cost).toLocaleString('id-ID')}` : 'Biaya belum tersedia';
+            return `
+                <div class="maintenance-item" style="border:1px solid #e2e8f0;">
+                    <div style="font-weight:700; color:#0f172a;">${m.task || 'Maintenance Task'}</div>
+                    <div style="font-size:.85rem; color:#64748b; margin-top:4px;">
+                        Due: ${due} • Status: ${(m.status || 'scheduled')}
+                    </div>
+                    <div style="font-size:.85rem; color:#1745a5; margin-top:6px;">Estimasi Cost: ${estCost}</div>
+                </div>
+            `;
+        }).join('');
     }
+}
+
+function updateActiveTimeChart(rows) {
+    const ctx = document.getElementById('chartActive')?.getContext('2d');
+    if (!ctx) return;
+    const dayLabels = [];
+    const map = {};
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() - i);
+        const key = d.toISOString().slice(0, 10);
+        dayLabels.push(key);
+        map[key] = 0;
+    }
+
+    (rows || []).forEach((r) => {
+        const start = new Date(r.startedAt);
+        const end = r.endedAt ? new Date(r.endedAt) : new Date();
+        const key = start.toISOString().slice(0, 10);
+        if (map[key] !== undefined) map[key] += Math.max(0, (end - start) / 3600000);
+    });
+
+    const labels = dayLabels.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' }));
+    const dataPoints = dayLabels.map((k) => Number(map[k].toFixed(2)));
+
+    if (activeChart) activeChart.destroy();
+    activeChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Jam Aktif',
+                data: dataPoints,
+                backgroundColor: '#1745a5',
+                borderRadius: 6,
+                barPercentage: 0.6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, max: 24, ticks: { callback: (v) => `${v}h` } },
+                x: { grid: { display: false } }
+            }
+        }
+    });
 }
 
 // Initialize dashboard
