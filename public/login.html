@@ -444,7 +444,18 @@
         </button>
       </form>
 
-      <p style="margin-top:12px; text-align:center; color:#475569; font-size:14px;">Belum punya akun? <a href="register.html" style="color:#1745a5; font-weight:600;">Register di sini</a></p>
+      <form id="registerForm" style="display:none;">
+        <div class="form-group"><label class="form-label" for="regName">Nama</label><input type="text" id="regName" class="form-control" required></div>
+        <div class="form-group"><label class="form-label" for="regEmail">Email</label><input type="email" id="regEmail" class="form-control" required></div>
+        <div class="form-group"><label class="form-label" for="regPassword">Password</label><input type="password" id="regPassword" class="form-control" required></div>
+        <div class="form-group"><label class="form-label" for="productToken">Token Produk</label><input type="text" id="productToken" class="form-control" placeholder="Masukkan token produk" required></div>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-user-plus"></i> Register</button>
+      </form>
+
+      <p style="margin-top:12px; text-align:center; color:#475569; font-size:14px;">
+        <span id="loginSwitchWrap">Belum punya akun? <a href="#" id="showRegister" style="color:#1745a5; font-weight:600;">Register di sini</a></span>
+        <span id="registerSwitchWrap" style="display:none;">Sudah punya akun? <a href="#" id="showLogin" style="color:#1745a5; font-weight:600;">Login di sini</a></span>
+      </p>
 
       <!-- Footer -->
       <div class="login-footer">
@@ -470,6 +481,15 @@
         body: JSON.stringify(payload)
       });
       return await response.json();
+    }
+
+    function switchMode(mode) {
+      const loginForm = document.getElementById('loginForm');
+      const registerForm = document.getElementById('registerForm');
+      document.getElementById('loginSwitchWrap').style.display = mode === 'login' ? 'inline' : 'none';
+      document.getElementById('registerSwitchWrap').style.display = mode === 'register' ? 'inline' : 'none';
+      loginForm.style.display = mode === 'login' ? 'block' : 'none';
+      registerForm.style.display = mode === 'register' ? 'block' : 'none';
     }
 
     // Form submission handler
@@ -506,10 +526,12 @@
           }, 1000);
         } else {
           if (result.code === 'USER_NOT_FOUND') {
-            window.location.href = `register.html?email=${encodeURIComponent(email)}`;
-            return;
+            switchMode('register');
+            document.getElementById('regEmail').value = email;
+            alertMessage.textContent = 'Email belum terdaftar. Silakan register terlebih dahulu.';
+          } else {
+            alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
           }
-          alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
           alertMessage.className = 'alert alert-error';
           alertMessage.style.display = 'block';
           document.getElementById('loginForm').style.animation = 'shake 0.5s';
@@ -524,6 +546,15 @@
       }
     });
 
+    document.getElementById('showRegister').addEventListener('click', function(e) {
+      e.preventDefault();
+      switchMode('register');
+    });
+
+    document.getElementById('showLogin').addEventListener('click', function(e) {
+      e.preventDefault();
+      switchMode('login');
+    });
 
     document.getElementById('registerForm').addEventListener('submit', async function(e) {
       e.preventDefault();
@@ -534,15 +565,13 @@
         password: document.getElementById('regPassword').value,
         productToken: document.getElementById('productToken').value.trim()
       };
-
       try {
         const result = await registerWithDatabase(payload);
         if (result.success) {
-          alertMessage.textContent = 'Registrasi berhasil. Role otomatis: warga. Silakan login.';
+          alertMessage.textContent = 'Registrasi berhasil. Silakan login.';
           alertMessage.className = 'alert alert-success';
           alertMessage.style.display = 'block';
-          document.getElementById('registerForm').reset();
-          document.getElementById('registerForm').style.display = 'none';
+          switchMode('login');
           document.getElementById('email').value = payload.email;
           document.getElementById('password').focus();
         } else {
