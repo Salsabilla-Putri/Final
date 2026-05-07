@@ -2,6 +2,7 @@
   const path = window.location.pathname;
   const page = path.split('/').pop() || 'index.html';
   const isLoginPage = page.includes('login.html');
+  const isRegisterPage = page.includes('register.html');
 
   const hasVisitedApp = localStorage.getItem('hasVisitedApp') === 'true';
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
@@ -13,7 +14,7 @@
 
   if (!hasVisitedApp) {
     localStorage.setItem('hasVisitedApp', 'true');
-    if (!isLoginPage) {
+    if (!isLoginPage && !isRegisterPage) {
       localStorage.removeItem('isLoggedIn');
       localStorage.removeItem('hasLoginSession');
       localStorage.removeItem('userRole');
@@ -25,7 +26,7 @@
   }
 
   // Login page should never auto-switch by itself.
-  if (isLoginPage) {
+  if (isLoginPage || isRegisterPage) {
     return;
   }
 
