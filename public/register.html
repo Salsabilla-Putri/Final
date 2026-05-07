@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gen-Track — Register</title>
+<link rel="stylesheet" href="css/typography.css">
+<style>body{font-family:var(--app-font-family);background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#fff;padding:28px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.08);width:min(460px,92vw)}.form-control{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:10px;margin-top:6px}.btn{width:100%;padding:12px;border:none;border-radius:10px;background:#1745a5;color:#fff;font-weight:600;margin-top:14px;cursor:pointer}.alert{padding:10px;border-radius:8px;font-size:14px;margin-bottom:12px;display:none}.err{background:#fee2e2;color:#991b1b}.ok{background:#dcfce7;color:#166534}</style>
+</head>
+<body>
+<div class="card">
+<h2>Register</h2>
+<p style="color:#64748b;font-size:14px">Lengkapi data untuk mendaftar sebagai warga.</p>
+<div id="msg" class="alert"></div>
+<form id="registerForm">
+<label>Nama<input id="name" class="form-control" required></label>
+<label>Email<input id="email" type="email" class="form-control" required></label>
+<label>Password<input id="password" type="password" class="form-control" required></label>
+<label>Token Produk<input id="token" class="form-control" value="TA252601020" required></label>
+<button class="btn" type="submit">Register</button>
+</form>
+<p style="text-align:center;margin-top:12px;font-size:14px">Sudah punya akun? <a href="login.html">Login</a></p>
+</div>
+<script>
+async function register(payload){
+ const res=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+ return res.json();
+}
+const params=new URLSearchParams(window.location.search); const qEmail=params.get('email'); if(qEmail) document.getElementById('email').value=qEmail;
+document.getElementById('registerForm').addEventListener('submit', async(e)=>{e.preventDefault();
+ const msg=document.getElementById('msg');
+ const payload={name:document.getElementById('name').value.trim(),email:document.getElementById('email').value.trim().toLowerCase(),password:document.getElementById('password').value,productToken:document.getElementById('token').value.trim()};
+ try{const r=await register(payload); if(r.success){msg.className='alert ok';msg.textContent='Registrasi berhasil. Silakan login.';msg.style.display='block'; setTimeout(()=>location.href='login.html',1200);} else {msg.className='alert err';msg.textContent=r.message||'Registrasi gagal';msg.style.display='block';}}
+ catch{msg.className='alert err';msg.textContent='Tidak dapat terhubung ke server';msg.style.display='block';}
+});
+</script>
+</body></html>

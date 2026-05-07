@@ -444,6 +444,7 @@
         </button>
       </form>
 
+      <p style="margin-top:12px; text-align:center; color:#475569; font-size:14px;">Belum punya akun? <a href="register.html" style="color:#1745a5; font-weight:600;">Register di sini</a></p>
 
       <!-- Footer -->
       <div class="login-footer">
@@ -495,6 +496,10 @@
             window.location.href = result.user.redirectTo || (isWargaRole ? 'public.html' : 'index.html');
           }, 1000);
         } else {
+          if (result.code === 'USER_NOT_FOUND') {
+            window.location.href = `register.html?email=${encodeURIComponent(email)}`;
+            return;
+          }
           alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
           alertMessage.className = 'alert alert-error';
           alertMessage.style.display = 'block';
