@@ -444,25 +444,7 @@
         </button>
       </form>
 
-      <form id="registerForm" style="display:none; margin-top:14px;">
-        <div class="form-group">
-          <label class="form-label" for="regName">Nama</label>
-          <input type="text" id="regName" class="form-control" placeholder="Nama lengkap" required>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="regEmail">Email</label>
-          <input type="email" id="regEmail" class="form-control" placeholder="nama@email.com" required>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="regPassword">Password</label>
-          <input type="password" id="regPassword" class="form-control" placeholder="Buat password" required>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="productToken">Token Produk</label>
-          <input type="text" id="productToken" class="form-control" placeholder="Masukkan token produk" required>
-        </div>
-        <button type="submit" class="btn btn-primary"><i class="fas fa-user-plus"></i> Register</button>
-      </form>
+      <p style="margin-top:12px; text-align:center; color:#475569; font-size:14px;">Belum punya akun? <a href="register.html" style="color:#1745a5; font-weight:600;">Register di sini</a></p>
 
       <!-- Footer -->
       <div class="login-footer">
@@ -523,14 +505,11 @@
             window.location.href = result.user.redirectTo || (isWargaRole ? 'public.html' : 'index.html');
           }, 1000);
         } else {
-          const registerForm = document.getElementById('registerForm');
           if (result.code === 'USER_NOT_FOUND') {
-            alertMessage.textContent = 'User belum terdaftar. Silakan isi form register terlebih dahulu.';
-            registerForm.style.display = 'block';
-            document.getElementById('regEmail').value = email;
-          } else {
-            alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
+            window.location.href = `register.html?email=${encodeURIComponent(email)}`;
+            return;
           }
+          alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
           alertMessage.className = 'alert alert-error';
           alertMessage.style.display = 'block';
           document.getElementById('loginForm').style.animation = 'shake 0.5s';

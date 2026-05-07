@@ -1537,7 +1537,7 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Nama, email, password, dan token produk wajib diisi.' });
         }
 
-        const expectedToken = String(process.env.PRODUCT_TOKEN || 'GEN-TRACK-2026').trim();
+        const expectedToken = 'TA252601020';
         if (productToken !== expectedToken) {
             return res.status(403).json({ success: false, message: 'Token produk tidak valid.' });
         }
