@@ -444,6 +444,25 @@
         </button>
       </form>
 
+      <form id="registerForm" style="display:none; margin-top:14px;">
+        <div class="form-group">
+          <label class="form-label" for="regName">Nama</label>
+          <input type="text" id="regName" class="form-control" placeholder="Nama lengkap" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="regEmail">Email</label>
+          <input type="email" id="regEmail" class="form-control" placeholder="nama@email.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="regPassword">Password</label>
+          <input type="password" id="regPassword" class="form-control" placeholder="Buat password" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="productToken">Token Produk</label>
+          <input type="text" id="productToken" class="form-control" placeholder="Masukkan token produk" required>
+        </div>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-user-plus"></i> Register</button>
+      </form>
 
       <!-- Footer -->
       <div class="login-footer">
@@ -458,6 +477,15 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
+      });
+      return await response.json();
+    }
+
+    async function registerWithDatabase(payload) {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
       return await response.json();
     }
@@ -495,7 +523,14 @@
             window.location.href = result.user.redirectTo || (isWargaRole ? 'public.html' : 'index.html');
           }, 1000);
         } else {
-          alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
+          const registerForm = document.getElementById('registerForm');
+          if (result.code === 'USER_NOT_FOUND') {
+            alertMessage.textContent = 'User belum terdaftar. Silakan isi form register terlebih dahulu.';
+            registerForm.style.display = 'block';
+            document.getElementById('regEmail').value = email;
+          } else {
+            alertMessage.textContent = result.message || 'Invalid email or password. Please try again.';
+          }
           alertMessage.className = 'alert alert-error';
           alertMessage.style.display = 'block';
           document.getElementById('loginForm').style.animation = 'shake 0.5s';
@@ -505,6 +540,39 @@
         }
       } catch (error) {
         alertMessage.textContent = 'Tidak dapat terhubung ke server login.';
+        alertMessage.className = 'alert alert-error';
+        alertMessage.style.display = 'block';
+      }
+    });
+
+
+    document.getElementById('registerForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const alertMessage = document.getElementById('alertMessage');
+      const payload = {
+        name: document.getElementById('regName').value.trim(),
+        email: document.getElementById('regEmail').value.trim().toLowerCase(),
+        password: document.getElementById('regPassword').value,
+        productToken: document.getElementById('productToken').value.trim()
+      };
+
+      try {
+        const result = await registerWithDatabase(payload);
+        if (result.success) {
+          alertMessage.textContent = 'Registrasi berhasil. Role otomatis: warga. Silakan login.';
+          alertMessage.className = 'alert alert-success';
+          alertMessage.style.display = 'block';
+          document.getElementById('registerForm').reset();
+          document.getElementById('registerForm').style.display = 'none';
+          document.getElementById('email').value = payload.email;
+          document.getElementById('password').focus();
+        } else {
+          alertMessage.textContent = result.message || 'Registrasi gagal.';
+          alertMessage.className = 'alert alert-error';
+          alertMessage.style.display = 'block';
+        }
+      } catch (error) {
+        alertMessage.textContent = 'Tidak dapat terhubung ke server registrasi.';
         alertMessage.className = 'alert alert-error';
         alertMessage.style.display = 'block';
       }

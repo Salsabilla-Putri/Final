@@ -336,8 +336,11 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         const user = await User.findOne({ email }).lean();
-        if (!user || user.password !== password) {
-            return res.status(401).json({ success: false, message: 'Email atau password tidak valid.' });
+        if (!user) {
+            return res.status(404).json({ success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' });
+        }
+        if (user.password !== password) {
+            return res.status(401).json({ success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' });
         }
 
         const role = String(user.role || '').toLowerCase();
@@ -358,6 +361,39 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const name = String(req.body?.name || '').trim();
+        const email = String(req.body?.email || '').trim().toLowerCase();
+        const password = String(req.body?.password || '');
+        const productToken = String(req.body?.productToken || '').trim();
+
+        if (!name || !email || !password || !productToken) {
+            return res.status(400).json({ success: false, message: 'Nama, email, password, dan token produk wajib diisi.' });
+        }
+
+        const expectedToken = String(process.env.PRODUCT_TOKEN || 'GEN-TRACK-2026').trim();
+        if (productToken !== expectedToken) {
+            return res.status(403).json({ success: false, message: 'Token produk tidak valid.' });
+        }
+
+        const existingUser = await User.findOne({ email }).lean();
+        if (existingUser) {
+            return res.status(409).json({ success: false, message: 'Email sudah terdaftar. Silakan login.' });
+        }
+
+        const newUser = await User.create({ name, email, password, role: 'warga' });
+        return res.status(201).json({
+            success: true,
+            message: 'Registrasi berhasil. Silakan login.',
+            user: { name: newUser.name, email: newUser.email, role: newUser.role }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Terjadi kesalahan saat registrasi.', error: error.message });
+    }
+});
 
 app.get('/api/health', (req, res) => res.json({
     status: 'healthy',
