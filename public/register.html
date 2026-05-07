@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Gen-Track — Register</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/auth-guard.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/typography.css">
+  <style>
+    :root { --primary:#1745a5; --primary-light:#3b6bdf; --secondary:#10b981; --muted:#6b7280; --dark:#0f172a; }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:var(--app-font-family);background:radial-gradient(circle at 12% 10%, #e8f0ff 0%, #f4f7fb 35%, #eef3fa 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:clamp(12px,2vw,24px)}
+    .login-container{width:min(960px,100%);display:grid;grid-template-columns:1.05fr 1fr;border-radius:18px;overflow:hidden;box-shadow:0 20px 54px rgba(15,23,42,.16);background:#fff;border:1px solid #dce6f5}
+    .login-side{background:linear-gradient(165deg,#0f2554 0%,#13387f 55%,#1a4aa8 100%);color:#fff;padding:44px 36px;display:flex;flex-direction:column;justify-content:center;gap:18px}
+    .side-title{font-size:clamp(1.45rem,3vw,2rem);font-weight:800}.side-desc{font-size:15px;line-height:1.7;opacity:.92}
+    .login-card{padding:clamp(24px,3vw,40px)} .logo-section{text-align:center;margin-bottom:24px}
+    .logo-text{font-size:clamp(1.5rem,2.7vw,1.75rem);font-weight:800;color:var(--primary)} .logo-subtext{font-size:14px;color:var(--muted)}
+    .form-group{margin-bottom:14px}.form-label{display:block;margin-bottom:8px;font-weight:600;color:var(--dark);font-size:14px}
+    .form-control{width:100%;padding:14px 16px;border:1px solid #d0d7e1;border-radius:10px;font-size:16px;background:#f8fafc}
+    .form-control:focus{outline:none;border-color:var(--primary);background:#fff;box-shadow:0 0 0 3px rgba(23,69,165,.1)}
+    .btn{width:100%;border:none;border-radius:10px;padding:14px;background:linear-gradient(135deg,var(--primary),var(--primary-light));color:#fff;font-weight:700;cursor:pointer}
+    .alert{padding:11px;border-radius:10px;margin-bottom:14px;display:none;font-size:14px}.alert-error{background:#fee2e2;color:#991b1b}.alert-success{background:#dcfce7;color:#166534}
+    .login-footer{text-align:center;margin-top:18px;font-size:13px;color:#64748b}
+    @media (max-width:900px){.login-container{grid-template-columns:1fr}.login-side{display:none}}
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <aside class="login-side">
+      <h2 class="side-title">Daftar Akun Gen-Track</h2>
+      <p class="side-desc">Buat akun baru untuk mengakses informasi monitoring sebagai warga.</p>
+    </aside>
+
+    <div class="login-card">
+      <div class="logo-section">
+        <h1 class="logo-text">Gen-Track</h1>
+        <p class="logo-subtext">Register akun baru</p>
+      </div>
+
+      <div id="alertMessage" class="alert alert-error"></div>
+      <form id="registerForm">
+        <div class="form-group"><label class="form-label" for="name">Nama</label><input id="name" class="form-control" required></div>
+        <div class="form-group"><label class="form-label" for="email">Email</label><input id="email" type="email" class="form-control" required></div>
+        <div class="form-group"><label class="form-label" for="password">Password</label><input id="password" type="password" class="form-control" required></div>
+        <div class="form-group"><label class="form-label" for="token">Token Produk</label><input id="token" class="form-control" placeholder="Masukkan token produk" required></div>
+        <button class="btn" type="submit"><i class="fas fa-user-plus"></i> Register</button>
+      </form>
+
+      <p style="margin-top:12px; text-align:center; color:#475569; font-size:14px;">Sudah punya akun? <a href="login.html" style="color:#1745a5; font-weight:600;">Login di sini</a></p>
+      <div class="login-footer"><p>© 2025 Gen-Track. Generator Monitoring System. TA252601020</p></div>
+    </div>
+  </div>
+
+<script>
+async function register(payload){
+  const res = await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  return res.json();
+}
+const params=new URLSearchParams(window.location.search); const qEmail=params.get('email'); if(qEmail) document.getElementById('email').value=qEmail;
+document.getElementById('registerForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const alertMessage=document.getElementById('alertMessage');
+  alertMessage.style.display='none';
+  const payload={name:document.getElementById('name').value.trim(),email:document.getElementById('email').value.trim().toLowerCase(),password:document.getElementById('password').value,productToken:document.getElementById('token').value.trim()};
+  try{
+    const result=await register(payload);
+    if(result.success){alertMessage.textContent='Registrasi berhasil. Silakan login.';alertMessage.className='alert alert-success';alertMessage.style.display='block';setTimeout(()=>window.location.href='login.html',1200);}
+    else{alertMessage.textContent=result.message||'Registrasi gagal.';alertMessage.className='alert alert-error';alertMessage.style.display='block';}
+  }catch(error){alertMessage.textContent='Tidak dapat terhubung ke server registrasi.';alertMessage.className='alert alert-error';alertMessage.style.display='block';}
+});
+</script>
+</body>
+</html>
