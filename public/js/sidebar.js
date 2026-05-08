@@ -7,6 +7,7 @@ function handleLogout() {
     localStorage.removeItem('userRole');
     localStorage.removeItem('hasLoginSession');
     localStorage.removeItem('username');
+    sessionStorage.removeItem('loginFlowOk');
     localStorage.removeItem('user'); // hapus juga key user
     window.location.replace('login.html');
   }

@@ -4,17 +4,19 @@
 
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
   const hasLoginSession = localStorage.getItem('hasLoginSession') === 'true';
-  const role = (localStorage.getItem('userRole') || '').toLowerCase();
+  const loginFlowOk = sessionStorage.getItem('loginFlowOk') === 'true';
+  const role = localStorage.getItem('userRole') || '';
+  const normalizedRole = role.toLowerCase();
+  const isPublicRole = normalizedRole === 'warga';
+  const isPublicPage = page.includes('public.html');
 
-  if (isAuthPage) return;
+  // Login page should never auto-switch by itself.
+  if (isLoginPage || isRegisterPage) {
+    return;
+  }
 
-  // Semua halaman selain login/register wajib login dulu.
-  if (!isLoggedIn || !hasLoginSession) {
-    localStorage.removeItem('isLoggedIn');
-    localStorage.removeItem('hasLoginSession');
-    localStorage.removeItem('userRole');
-    localStorage.removeItem('username');
-    localStorage.removeItem('user');
+  // All protected pages require explicit login flow first.
+  if (!isLoggedIn || !hasLoginSession || !loginFlowOk) {
     window.location.replace('login.html');
     return;
   }
