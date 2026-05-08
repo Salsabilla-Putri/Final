@@ -1,338 +1,318 @@
 'use strict';
-let activeChart = null;
 
-// Update clock
+// ── Chart instances ──────────────────────────────────────────────────────────
+let activeChart  = null;
+let systemChart  = null;
+
+// ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
     const el = document.getElementById('liveClock');
-    if (el) {
-        const now = new Date();
-        el.innerText = now.toLocaleTimeString('id-ID', { 
-            hour: '2-digit',
-            minute: '2-digit'
-        }) + ' WIB';
-    }
+    if (!el) return;
+    el.innerText = new Date().toLocaleTimeString('id-ID', {
+        hour: '2-digit', minute: '2-digit'
+    }) + ' WIB';
 }
 
-// Update user info from localStorage
+// ── Username from localStorage ───────────────────────────────────────────────
 function updateUserInfo() {
     const username = localStorage.getItem('username') || 'Pengguna';
-    
     const topbarSpan = document.querySelector('#user-btn span');
-    const heroSpan = document.getElementById('welcome-user');
-    
+    const heroSpan   = document.getElementById('welcome-user');
     if (topbarSpan) topbarSpan.innerText = username;
-    if (heroSpan) heroSpan.innerText = username;
+    if (heroSpan)   heroSpan.innerText   = username;
 }
 
-// Fungsi logout
+// ── Logout ───────────────────────────────────────────────────────────────────
 function logout() {
-    localStorage.removeItem('isLoggedIn');
-    localStorage.removeItem('userRole');
-    localStorage.removeItem('hasLoginSession');
-    localStorage.removeItem('username');
+    ['isLoggedIn','userRole','hasLoginSession','username'].forEach(k => localStorage.removeItem(k));
     sessionStorage.removeItem('loginFlowOk');
     window.location.href = 'login.html';
 }
 
-// Fetch data from API
+// ── Connection status badge ──────────────────────────────────────────────────
+function setConnectionStatus(online) {
+    const badge = document.getElementById('connStatus');
+    if (!badge) return;
+    badge.className = 'conn-badge ' + (online ? 'conn-online' : 'conn-offline');
+    badge.innerHTML = online
+        ? '<i class="fas fa-circle"></i> Live'
+        : '<i class="fas fa-circle"></i> Offline';
+}
+
+// ── Last updated timestamp ───────────────────────────────────────────────────
+function setLastUpdated() {
+    const el = document.getElementById('lastUpdated');
+    if (el) el.innerText = 'Diperbarui: ' + new Date().toLocaleTimeString('id-ID');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MAIN FETCH ORCHESTRATOR
+// ════════════════════════════════════════════════════════════════════════════
 async function fetchDashboardData() {
     try {
-        // Fetch latest engine data
-        const engineRes = await fetch('/api/engine-data/latest');
-        const engineData = await engineRes.json();
-        
-        if (engineData.success && engineData.data) {
+        // 1. Latest engine sensor data (realtime from MQTT memory)
+        const [engineRes, alertsRes, specsRes, historyRes, maintenanceRes, dashRes] = await Promise.allSettled([
+            fetch('/api/engine-data/latest'),
+            fetch('/api/alerts?limit=10'),
+            fetch('/api/generator-specs'),
+            fetch('/api/generator-active-time/history?limit=30'),
+            fetch('/api/maintenance'),
+            fetch('/api/public/dashboard')
+        ]);
+
+        const engineData = engineRes.status === 'fulfilled'
+            ? await engineRes.value.json().catch(() => null) : null;
+
+        if (engineData?.success && engineData.data) {
             updateOverviewCards(engineData.data);
             updateOperationsSection(engineData.data);
         }
-        
-        // Fetch public dashboard data
-        const dashRes = await fetch('/api/public/dashboard');
-        const dashData = await dashRes.json();
-        
-        if (dashData.success && dashData.data) {
-            updateAnalyticsSection(dashData.data);
-            updatePerformanceSection(dashData.data);
+
+        const alertsData = alertsRes.status === 'fulfilled'
+            ? await alertsRes.value.json().catch(() => null) : null;
+
+        if (alertsData?.success) {
+            const active = alertsData.data.filter(a => !a.resolved).length;
+            const badge  = document.getElementById('val-alerts');
+            if (badge) badge.innerText = active;
+            renderAlertList(alertsData.data);
         }
-        
-        // Fetch alerts
-        const alertsRes = await fetch('/api/alerts?limit=10');
-        const alertsData = await alertsRes.json();
-        
-        if (alertsData.success) {
-            updateAlertsSection(alertsData.data);
+
+        const specsData = specsRes.status === 'fulfilled'
+            ? await specsRes.value.json().catch(() => null) : null;
+
+        if (specsData?.success) updateSpecificationsSection(specsData.data);
+
+        const historyData = historyRes.status === 'fulfilled'
+            ? await historyRes.value.json().catch(() => null) : null;
+
+        if (historyData?.success) {
+            renderRecentActivity(historyData.data);
+            updateActiveTimeChart(historyData.data);
         }
-        
-        // Fetch specifications
-        const specsRes = await fetch('/api/generator-specs');
-        const specsData = await specsRes.json();
-        
-        if (specsData.success) {
-            updateSpecificationsSection(specsData.data);
-        }
-        
-        // Fetch active time history
-        const activeTimeRes = await fetch('/api/generator-active-time/history?limit=30');
-        const activeTimeData = await activeTimeRes.json();
-        
-        if (activeTimeData.success) {
-            updateRecentActivity(activeTimeData.data);
-            updateActiveTimeChart(activeTimeData.data);
-        }
-        
-        // Fetch maintenance data
-        const maintenanceRes = await fetch('/api/maintenance');
-        const maintenanceData = await maintenanceRes.json();
-        
-        if (maintenanceData.success) {
-            updateMaintenanceSection(maintenanceData.data);
-        }
-        
-    } catch (error) {
-        console.error('Error fetching data:', error);
+
+        const maintenanceData = maintenanceRes.status === 'fulfilled'
+            ? await maintenanceRes.value.json().catch(() => null) : null;
+
+        if (maintenanceData?.success) updateMaintenanceSection(maintenanceData.data);
+
+        const dashData = dashRes.status === 'fulfilled'
+            ? await dashRes.value.json().catch(() => null) : null;
+
+        if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
+
+        setConnectionStatus(true);
+        setLastUpdated();
+
+    } catch (err) {
+        console.error('fetchDashboardData error:', err);
+        setConnectionStatus(false);
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  OVERVIEW CARDS
+// ════════════════════════════════════════════════════════════════════════════
 function updateOverviewCards(data) {
-    const rpm = data.rpm || 0;
+    const rpm  = data.rpm   || 0;
     const temp = data.coolant || data.temp || 0;
-    const volt = data.volt || 0;
-    
-    document.getElementById('val-rpm').innerText = rpm + ' RPM';
-    document.getElementById('val-temp').innerText = temp + '°C';
-    document.getElementById('val-volt').innerText = volt + ' V';
-    
-    // Update active alerts count
-    fetch('/api/alerts?limit=100')
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
-                const activeCount = data.data.filter(a => !a.resolved).length;
-                document.getElementById('val-alerts').innerText = activeCount;
-            }
-        });
+    const volt = data.volt  || 0;
+
+    const rpmEl  = document.getElementById('val-rpm');
+    const tmpEl  = document.getElementById('val-temp');
+    const vltEl  = document.getElementById('val-volt');
+
+    if (rpmEl) rpmEl.innerText  = rpm + ' RPM';
+    if (tmpEl) tmpEl.innerText  = temp + ' °C';
+    if (vltEl) vltEl.innerText  = volt + ' V';
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  OPERATIONS SECTION (Engine Status + Health)
+// ════════════════════════════════════════════════════════════════════════════
 function updateOperationsSection(data) {
-    document.getElementById('engSync').innerText = data.sync || '--';
-    document.getElementById('engStat').innerText = data.status || '--';
-    document.getElementById('fuelLevel').innerText = (data.fuel || 0) + '%';
+    // Sync
+    const syncEl = document.getElementById('engSync');
+    if (syncEl) {
+        syncEl.innerText  = data.sync || '--';
+        syncEl.className  = data.sync === 'ON-GRID' ? 'st-ok' : 'st-warn';
+    }
 
-    
-    // Update System Health data
-    document.getElementById('st-volt').innerText = (data.volt || '--') + ' V';
-    document.getElementById('st-fuel').innerText = (data.fuel || '--') + '%';
-    
-    // Calculate today's active time
+    // Status
+    const statEl = document.getElementById('engStat');
+    if (statEl) {
+        statEl.innerText = data.status || '--';
+        const running = ['RUNNING','ON-GRID'].includes((data.status || '').toUpperCase());
+        const stopped = (data.status || '').toUpperCase() === 'STOPPED';
+        statEl.className = running ? 'st-ok' : stopped ? 'st-err' : 'st-warn';
+    }
+
+    // Fuel
+    const fuelEl = document.getElementById('fuelLevel');
+    if (fuelEl) {
+        const f = data.fuel || 0;
+        fuelEl.innerText  = f + '%';
+        fuelEl.className  = f > 30 ? 'st-ok' : f > 15 ? 'st-warn' : 'st-err';
+    }
+
+    // Analytics: System Health rows
+    const set = (id, val, unit) => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = (val != null && val !== 0 ? val : '--') + (val ? unit : '');
+    };
+    set('st-volt', data.volt,  ' V');
+    set('st-amp',  data.amp,   ' A');
+    set('st-freq', data.freq,  ' Hz');
+    set('st-fuel', data.fuel,  '%');
+    set('st-afr',  data.afr,   '');
+
+    // Today's active time (async, non-blocking)
     fetch('/api/generator-active-time/stats?hours=24')
-        .then(res => res.json())
-        .then(statsData => {
-            if (statsData.success && statsData.data) {
-                const hours = Math.floor(statsData.data.totalDurationHours || 0);
-                const minutes = Math.floor(((statsData.data.totalDurationHours || 0) - hours) * 60);
-                document.getElementById('engToday').innerText = `${hours}h ${minutes}m`;
-            }
-        });
-    
-    // System health score
-    const health = calculateHealth(data);
-    const healthScore = document.getElementById('healthScore');
-    if (healthScore) {
-        healthScore.innerText = health + '%';
-        healthScore.style.color = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
-    }
-    const warningItems = [];
-    const temp = data.coolant || data.temp || 0;
-    if (temp > 95) warningItems.push({ name: 'Coolant Temperature', level: 'danger' });
-    else if (temp > 85) warningItems.push({ name: 'Coolant Temperature', level: 'warn' });
-    if ((data.fuel || 0) < 20) warningItems.push({ name: 'Fuel Level', level: 'warn' });
-    if ((data.volt || 0) < 190 || (data.volt || 0) > 250) warningItems.push({ name: 'Voltage', level: 'danger' });
+        .then(r => r.json())
+        .then(sd => {
+            if (!sd?.success) return;
+            const h = Math.floor(sd.data.totalDurationHours || 0);
+            const m = Math.floor(((sd.data.totalDurationHours || 0) - h) * 60);
+            const el = document.getElementById('engToday');
+            if (el) el.innerText = `${h}h ${m}m`;
+        })
+        .catch(() => {});
 
-    const healthContainer = document.getElementById('systemHealthContainer');
-    if (healthContainer) {
-        const warningHTML = warningItems.length
-            ? warningItems.map((item) => `<span class="status-pill ${item.level}">${item.name}</span>`).join('')
-            : '<span class="status-pill ok">Semua komponen aman</span>';
-        healthContainer.innerHTML = `
-            <div style="font-size: 3rem; font-weight: 700; color: ${health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444'};" id="healthScore">${health}%</div>
-            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
-            <div class="health-warning-wrap">${warningHTML}</div>
-        `;
-    }
+    // Health score
+    renderHealthScore(data);
 }
 
 function calculateHealth(data) {
     let health = 100;
     const temp = data.coolant || data.temp || 0;
-    const fuel = data.fuel || 0;
-    const volt = data.volt || 0;
-    
-    if (temp > 95) health -= 30;
-    else if (temp > 85) health -= 15;
-    if (fuel < 20) health -= 20;
-    if (volt < 190 || volt > 250) health -= 15;
-    
+    const fuel = data.fuel  || 0;
+    const volt = data.volt  || 0;
+    if (temp > 95)                          health -= 30;
+    else if (temp > 85)                     health -= 15;
+    if (fuel < 20)                          health -= 20;
+    if (volt > 0 && (volt < 190 || volt > 250)) health -= 15;
     return Math.max(0, Math.min(100, health));
 }
 
-function updateAnalyticsSection(data) {
-    // Update chart if exists
-    if (data.activeTimeHistory && window.activeChart) {
-        // Update chart data
-    }
-}
-
-function updateAlertsSection(alerts) {
-        try {
-        const res = await fetch(`${API_URL}/alerts?limit=10`);
-        const json = await res.json();
-        if(json.success) {
-            const active = json.data.filter(a => !a.resolved);
-            const badge = document.getElementById('val-alerts');
-            if(badge) badge.innerText = active.length;
-            renderAlertList(json.data.slice(0, 3));
-        }
-    } catch (e) { console.warn("Alert Error", e); }
-}
-
-function updateRecentActivity(activities) {
-    try {
-        const res = await fetch(`${API_URL}/maintenance`);
-        if (!res.ok) return;
-
-        const json = await res.json();
-        const container = document.getElementById('maintenanceContainer');
-
-        if (json.success && json.data.length > 0 && container) {
-            container.innerHTML = ''; 
-            const logs = json.data.slice(0, 4);
-
-            logs.forEach(log => {
-                const dateStr = new Date(log.dueDate || log.createdAt).toLocaleDateString('id-ID', {day:'numeric', month:'short'});
-                let color = '#64748b';
-                if(log.status === 'completed') color = '#10b981';
-                if(log.status === 'overdue') color = '#ef4444';
-
-                container.innerHTML += `
-                <div class="list-row">
-                    <div style="display:flex; flex-direction:column;">
-                        <span style="font-weight:600; color:#1e293b; font-size:14px;">${log.task}</span>
-                        <span style="font-size:11px; color:${color}; text-transform:capitalize;">
-                            ${log.status} • ${log.assignedTo || '-'}
-                        </span>
-                    </div>
-                    <div style="text-align:right;">
-                        <span style="font-size:12px; color:#64748b; font-weight:600;">${dateStr}</span>
-                    </div>
-                </div>`;
-            });
-        } else if (container) {
-            container.innerHTML = '<div style="text-align:center; padding:15px; color:#aaa">No recent activity</div>';
-        }
-    } catch (e) { console.warn("Maintenance Fetch Error", e); }
-}
-
-
-function updatePerformanceSection(data) {
-    if (data.parameters) {
-        const params = data.parameters;
-        const status = (value, low, high) => {
-            if (value == null) return { text: 'Tidak ada data', cls: 'muted' };
-            if (value < low) return { text: 'Rendah', cls: 'warn' };
-            if (value > high) return { text: 'Tinggi', cls: 'danger' };
-            return { text: 'Aman/Normal', cls: 'ok' };
-        };
-        const setStatus = (id, val) => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            el.className = `status-pill ${val.cls}`;
-            el.innerText = val.text;
-        };
-
-        const list = document.getElementById('perfStatusList');
-        if (!list) return;
-        const rows = [
-            ['Voltage', status(params.voltage?.value, 200, 240)],
-            ['Current', status(params.current?.value, 0, 100)],
-            ['Frequency', status(params.frequency?.value, 48, 52)],
-            ['Fuel Level', status(params.fuel?.percent, 20, 100)],
-            ['Temperature', status(params.temperature?.value, 40, 90)],
-            ['RPM', status(params.rpm?.value, 600, 3200)],
-            ['Oil Pressure', status(params.oil?.value, 20, 80)],
-            ['Battery', status(params.battery?.value, 11.8, 14.8)],
-            ['AFR', status(params.afr?.value, 10, 18)]
-        ];
-        list.innerHTML = rows.map(([name, st]) => `
-            <div class="list-row"><span>${name}:</span><span class="status-pill ${st.cls}">${st.text}</span></div>
-        `).join('');
-    }
-}
-
-
-function updateSpecificationsSection(specs) {
-    const genContainer = document.getElementById('generatorSpecContainer');
-    if (genContainer && specs) {
-        genContainer.innerHTML = `
-            <ul class="spec-list">
-                <li><span>Merk</span><span>${specs.merk || '--'}</span></li>
-                <li><span>Tipe</span><span>${specs.tipe || '--'}</span></li>
-                <li><span>Daya Maks</span><span>${specs.dayaMaks || '--'} kW</span></li>
-                <li><span>Tegangan</span><span>${specs.tegangan || '--'} V</span></li>
-                <li><span>Frekuensi</span><span>${specs.frekuensi || '--'} Hz</span></li>
-            </ul>
-        `;
-    }
-    
-    const engineContainer = document.getElementById('engineSpecContainer');
-    if (engineContainer) {
-        engineContainer.innerHTML = `
-            <ul class="spec-list">
-                <li><span>Jenis</span><span>Diesel 4-tak</span></li>
-                <li><span>Silinder</span><span>4 Inline</span></li>
-                <li><span>Kapasitas</span><span>2500 cc</span></li>
-                <li><span>Max RPM</span><span>3000 RPM</span></li>
-                <li><span>Bahan Bakar</span><span>Solar</span></li>
-            </ul>
-        `;
-    }
-}
-
-function updateMaintenanceSection(data) {
-    const container = document.getElementById('maintenanceContainer');
+function renderHealthScore(data) {
+    const container = document.getElementById('systemHealthContainer');
     if (!container) return;
-    
-    if (Array.isArray(data) && data.length) {
-        const upcoming = data
-            .filter((m) => String(m.status || '').toLowerCase() !== 'completed')
-            .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
-            .slice(0, 4);
 
-        if (!upcoming.length) {
-            container.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa">No upcoming maintenance</div>';
-            return;
-        }
+    const health = calculateHealth(data);
+    const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
 
-        container.innerHTML = upcoming.map((m) => {
-            const due = new Date(m.dueDate || m.createdAt).toLocaleDateString('id-ID');
-            const estCost = m.cost != null ? `Rp ${Number(m.cost).toLocaleString('id-ID')}` : 'Biaya belum tersedia';
-            return `
-                <div class="maintenance-item" style="border:1px solid #e2e8f0;">
-                    <div style="font-weight:700; color:#0f172a;">${m.task || 'Maintenance Task'}</div>
-                    <div style="font-size:.85rem; color:#64748b; margin-top:4px;">
-                        Due: ${due} • Status: ${(m.status || 'scheduled')}
-                    </div>
-                    <div style="font-size:.85rem; color:#1745a5; margin-top:6px;">Estimasi Cost: ${estCost}</div>
-                </div>
-            `;
-        }).join('');
-    }
+    const warnings = [];
+    const temp = data.coolant || data.temp || 0;
+    if (temp > 95)                                    warnings.push({ label: 'Suhu Kritis',           cls: 'danger' });
+    else if (temp > 85)                               warnings.push({ label: 'Suhu Tinggi',            cls: 'warn'   });
+    if ((data.fuel || 0) < 20)                        warnings.push({ label: 'BBM Hampir Habis',       cls: 'warn'   });
+    if (data.volt > 0 && (data.volt < 190 || data.volt > 250))
+                                                      warnings.push({ label: 'Tegangan Tidak Normal',  cls: 'danger' });
+
+    const pillsHTML = warnings.length
+        ? warnings.map(w => `<span class="status-pill ${w.cls}">${w.label}</span>`).join('')
+        : `<span class="status-pill ok"><i class="fas fa-check"></i> Semua Komponen Aman</span>`;
+
+    container.innerHTML = `
+        <div class="health-ring" style="--hc:${color};">
+            <div class="health-ring-value" style="color:${color};">${health}%</div>
+            <div class="health-ring-label">Health Score</div>
+        </div>
+        <div class="health-warning-wrap">${pillsHTML}</div>
+    `;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  RECENT ALERTS
+// ════════════════════════════════════════════════════════════════════════════
+function renderAlertList(alerts) {
+    const container = document.getElementById('alertContainer');
+    if (!container) return;
+
+    if (!alerts || alerts.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-check-circle" style="color:#10b981; font-size:2rem;"></i>
+                <p>Tidak ada alert aktif</p>
+            </div>`;
+        return;
+    }
+
+    container.innerHTML = alerts.slice(0, 5).map(alert => {
+        const sev = alert.severity || 'info';
+        let cls = 'ac-info', icon = 'fa-info-circle';
+        if (['critical','high'].includes(sev)) { cls = 'ac-critical'; icon = 'fa-exclamation-circle'; }
+        else if (sev === 'medium')             { cls = 'ac-warning';  icon = 'fa-exclamation-triangle'; }
+
+        const dateStr = new Date(alert.timestamp).toLocaleString('id-ID', {
+            day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+        });
+        const resolvedBadge = alert.resolved
+            ? `<span class="badge-resolved">Resolved</span>` : '';
+
+        return `
+        <div class="alert-card ${cls}">
+            <div class="ac-icon"><i class="fas ${icon}"></i></div>
+            <div class="ac-content">
+                <div class="ac-title">${(alert.parameter || 'ALERT').toUpperCase()} ${resolvedBadge}</div>
+                <div class="ac-desc">${alert.message || '--'}</div>
+            </div>
+            <div class="ac-date">${dateStr}</div>
+        </div>`;
+    }).join('');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  RECENT ACTIVITY (active-time sessions)
+// ════════════════════════════════════════════════════════════════════════════
+function renderRecentActivity(activities) {
+    const container = document.getElementById('recentActivityContainer');
+    if (!container) return;
+
+    if (!activities || activities.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-history" style="font-size:1.8rem; color:#94a3b8;"></i>
+                <p>Belum ada riwayat aktivitas</p>
+            </div>`;
+        return;
+    }
+
+    container.innerHTML = activities.slice(0, 6).map(act => {
+        const start     = new Date(act.startedAt);
+        const end       = act.endedAt ? new Date(act.endedAt) : new Date();
+        const durMs     = Math.max(0, end - start);
+        const h         = Math.floor(durMs / 3600000);
+        const m         = Math.floor((durMs % 3600000) / 60000);
+        const dateStr   = start.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+        const timeStr   = start.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+        const isActive  = !act.endedAt;
+
+        return `
+        <div class="list-row">
+            <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-weight:600;color:#1e293b;font-size:13px;">
+                    <i class="fas fa-calendar-day" style="color:#1745a5;margin-right:5px;font-size:11px;"></i>${dateStr}
+                </span>
+                <span style="font-size:11px;color:#64748b;">${timeStr} WIB</span>
+            </div>
+            <div style="text-align:right;">
+                ${isActive
+                    ? `<span class="badge-active"><i class="fas fa-circle"></i> Aktif</span>`
+                    : `<span style="font-size:12px;font-weight:600;color:#475569;">${h}j ${m}m</span>`}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ANALYTICS — Active Time Bar Chart
+// ════════════════════════════════════════════════════════════════════════════
 function updateActiveTimeChart(rows) {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) return;
 
-    const renderChart = (labels, dataPoints, highlightIndex = -1) => {
+    const renderChart = (labels, dataPoints, highlightIdx = -1) => {
         if (activeChart) activeChart.destroy();
         activeChart = new Chart(ctx, {
             type: 'bar',
@@ -341,76 +321,267 @@ function updateActiveTimeChart(rows) {
                 datasets: [{
                     label: 'Jam Aktif',
                     data: dataPoints,
-                    backgroundColor: dataPoints.map((_, idx) => idx === highlightIndex ? '#f97316' : '#1745a5'),
-                    borderRadius: 6,
-                    barPercentage: 0.6
+                    backgroundColor: dataPoints.map((_, i) =>
+                        i === highlightIdx ? '#f97316' : 'rgba(23,69,165,0.8)'),
+                    borderRadius: 8,
+                    barPercentage: 0.55
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => `${ctx.parsed.y.toFixed(1)} jam aktif`
+                        }
+                    }
+                },
                 scales: {
-                    y: { beginAtZero: true, max: 24, ticks: { callback: (v) => `${v}h` } },
+                    y: {
+                        beginAtZero: true, max: 24,
+                        ticks: { callback: v => `${v}h` },
+                        grid: { color: 'rgba(0,0,0,0.05)' }
+                    },
                     x: { grid: { display: false } }
                 }
             }
         });
     };
 
-    Promise.all([
-        fetch('/api/daily-active-time?days=7').then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/daily-active-time/today').then(r => r.ok ? r.json() : null).catch(() => null)
-    ]).then(([histJson, todayJson]) => {
+    // Build 7-day map (WIB offset +7h)
+    const WIB_OFFSET_MS = 7 * 3600 * 1000;
+    const dayMap = {};
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.now() + WIB_OFFSET_MS - i * 86400000);
+        dayMap[d.toISOString().slice(0, 10)] = 0;
+    }
+
+    // Try dedicated endpoint first, fallback to history rows
+    Promise.allSettled([
+        fetch('/api/daily-active-time?days=7').then(r => r.ok ? r.json() : null),
+        fetch('/api/daily-active-time/today').then(r => r.ok ? r.json() : null)
+    ]).then(([histResult, todayResult]) => {
+        const histJson  = histResult.status  === 'fulfilled' ? histResult.value  : null;
+        const todayJson = todayResult.status === 'fulfilled' ? todayResult.value : null;
+
         if (histJson?.success && Array.isArray(histJson.data)) {
-            const dayMap = {};
-            for (let i = 6; i >= 0; i--) {
-                const d = new Date(Date.now() + 7 * 60 * 60 * 1000 - i * 86400000);
-                dayMap[d.toISOString().slice(0, 10)] = 0;
-            }
-            histJson.data.forEach((r) => {
-                if (dayMap.hasOwnProperty(r.date)) dayMap[r.date] = r.activeHours || 0;
+            histJson.data.forEach(r => {
+                if (Object.prototype.hasOwnProperty.call(dayMap, r.date)) {
+                    dayMap[r.date] = r.activeHours || 0;
+                }
             });
-            const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
-            if (todayJson?.success) dayMap[todayWib] = todayJson.activeHours || dayMap[todayWib];
-            const keys = Object.keys(dayMap);
-            renderChart(keys.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' })), keys.map((k) => Number((dayMap[k] || 0).toFixed(2))), keys.findIndex((k) => k === todayWib));
-            return;
+        } else {
+            // Fallback: accumulate from session history
+            (rows || []).forEach(r => {
+                const start = new Date(r.startedAt);
+                const end   = r.endedAt ? new Date(r.endedAt) : new Date();
+                const key   = new Date(start.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+                if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
+                    dayMap[key] += Math.max(0, (end - start) / 3600000);
+                }
+            });
         }
 
-        const dayLabels = [];
-        const map = {};
-        for (let i = 6; i >= 0; i--) {
-            const d = new Date();
-            d.setHours(0, 0, 0, 0);
-            d.setDate(d.getDate() - i);
-            const key = d.toISOString().slice(0, 10);
-            dayLabels.push(key);
-            map[key] = 0;
+        const todayKey = new Date(Date.now() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+        if (todayJson?.success && todayJson.activeHours != null) {
+            dayMap[todayKey] = todayJson.activeHours;
         }
-        (rows || []).forEach((r) => {
-            const start = new Date(r.startedAt);
-            const end = r.endedAt ? new Date(r.endedAt) : new Date();
-            const key = start.toISOString().slice(0, 10);
-            if (map[key] !== undefined) map[key] += Math.max(0, (end - start) / 3600000);
-        });
-        renderChart(dayLabels.map((k) => new Date(k).toLocaleDateString('id-ID', { weekday: 'short' })), dayLabels.map((k) => Number(map[k].toFixed(2))), 6);
+
+        const keys = Object.keys(dayMap);
+        renderChart(
+            keys.map(k => new Date(k).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit' })),
+            keys.map(k => +((dayMap[k] || 0).toFixed(2))),
+            keys.findIndex(k => k === todayKey)
+        );
     });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  PERFORMANCE — System Status Radar + List
+// ════════════════════════════════════════════════════════════════════════════
+function updatePerformanceSection(data) {
+    if (!data.parameters) return;
+    const p = data.parameters;
 
-// Initialize dashboard
+    const statusOf = (val, lo, hi) => {
+        if (val == null) return { text: 'N/A',    cls: 'muted'  };
+        if (val < lo)   return { text: 'Rendah',  cls: 'warn'   };
+        if (val > hi)   return { text: 'Tinggi',  cls: 'danger' };
+        return               { text: 'Normal',   cls: 'ok'     };
+    };
+
+    const list = document.getElementById('perfStatusList');
+    if (list) {
+        const rows = [
+            ['Voltage',     statusOf(p.voltage?.value,     200, 240)],
+            ['Current',     statusOf(p.current?.value,     0,   100)],
+            ['Frequency',   statusOf(p.frequency?.value,   48,  52) ],
+            ['Fuel Level',  statusOf(p.fuel?.percent,      20,  100)],
+            ['Temperature', statusOf(p.temperature?.value, 40,  90) ],
+        ];
+        list.innerHTML = rows.map(([name, st]) =>
+            `<div class="list-row"><span>${name}:</span>
+             <span class="status-pill ${st.cls}">${st.text}</span></div>`
+        ).join('');
+    }
+
+    // Radar chart
+    renderSystemRadar({
+        volt:  p.voltage?.value     || 0,
+        freq:  p.frequency?.value   || 0,
+        fuel:  p.fuel?.percent      || 0,
+        temp:  p.temperature?.value || 0,
+        power: parseFloat(p.power?.kw) || 0
+    });
+}
+
+function renderSystemRadar({ volt, freq, fuel, temp, power }) {
+    const ctx = document.getElementById('chartSystem')?.getContext('2d');
+    if (!ctx) return;
+    if (systemChart) systemChart.destroy();
+
+    // Normalize each param to 0-100 (higher = better)
+    const normVolt  = Math.min(100, Math.max(0, volt  > 0 ? ((volt - 180) / (250 - 180)) * 100  : 0));
+    const normFreq  = Math.min(100, Math.max(0, freq  > 0 ? (1 - Math.abs(freq - 50) / 10) * 100 : 0));
+    const normFuel  = Math.min(100, Math.max(0, fuel));
+    const normTemp  = Math.min(100, Math.max(0, temp  > 0 ? (1 - (temp / 95)) * 100               : 100));
+    const normPower = Math.min(100, Math.max(0, power * 5));
+
+    systemChart = new Chart(ctx, {
+        type: 'radar',
+        data: {
+            labels: ['Tegangan', 'Frekuensi', 'Bahan Bakar', 'Suhu', 'Daya'],
+            datasets: [{
+                label: 'Status Sistem',
+                data: [normVolt, normFreq, normFuel, normTemp, normPower],
+                backgroundColor: 'rgba(23,69,165,0.12)',
+                borderColor: '#1745a5',
+                pointBackgroundColor: '#1745a5',
+                pointRadius: 4,
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                r: {
+                    beginAtZero: true, max: 100,
+                    ticks: { display: false, stepSize: 25 },
+                    grid:  { color: 'rgba(0,0,0,0.07)' },
+                    pointLabels: { font: { size: 11 } }
+                }
+            }
+        }
+    });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SPECIFICATIONS
+// ════════════════════════════════════════════════════════════════════════════
+function updateSpecificationsSection(specs) {
+    const genEl = document.getElementById('generatorSpecContainer');
+    if (genEl && specs) {
+        genEl.innerHTML = buildSpecList([
+            ['Merk',             specs.merk         || '--'],
+            ['Tipe',             specs.tipe         || '--'],
+            ['Daya Maksimum',    (specs.dayaMaks    || '--') + ' kW'],
+            ['Tegangan Output',  (specs.tegangan    || '--') + ' V'],
+            ['Frekuensi',        (specs.frekuensi   || '--') + ' Hz'],
+            ['Kapasitas Tangki', (specs.kapasitasTangki || '--') + ' L'],
+            ['Konsumsi BBM',     (specs.konsumsiBbm || '--') + ' L/jam'],
+            ['Sistem Start',     specs.sistemStart  || '--'],
+        ]);
+    }
+
+    const engEl = document.getElementById('engineSpecContainer');
+    if (engEl && specs) {
+        engEl.innerHTML = buildSpecList([
+            ['Jenis Mesin',   specs.tipeMesin     || 'Diesel 4-tak, OHV'],
+            ['Kapasitas',     specs.kapasitasMesin || '389 cc'],
+            ['Max RPM',       '3000 RPM'],
+            ['Bahan Bakar',   'Solar'],
+            ['Oli Mesin',     specs.oliMesin      || 'SAE 10W-30'],
+            ['Pendingin',     'Udara (Air-Cooled)'],
+        ]);
+    }
+}
+
+function buildSpecList(rows) {
+    return `<ul class="spec-list">${rows.map(([label, val]) =>
+        `<li><span class="spec-label">${label}</span><span class="spec-val">${val}</span></li>`
+    ).join('')}</ul>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MAINTENANCE
+// ════════════════════════════════════════════════════════════════════════════
+function updateMaintenanceSection(data) {
+    const container = document.getElementById('maintenanceContainer');
+    if (!container) return;
+
+    if (!Array.isArray(data) || !data.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-tools" style="font-size:1.8rem; color:#94a3b8;"></i>
+                <p>Tidak ada jadwal maintenance</p>
+            </div>`;
+        return;
+    }
+
+    const upcoming = data
+        .filter(m => (m.status || '').toLowerCase() !== 'completed')
+        .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
+        .slice(0, 4);
+
+    if (!upcoming.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-check-circle" style="color:#10b981; font-size:1.8rem;"></i>
+                <p>Semua maintenance telah selesai</p>
+            </div>`;
+        return;
+    }
+
+    const priorityMap = { High: '#ef4444', Medium: '#f97316', Low: '#10b981' };
+
+    container.innerHTML = upcoming.map(m => {
+        const due      = new Date(m.dueDate || m.createdAt)
+            .toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+        const estCost  = m.cost > 0
+            ? `Rp ${Number(m.cost).toLocaleString('id-ID')}` : 'Belum tersedia';
+        const prioColor = priorityMap[m.priority] || '#64748b';
+        const status   = (m.status || 'scheduled');
+
+        return `
+        <div class="maintenance-item">
+            <div class="maint-header">
+                <span class="maint-task">${m.task || 'Maintenance Task'}</span>
+                ${m.priority
+                    ? `<span class="maint-badge" style="background:${prioColor}20;color:${prioColor}">${m.priority}</span>`
+                    : ''}
+            </div>
+            <div class="maint-meta">
+                <span><i class="fas fa-calendar-alt"></i> ${due}</span>
+                <span class="maint-status status-${status.toLowerCase()}">${status}</span>
+            </div>
+            ${m.assignedTo ? `<div class="maint-assign"><i class="fas fa-user-cog"></i> ${m.assignedTo}</div>` : ''}
+            <div class="maint-cost"><i class="fas fa-tag"></i> Estimasi: <strong>${estCost}</strong></div>
+        </div>`;
+    }).join('');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', async () => {
-    // Update user info from localStorage
     updateUserInfo();
-    
-    // Initialize components
     updateClock();
     setInterval(updateClock, 1000);
-    
-    // Fetch initial data
+
     await fetchDashboardData();
-    
-    // Real-time updates
-    setInterval(fetchDashboardData, 5000);
+    setInterval(fetchDashboardData, 10_000);  // refresh every 10s
 });

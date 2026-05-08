@@ -1,16 +1,16 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GENSYS — Dashboard Monitoring</title>
-    
+
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    
+
     <!-- Auth Guard -->
     <script src="js/auth-guard.js"></script>
-    
+
     <!-- Styles -->
     <link rel="stylesheet" href="sidebar.css" />
     <link rel="stylesheet" href="css/topbar.css" />
@@ -18,68 +18,94 @@
     <link rel="stylesheet" href="css/typography.css" />
 </head>
 <body>
-    <!-- Overlay untuk mobile -->
+
+    <!-- Overlay mobile -->
     <div class="sidebar-overlay"></div>
-    
-    <!-- Tombol toggle mobile -->
+
+    <!-- Mobile toggle -->
     <button class="mobile-menu-toggle" aria-label="Toggle menu">
         <i class="fas fa-bars"></i>
     </button>
-    
-    <!-- Sidebar Container (dimuat dinamis) -->
+
+    <!-- Sidebar -->
     <div id="sidebar-container"></div>
 
-    <!-- Main Content -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  MAIN CONTENT                                              -->
+    <!-- ══════════════════════════════════════════════════════════ -->
     <div class="main-content">
+
         <!-- Topbar -->
         <div class="topbar">
             <div class="topbar-title">Dashboard Monitoring</div>
-            <div class="user-info" id="user-btn" style="cursor: pointer;">
+            <div class="user-info" id="user-btn" style="cursor:pointer;">
                 <i class="fas fa-user"></i> <span>Pengguna</span>
             </div>
         </div>
 
+        <!-- ── Public Container ────────────────────────────────── -->
         <div class="public-container">
-            <!-- Header -->
-            <section class="hero public-hero">
+
+            <!-- ╔══════════════════════════════════╗ -->
+            <!-- ║  HERO                            ║ -->
+            <!-- ╚══════════════════════════════════╝ -->
+            <section class="hero public-hero section-block" style="padding:36px 28px;">
                 <div class="hero-center">
                     <div id="liveClock" class="hero-time">--:--</div>
-                    <div class="hero-greeting">Welcome, <span id="welcome-user">Pengguna</span>!</div>
-                    <div class="hero-subtitle"><em>"Live Monitoring for Generator Health &amp; Efficiency"</em></div>
+                    <div class="hero-greeting">
+                        Selamat Datang, <span id="welcome-user">Pengguna</span>!
+                    </div>
+                    <div class="hero-subtitle">
+                        <em>"Live Monitoring Generator — Kesehatan &amp; Efisiensi Sistem"</em>
+                    </div>
+                    <div class="hero-meta">
+                        <span id="connStatus" class="conn-badge conn-offline">
+                            <i class="fas fa-circle"></i> Menghubungkan…
+                        </span>
+                        <span id="lastUpdated" class="last-updated">—</span>
+                    </div>
                 </div>
             </section>
 
-            <!-- OVERVIEW Section -->
+            <!-- ╔══════════════════════════════════╗ -->
+            <!-- ║  OVERVIEW                        ║ -->
+            <!-- ╚══════════════════════════════════╝ -->
             <section class="section-block section-overview">
-                <div class="section-heading">
-                    <div>
-                        <p class="section-eyebrow">Overview</p>
-                    </div>
+                <div class="section-heading compact">
+                    <p class="section-eyebrow">Overview</p>
                 </div>
                 <div class="overview-cards">
                     <div class="overview-card">
-                        <div class="overview-icon icon-prm"><i class="fas fa-tachometer-alt"></i></div>
+                        <div class="overview-icon icon-prm">
+                            <i class="fas fa-tachometer-alt"></i>
+                        </div>
                         <div class="overview-content">
                             <div class="overview-value" id="val-rpm">--</div>
                             <div class="overview-label">Engine Speed</div>
                         </div>
                     </div>
                     <div class="overview-card">
-                        <div class="overview-icon icon-sec"><i class="fas fa-thermometer-half"></i></div>
+                        <div class="overview-icon icon-sec">
+                            <i class="fas fa-thermometer-half"></i>
+                        </div>
                         <div class="overview-content">
                             <div class="overview-value" id="val-temp">--</div>
                             <div class="overview-label">Coolant Temp</div>
                         </div>
                     </div>
                     <div class="overview-card">
-                        <div class="overview-icon icon-wrn"><i class="fas fa-exclamation-triangle"></i></div>
+                        <div class="overview-icon icon-wrn">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
                         <div class="overview-content">
                             <div class="overview-value" id="val-alerts">0</div>
                             <div class="overview-label">Active Alerts</div>
                         </div>
                     </div>
                     <div class="overview-card">
-                        <div class="overview-icon icon-dng"><i class="fas fa-bolt"></i></div>
+                        <div class="overview-icon icon-dng">
+                            <i class="fas fa-bolt"></i>
+                        </div>
                         <div class="overview-content">
                             <div class="overview-value" id="val-volt">--</div>
                             <div class="overview-label">System Voltage</div>
@@ -88,14 +114,16 @@
                 </div>
             </section>
 
-            <!-- OPERATIONS Section -->
+            <!-- ╔══════════════════════════════════╗ -->
+            <!-- ║  OPERATIONS                      ║ -->
+            <!-- ╚══════════════════════════════════╝ -->
             <section class="section-block section-operations">
                 <div class="section-heading compact">
-                    <div>
-                        <p class="section-eyebrow">Operations</p>
-                    </div>
+                    <p class="section-eyebrow">Operations</p>
                 </div>
                 <div class="grid-3">
+
+                    <!-- Engine Status -->
                     <div class="card">
                         <h3><i class="fas fa-cogs"></i> Engine Status</h3>
                         <div class="list-row">
@@ -107,8 +135,8 @@
                             <span id="engStat" class="st-err">--</span>
                         </div>
                         <div class="list-row">
-                            <span>Today's Active:</span>
-                            <span id="engToday" class="st-ok">0h 0m</span>
+                            <span>Aktif Hari Ini:</span>
+                            <span id="engToday" class="st-ok">0j 0m</span>
                         </div>
                         <div class="list-row">
                             <span>Fuel Level:</span>
@@ -116,154 +144,220 @@
                         </div>
                     </div>
 
+                    <!-- Recent Activity -->
                     <div class="card">
-                        <h3><i class="fas fa-clipboard-list"></i> Recent Activity</h3>
+                        <h3><i class="fas fa-clipboard-list"></i> Riwayat Aktivitas</h3>
                         <div id="recentActivityContainer">
-                            <div style="text-align:center; padding:20px; color:#aaa">
-                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
+                            <div class="empty-state">
+                                <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
+                                <p>Memuat data…</p>
                             </div>
                         </div>
                     </div>
 
+                    <!-- Recent Alerts -->
                     <div class="card">
-                        <h3><i class="fas fa-bell"></i> Recent Alerts</h3>
+                        <h3><i class="fas fa-bell"></i> Alert Terbaru</h3>
                         <div id="alertContainer">
-                            <div style="text-align:center; padding:20px; color:#aaa">Loading alerts...</div>
+                            <div class="empty-state">
+                                <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
+                                <p>Memuat alert…</p>
+                            </div>
                         </div>
                     </div>
+
                 </div>
             </section>
 
-            <!-- ANALYTICS Section -->
+            <!-- ╔══════════════════════════════════╗ -->
+            <!-- ║  ANALYTICS                       ║ -->
+            <!-- ╚══════════════════════════════════╝ -->
             <section class="section-block section-analytics">
                 <div class="section-heading compact">
-                    <div>
-                        <p class="section-eyebrow">Analytics</p>
-                    </div>
+                    <p class="section-eyebrow">Analytics</p>
                 </div>
                 <div class="grid-2">
+
+                    <!-- Active Time Chart -->
                     <div class="card">
-                        <h3><i class="fas fa-chart-line"></i> Active Time History</h3>
+                        <h3><i class="fas fa-chart-line"></i> Riwayat Jam Aktif (7 Hari)</h3>
                         <div class="chart-box">
                             <canvas id="chartActive"></canvas>
                         </div>
                     </div>
+
+                    <!-- System Health -->
                     <div class="card">
                         <h3><i class="fas fa-heartbeat"></i> System Health</h3>
-                        <div id="systemHealthContainer" style="text-align: center; padding: 20px;">
-                            <div style="font-size: 3rem; font-weight: 700; color: #10b981;" id="healthScore">--</div>
-                            <div style="color: #6b7280; font-size: 0.9rem;">Health Score</div>
+                        <div id="systemHealthContainer" style="text-align:center; padding:10px 0;">
+                            <div class="empty-state">
+                                <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
+                                <p>Menghitung skor…</p>
+                            </div>
                         </div>
-                        <div class="list-row"><span>Voltage:</span> <span id="st-volt">--</span></div>
-                        <div class="list-row"><span>Current:</span> <span id="st-amp">--</span></div>
-                        <div class="list-row"><span>Frequency:</span> <span id="st-freq">--</span></div>
-                        <div class="list-row"><span>Fuel Level:</span> <span id="st-fuel">--</span></div>
-                        <div class="list-row"><span>AFR:</span> <span id="st-afr">--</span></div>
+                        <div class="list-row"><span>Voltage:</span>  <span id="st-volt">--</span></div>
+                        <div class="list-row"><span>Current:</span>  <span id="st-amp">--</span></div>
+                        <div class="list-row"><span>Frequency:</span><span id="st-freq">--</span></div>
+                        <div class="list-row"><span>Fuel Level:</span><span id="st-fuel">--</span></div>
+                        <div class="list-row"><span>AFR:</span>      <span id="st-afr">--</span></div>
                     </div>
+
                 </div>
             </section>
 
-            <!-- PERFORMANCE Section -->
+            <!-- ╔══════════════════════════════════╗ -->
+            <!-- ║  PERFORMANCE                     ║ -->
+            <!-- ╚══════════════════════════════════╝ -->
             <section class="section-block section-performance">
                 <div class="section-heading compact">
-                    <div>
-                        <p class="section-eyebrow">Performance</p>
-                    </div>
+                    <p class="section-eyebrow">Performance</p>
                 </div>
                 <div class="grid-2">
+
+                    <!-- Radar Chart + Status -->
                     <div class="card">
-                        <h3><i class="fas fa-chart-bar"></i> System Status</h3>
+                        <h3><i class="fas fa-chart-bar"></i> Status Parameter</h3>
                         <div class="chart-box">
                             <canvas id="chartSystem"></canvas>
                         </div>
-                        <div id="perfStatusList"></div>
+                        <div id="perfStatusList" style="margin-top:8px;"></div>
                     </div>
+
+                    <!-- Upcoming Maintenance -->
                     <div class="card">
-                        <h3><i class="fas fa-tools"></i> Upcoming Maintenance</h3>
+                        <h3><i class="fas fa-tools"></i> Jadwal Maintenance</h3>
                         <div id="maintenanceContainer">
-                            <div style="text-align:center; padding:20px; color:#aaa">
-                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
+                            <div class="empty-state">
+                                <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
+                                <p>Memuat jadwal…</p>
                             </div>
                         </div>
                     </div>
+
                 </div>
             </section>
 
-            <!-- INFORMATION Section -->
+            <!-- ╔══════════════════════════════════╗ -->
+            <!-- ║  INFORMATION                     ║ -->
+            <!-- ╚══════════════════════════════════╝ -->
             <section class="section-block section-information">
                 <div class="section-heading compact">
-                    <div>
-                        <p class="section-eyebrow">Information</p>
-                    </div>
+                    <p class="section-eyebrow">Information</p>
                 </div>
                 <div class="grid-3">
+
+                    <!-- Engine Spec -->
                     <div class="card">
-                        <h3><i class="fas fa-microchip"></i> Engine Specification</h3>
+                        <h3><i class="fas fa-microchip"></i> Spesifikasi Mesin</h3>
                         <div id="engineSpecContainer">
-                            <div style="text-align:center; padding:20px; color:#aaa">
-                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
+                            <div class="empty-state">
+                                <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
+                                <p>Memuat spesifikasi…</p>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Generator Spec -->
                     <div class="card">
-                        <h3><i class="fas fa-industry"></i> Generator Specifications</h3>
+                        <h3><i class="fas fa-industry"></i> Spesifikasi Generator</h3>
                         <div id="generatorSpecContainer">
-                            <div style="text-align:center; padding:20px; color:#aaa">
-                                <i class="fas fa-circle-notch fa-spin"></i> Loading data...
+                            <div class="empty-state">
+                                <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
+                                <p>Memuat spesifikasi…</p>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Call & Help -->
                     <div class="card">
-                        <h3><i class="fas fa-phone-alt"></i> Call &amp; Help</h3>
-                        <div class="help-content" style="padding: 15px;">
-                            <p style="color: #6b7280;">Emergency Contact:</p>
-                            <p style="font-weight: 600; font-size: 1.1rem; color: #0f172a;">+62 123 456 7890</p>
-                            <p style="color: #6b7280; margin-top: 10px;">Technical Support:</p>
-                            <p style="font-weight: 600; font-size: 1.1rem; color: #0f172a;">support@gentrack.com</p>
-                            <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
-                                <a href="tel:+621234567890" class="user-info" style="text-decoration:none; background:#10b981;">
-                                    <i class="fas fa-phone"></i><span>Quick Call</span>
+                        <h3><i class="fas fa-phone-alt"></i> Bantuan &amp; Kontak</h3>
+                        <div style="padding: 14px 0;">
+
+                            <p style="font-size:0.78rem; color:#6b7280; margin-bottom:4px;">
+                                <i class="fas fa-phone" style="color:#1745a5; width:16px;"></i>
+                                Kontak Darurat
+                            </p>
+                            <p style="font-weight:700; font-size:1.05rem; color:#0f172a; margin-bottom:14px;">
+                                +62 123 456 7890
+                            </p>
+
+                            <p style="font-size:0.78rem; color:#6b7280; margin-bottom:4px;">
+                                <i class="fas fa-envelope" style="color:#1745a5; width:16px;"></i>
+                                Technical Support
+                            </p>
+                            <p style="font-weight:700; font-size:0.95rem; color:#0f172a; margin-bottom:18px;">
+                                support@gentrack.com
+                            </p>
+
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <a href="tel:+621234567890"
+                                   class="user-info"
+                                   style="text-decoration:none; background:#10b981; font-size:0.8rem; padding:8px 14px;">
+                                    <i class="fas fa-phone"></i>
+                                    <span>Quick Call</span>
                                 </a>
-                                <a href="https://www.google.com/maps/search/dealer+genset+terdekat/" target="_blank" rel="noopener" class="user-info" style="text-decoration:none; background:#f59e0b;">
-                                    <i class="fas fa-map-marker-alt"></i><span>Dealer Maps</span>
+                                <a href="https://www.google.com/maps/search/dealer+genset+terdekat/"
+                                   target="_blank" rel="noopener"
+                                   class="user-info"
+                                   style="text-decoration:none; background:#f59e0b; font-size:0.8rem; padding:8px 14px;">
+                                    <i class="fas fa-map-marker-alt"></i>
+                                    <span>Dealer Terdekat</span>
                                 </a>
+                            </div>
+
+                            <div style="margin-top:18px; padding:12px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0;">
+                                <p style="font-size:0.75rem; color:#64748b; font-weight:600; margin-bottom:6px;">
+                                    <i class="fas fa-info-circle" style="color:#3b82f6;"></i>
+                                    Tips Penggunaan
+                                </p>
+                                <ul style="font-size:0.73rem; color:#6b7280; padding-left:16px; line-height:1.7;">
+                                    <li>Pantau Health Score secara berkala</li>
+                                    <li>Isi bahan bakar saat level &lt; 20%</li>
+                                    <li>Segera hubungi teknisi jika ada alert merah</li>
+                                </ul>
                             </div>
                         </div>
                     </div>
+
                 </div>
             </section>
-        </div>
-    </div>
-    <a href="tel:+621234567890" class="quick-tech-call" aria-label="Quick call teknisi" title="Quick Call Teknisi">
+
+        </div><!-- /.public-container -->
+    </div><!-- /.main-content -->
+
+    <!-- FAB: Quick Call -->
+    <a href="tel:+621234567890"
+       class="quick-tech-call"
+       aria-label="Quick call teknisi"
+       title="Hubungi Teknisi">
         <i class="fas fa-phone-alt"></i>
     </a>
 
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    
+
     <!-- Scripts -->
     <script src="js/sidebar.js"></script>
     <script src="js/public-view.js"></script>
 
+    <!-- Sync username hero ↔ topbar -->
     <script>
-        /* ── Hero: Sync username dari topbar ── */
-        (function() {
-            function syncUsername() {
-                const topbarSpan = document.querySelector('#user-btn span');
-                const heroSpan = document.getElementById('welcome-user');
-                if (topbarSpan && heroSpan) {
-                    const name = topbarSpan.textContent.trim();
-                    if (name) heroSpan.textContent = name;
-                }
+    (function () {
+        function syncUsername() {
+            const src  = document.querySelector('#user-btn span');
+            const dest = document.getElementById('welcome-user');
+            if (src && dest) {
+                const name = src.textContent.trim();
+                if (name) dest.textContent = name;
             }
-
-            syncUsername();
-            const topbarTarget = document.querySelector('#user-btn span');
-            if (topbarTarget) {
-                new MutationObserver(syncUsername)
-                    .observe(topbarTarget, { childList: true, characterData: true, subtree: true });
-            }
-        })();
+        }
+        syncUsername();
+        const target = document.querySelector('#user-btn span');
+        if (target) {
+            new MutationObserver(syncUsername)
+                .observe(target, { childList: true, characterData: true, subtree: true });
+        }
+    })();
     </script>
 </body>
 </html>
