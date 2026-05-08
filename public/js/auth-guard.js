@@ -1,47 +1,33 @@
 (function () {
-  const path = window.location.pathname;
-  const page = path.split('/').pop() || 'index.html';
-  const isLoginPage = page.includes('login.html');
-  const isRegisterPage = page.includes('register.html');
+  const page = (window.location.pathname.split('/').pop() || 'index.html').toLowerCase();
+  const isAuthPage = page === 'login.html' || page === 'register.html';
 
-  const hasVisitedApp = localStorage.getItem('hasVisitedApp') === 'true';
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
   const hasLoginSession = localStorage.getItem('hasLoginSession') === 'true';
-  const role = localStorage.getItem('userRole') || '';
-  const normalizedRole = role.toLowerCase();
-  const isPublicRole = normalizedRole === 'warga';
-  const isPublicPage = page.includes('public.html');
+  const role = (localStorage.getItem('userRole') || '').toLowerCase();
 
-  if (!hasVisitedApp) {
-    localStorage.setItem('hasVisitedApp', 'true');
-    if (!isLoginPage && !isRegisterPage) {
-      localStorage.removeItem('isLoggedIn');
-      localStorage.removeItem('hasLoginSession');
-      localStorage.removeItem('userRole');
-      localStorage.removeItem('username');
-      localStorage.removeItem('user');
-      window.location.replace('login.html');
-      return;
-    }
-  }
+  if (isAuthPage) return;
 
-  // Login page should never auto-switch by itself.
-  if (isLoginPage || isRegisterPage) {
-    return;
-  }
-
-  // All protected pages require explicit login flow first.
+  // Semua halaman selain login/register wajib login dulu.
   if (!isLoggedIn || !hasLoginSession) {
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('hasLoginSession');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('username');
+    localStorage.removeItem('user');
     window.location.replace('login.html');
     return;
   }
 
-  if (isLoggedIn && isPublicRole && !isPublicPage) {
+  const isPublicPage = page === 'public.html';
+  const isCitizenRole = ['warga', 'masyarakat', 'viewer', 'user'].includes(role);
+
+  if (isCitizenRole && !isPublicPage) {
     window.location.replace('public.html');
     return;
   }
 
-  if (isLoggedIn && !isPublicRole && isPublicPage) {
+  if (!isCitizenRole && isPublicPage) {
     window.location.replace('index.html');
   }
 })();
