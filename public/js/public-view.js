@@ -30,6 +30,7 @@ function logout() {
     localStorage.removeItem('userRole');
     localStorage.removeItem('hasLoginSession');
     localStorage.removeItem('username');
+    sessionStorage.removeItem('loginFlowOk');
     window.location.href = 'login.html';
 }
 
