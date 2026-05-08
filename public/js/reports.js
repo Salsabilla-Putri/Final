@@ -1770,7 +1770,7 @@ function printChart() {
     printWindow.document.write(`
         <html>
             <head>
-                <title>Gen-Track - Engine Report</title>
+                <title>GENSYS - Engine Report</title>
                 <style>
                     body { font-family: Arial, sans-serif; padding: 40px; }
                     .print-header { text-align: center; margin-bottom: 30px; }
