@@ -183,50 +183,55 @@ function updateAnalyticsSection(data) {
 }
 
 function updateAlertsSection(alerts) {
-    const container = document.getElementById('alertContainer');
-    if (!container) return;
-    
-    if (!alerts || alerts.length === 0) {
-        container.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa">No recent alerts</div>';
-        return;
-    }
-    
-    container.innerHTML = alerts.slice(0, 3).map(alert => `
-        <div class="alert-item ${alert.severity === 'critical' ? '' : (alert.severity === 'high' ? 'warning' : 'info')}">
-            <div class="alert-time">
-                ${new Date(alert.timestamp).toLocaleString('id-ID')}
-            </div>
-            <div class="alert-message">
-                ${alert.message}
-            </div>
-            <div class="alert-status ${alert.resolved ? 'resolved' : 'active'}">
-                ${alert.resolved ? '✓ Resolved' : '⚠ Active'}
-            </div>
-        </div>
-    `).join('');
+        try {
+        const res = await fetch(`${API_URL}/alerts?limit=10`);
+        const json = await res.json();
+        if(json.success) {
+            const active = json.data.filter(a => !a.resolved);
+            const badge = document.getElementById('val-alerts');
+            if(badge) badge.innerText = active.length;
+            renderAlertList(json.data.slice(0, 3));
+        }
+    } catch (e) { console.warn("Alert Error", e); }
 }
 
 function updateRecentActivity(activities) {
-    const container = document.getElementById('recentActivityContainer');
-    if (!container) return;
-    
-    if (!activities || activities.length === 0) {
-        container.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa">No recent activity</div>';
-        return;
-    }
-    
-    container.innerHTML = activities.slice(0, 4).map(activity => `
-        <div class="activity-item">
-            <div class="activity-time">
-                ${new Date(activity.startedAt).toLocaleString('id-ID')}
-            </div>
-            <div class="activity-desc">
-                Engine ${activity.endedAt ? 'was active' : 'currently running'} 
-                ${activity.durationMs ? `for ${Math.floor(activity.durationMs / 3600000)}h ${Math.floor((activity.durationMs % 3600000) / 60000)}m` : ''}
-            </div>
-        </div>
-    `).join('');
+    try {
+        const res = await fetch(`${API_URL}/maintenance`);
+        if (!res.ok) return;
+
+        const json = await res.json();
+        const container = document.getElementById('maintenanceContainer');
+
+        if (json.success && json.data.length > 0 && container) {
+            container.innerHTML = ''; 
+            const logs = json.data.slice(0, 4);
+
+            logs.forEach(log => {
+                const dateStr = new Date(log.dueDate || log.createdAt).toLocaleDateString('id-ID', {day:'numeric', month:'short'});
+                let color = '#64748b';
+                if(log.status === 'completed') color = '#10b981';
+                if(log.status === 'overdue') color = '#ef4444';
+
+                container.innerHTML += `
+                <div class="list-row">
+                    <div style="display:flex; flex-direction:column;">
+                        <span style="font-weight:600; color:#1e293b; font-size:14px;">${log.task}</span>
+                        <span style="font-size:11px; color:${color}; text-transform:capitalize;">
+                            ${log.status} • ${log.assignedTo || '-'}
+                        </span>
+                    </div>
+                    <div style="text-align:right;">
+                        <span style="font-size:12px; color:#64748b; font-weight:600;">${dateStr}</span>
+                    </div>
+                </div>`;
+            });
+        } else if (container) {
+            container.innerHTML = '<div style="text-align:center; padding:15px; color:#aaa">No recent activity</div>';
+        }
+    } catch (e) { console.warn("Maintenance Fetch Error", e); }
 }
+
 
 function updatePerformanceSection(data) {
     if (data.parameters) {
