@@ -1,8 +1,6 @@
 (function () {
-  const path = window.location.pathname;
-  const page = path.split('/').pop() || 'index.html';
-  const isLoginPage = page.includes('login.html');
-  const isRegisterPage = page.includes('register.html');
+  const page = (window.location.pathname.split('/').pop() || 'index.html').toLowerCase();
+  const isAuthPage = page === 'login.html' || page === 'register.html';
 
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
   const hasLoginSession = localStorage.getItem('hasLoginSession') === 'true';
@@ -23,12 +21,15 @@
     return;
   }
 
-  if (isLoggedIn && isPublicRole && !isPublicPage) {
+  const isPublicPage = page === 'public.html';
+  const isCitizenRole = ['warga', 'masyarakat', 'viewer', 'user'].includes(role);
+
+  if (isCitizenRole && !isPublicPage) {
     window.location.replace('public.html');
     return;
   }
 
-  if (isLoggedIn && !isPublicRole && isPublicPage) {
+  if (!isCitizenRole && isPublicPage) {
     window.location.replace('index.html');
   }
 })();

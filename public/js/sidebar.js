@@ -187,9 +187,7 @@ function renderSidebarMenu() {
 
 function applyPublicSectionSidebar() {
   const page = window.location.pathname.split('/').pop() || 'index.html';
-  const role = (getUserData()?.role || '').toLowerCase();
-  const isPublicUser = ['masyarakat','warga','user','viewer'].includes(role);
-  if (page !== 'public.html' || !isPublicUser) return;
+  if (page !== 'public.html') return;
 
   const wrap = document.querySelector('.sidebar .nav-items-wrapper');
   if (!wrap) return;
