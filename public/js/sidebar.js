@@ -97,10 +97,10 @@ function customizePublicSidebarForCitizen() {
 
   const items = [
     { icon: 'fa-home', text: 'Overview', target: '.section-overview' },
-    { icon: 'fa-cogs', text: 'Operations', target: '.section-block:nth-of-type(2)' },
+    { icon: 'fa-cogs', text: 'Operations', target: '.section-operations' },
     { icon: 'fa-chart-line', text: 'Analytics', target: '.section-analytics' },
-    { icon: 'fa-chart-bar', text: 'Performance', target: '.section-block:nth-of-type(4)' },
-    { icon: 'fa-info-circle', text: 'Information', target: '.section-block:nth-of-type(5)' }
+    { icon: 'fa-chart-bar', text: 'Performance', target: '.section-performance' },
+    { icon: 'fa-info-circle', text: 'Information', target: '.section-information' }
   ];
 
   wrap.innerHTML = items.map((item) => `
