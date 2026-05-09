@@ -258,53 +258,92 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
     }
 }
 
-async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
-    // 1. TULIS LANGSUNG API KEY ANDA DI SINI
-    // Ganti string "SG.xxx..." di bawah dengan API Key asli Anda
-    const apiKey = process.env.SENDGRID_API_KEY || "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"; 
-    
-    // Ganti email di bawah dengan email pengirim Anda yang sudah di-verifikasi di SendGrid
-    const senderEmail = process.env.SENDER_EMAIL || "gensys20@gmail.com";
+// Tambahkan parameter targetEmail
+async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
+    const apiKey = process.env.SENDGRID_API_KEY;
+    const senderEmail = process.env.SENDER_EMAIL;
 
-    // 2. Set API Key langsung
+    if (!apiKey) {
+        console.warn('⚠️ SENDGRID_API_KEY tidak ditemukan.');
+        return;
+    }
+
+    // Penentuan Penerima (Hanya user login atau semua user)
+    let uniqueRecipients = [];
+    if (targetEmail) {
+        uniqueRecipients = [targetEmail.trim().toLowerCase()];
+    } else {
+        const users = await User.find({}, { email: 1, _id: 0 }).lean();
+        uniqueRecipients = [...new Set(users.map(u => u.email.trim().toLowerCase()))];
+    }
+
+    if (uniqueRecipients.length === 0) return;
+
     const sgMail = require('@sendgrid/mail');
     sgMail.setApiKey(apiKey);
 
-    // Ambil daftar email dari database
-    const recipients = (await User.find({}, { email: 1, _id: 0 }).lean())
-        .map((u) => String(u.email || '').trim().toLowerCase())
-        .filter(Boolean);
+    // LOGIKA GRUP: Membuat ringkasan untuk Subjek Email
+    // Contoh Subjek: [CRITICAL] Masalah pada RPM, VOLT, TEMP
+    const parameterNames = alertItems.map(a => a.parameter.toUpperCase()).join(', ');
+    const subjectTitle = alertItems.length > 1 
+        ? `🚨 MULTI-ALERT: Masalah pada ${parameterNames}`
+        : `🚨 ALERT KRITIS: ${parameterNames}`;
 
-    if (recipients.length === 0) return;
-    const uniqueRecipients = [...new Set(recipients)];
-
-    const rows = alertItems
-        .map((a) => `<li style="margin-bottom: 5px;"><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} <i>(${a.message})</i></li>`)
-        .join('');
+    // Membuat Baris Tabel untuk isi Email agar lebih profesional
+    const rowsHtml = alertItems.map(a => `
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 10px; font-weight: bold; color: #d9534f;">${a.parameter.toUpperCase()}</td>
+            <td style="padding: 10px;">${a.value}</td>
+            <td style="padding: 10px; font-style: italic;">${a.message}</td>
+        </tr>
+    `).join('');
 
     const msg = {
-        to: uniqueRecipients, 
-        from: senderEmail, // <-- Menggunakan variabel senderEmail
-        subject: `🚨 [CRITICAL ALERT] Mesin: ${latestSnapshot?.deviceId || 'Generator'}`,
+        to: uniqueRecipients,
+        from: senderEmail,
+        subject: subjectTitle,
         html: `
-            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; border: 1px solid #ddd; border-radius: 8px;">
-                <h2 style="color: #d9534f;">🚨 Peringatan Sistem Kritis</h2>
-                <p>Sistem mendeteksi adanya anomali <b>CRITICAL</b> pada generator.</p>
-                <div style="background-color: #fff3cd; border-left: 5px solid #d9534f; padding: 15px;">
-                    <ul>${rows}</ul>
+            <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #d9534f; border-radius: 10px; overflow: hidden;">
+                <div style="background-color: #d9534f; color: white; padding: 20px; text-align: center;">
+                    <h2 style="margin: 0;">Laporan Anomali Generator</h2>
+                    <p style="margin: 5px 0 0 0;">ID Mesin: ${latestSnapshot?.deviceId || 'GEN-TRACK'}</p>
                 </div>
-                <p><b>Waktu:</b> ${new Date().toLocaleString('id-ID')}</p>
-                <p>Harap segera lakukan pengecekan.</p>
+                <div style="padding: 20px;">
+                    <p>Halo, sistem mendeteksi <b>${alertItems.length} parameter</b> dalam kondisi kritis:</p>
+                    <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                        <thead>
+                            <tr style="background-color: #f8f9fa; text-align: left;">
+                                <th style="padding: 10px;">Parameter</th>
+                                <th style="padding: 10px;">Nilai</th>
+                                <th style="padding: 10px;">Keterangan</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                    <p style="font-size: 14px; color: #666;">
+                        <b>Waktu Kejadian:</b> ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB
+                    </p>
+                    <div style="text-align: center; margin-top: 30px;">
+                        <a href="https://generator-monitoring-system.onrender.com" 
+                           style="background-color: #0275d8; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                           Buka Dashboard Monitoring
+                        </a>
+                    </div>
+                </div>
+                <div style="background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 12px; color: #999;">
+                    Pesan otomatis - Harap tidak membalas email ini.
+                </div>
             </div>
         `
     };
 
     try {
         await sgMail.sendMultiple(msg);
-        console.log(`📧 SendGrid: Email alert critical berhasil dikirim ke ${uniqueRecipients.length} user.`);
+        console.log(`✅ Grup Alert terkirim (${alertItems.length} parameter) ke: ${uniqueRecipients}`);
     } catch (error) {
         console.error('❌ SendGrid Error:', error.message);
-        if (error.response) console.error(error.response.body);
     }
 }
 
@@ -1514,41 +1553,41 @@ app.get('/public.html', (req, res) => {
 });
 
 // Modifikasi login response untuk memastikan role 'warg' bisa akses
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        const email = String(req.body?.email || '').trim().toLowerCase();
-        const password = String(req.body?.password || '');
+// app.post('/api/auth/login', async (req, res) => {
+//     try {
+//         const email = String(req.body?.email || '').trim().toLowerCase();
+//         const password = String(req.body?.password || '');
 
-        if (!email || !password) {
-            return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
-        }
+//         if (!email || !password) {
+//             return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
+//         }
 
-        const user = await User.findOne({ email }).lean();
-        if (!user) {
-            return res.status(404).json({ success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' });
-        }
-        if (user.password !== password) {
-            return res.status(401).json({ success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' });
-        }
+//         const user = await User.findOne({ email }).lean();
+//         if (!user) {
+//             return res.status(404).json({ success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' });
+//         }
+//         if (user.password !== password) {
+//             return res.status(401).json({ success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' });
+//         }
 
-        const role = String(user.role || '').toLowerCase();
-        // Allow both 'masyarakat' and 'warg' to access public.html
-        const isPublic = role === 'masyarakat' || role === 'warg' || role === 'user' || role === 'viewer';
-        const redirectTo = isPublic ? 'public.html' : 'index.html';
+//         const role = String(user.role || '').toLowerCase();
+//         // Allow both 'masyarakat' and 'warg' to access public.html
+//         const isPublic = role === 'masyarakat' || role === 'warg' || role === 'user' || role === 'viewer';
+//         const redirectTo = isPublic ? 'public.html' : 'index.html';
 
-        return res.json({
-            success: true,
-            user: {
-                name: user.name || user.email.split('@')[0],
-                email: user.email,
-                role: user.role,
-                redirectTo
-            }
-        });
-    } catch (error) {
-        return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
-    }
-});
+//         return res.json({
+//             success: true,
+//             user: {
+//                 name: user.name || user.email.split('@')[0],
+//                 email: user.email,
+//                 role: user.role,
+//                 redirectTo
+//             }
+//         });
+//     } catch (error) {
+//         return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
+//     }
+// });
 
 
 
