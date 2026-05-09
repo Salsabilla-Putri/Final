@@ -1798,6 +1798,179 @@ function printChart() {
     `);
     printWindow.document.close();
 }
+    let cbmTrendChartInst = null;
+    let cbmFftChartInst = null;
+    let currentSuggestionPayload = null; // Menyimpan data saran untuk di-post
+
+    async function runCbmAnalysis() {
+        const sensor = document.getElementById('cbmSensorSelect').value;
+        const hours = document.getElementById('cbmTimeRange').value;
+        
+        // Sembunyikan card keputusan sementara loading
+        const decisionCard = document.getElementById('maintenanceDecisionCard');
+        decisionCard.style.display = 'block';
+        document.getElementById('decisionStatus').innerText = 'Loading...';
+        document.getElementById('decisionStatus').style.background = '#6c757d';
+        document.getElementById('decisionMessage').innerText = 'Mengambil data dan menganalisis...';
+        document.getElementById('decisionRecommendation').innerText = '';
+        document.getElementById('approveBtn').style.display = 'none';
+
+        try {
+            // 1. Fetch Data Histori Laporan
+            const reportRes = await fetch(`/api/reports?hours=${hours}`);
+            const reportData = await reportRes.json();
+
+            // 2. Fetch Keputusan Maintenance dari Backend
+            const suggestionRes = await fetch(`/api/maintenance/suggestion`);
+            const suggestionResult = await suggestionRes.json();
+
+            if (suggestionResult.success && suggestionResult.data) {
+                renderMaintenanceDecision(suggestionResult.data);
+            }
+
+            // 3. Proses FFT & Tren jika data tersedia
+            if (reportData.success && reportData.data.length > 0) {
+                const rows = reportData.data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                
+                const analysisRes = await fetch('/api/reports/analysis', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rows: rows, sensor: sensor, maxPoints: 150 })
+                });
+                const analysisResult = await analysisRes.json();
+
+                if (analysisResult.success && analysisResult.data.ok) {
+                    renderCbmCharts(rows, analysisResult.data, sensor);
+                }
+            } else {
+                alert("Data histori tidak cukup untuk merender grafik analisis FFT.");
+            }
+
+        } catch (error) {
+            console.error("CBM Analysis Error:", error);
+            alert("Gagal menghubungi server untuk analisis.");
+        }
+    }
+
+    function renderMaintenanceDecision(decisionData) {
+        const statusEl = document.getElementById('decisionStatus');
+        const cardEl = document.getElementById('maintenanceDecisionCard');
+        const btnApprove = document.getElementById('approveBtn');
+        
+        // Simpan ke variabel global untuk proses persetujuan nanti
+        currentSuggestionPayload = decisionData;
+
+        // Styling status (AMAN, WASPADA, BAHAYA)
+        const status = decisionData.decisionStatus || 'AMAN';
+        statusEl.innerText = status;
+        
+        if (status === 'BAHAYA') {
+            statusEl.style.background = '#dc3545'; // Merah
+            cardEl.style.borderLeftColor = '#dc3545';
+        } else if (status === 'WASPADA') {
+            statusEl.style.background = '#ffc107'; // Kuning/Orange
+            statusEl.style.color = '#000';
+            cardEl.style.borderLeftColor = '#ffc107';
+        } else {
+            statusEl.style.background = '#28a745'; // Hijau
+            cardEl.style.borderLeftColor = '#28a745';
+        }
+
+        document.getElementById('decisionMessage').innerText = decisionData.message || 'Sistem beroperasi dalam kondisi normal.';
+        document.getElementById('decisionRecommendation').innerText = decisionData.recommendation || 'Lanjutkan pemantauan berkala.';
+
+        // Tampilkan tombol "Setujui & Jadwalkan" jika status bukan AMAN
+        if (status === 'WASPADA' || status === 'BAHAYA') {
+            btnApprove.style.display = 'block';
+        } else {
+            btnApprove.style.display = 'none';
+        }
+    }
+
+    // Fungsi untuk menyetujui rekomendasi dan mengarahkan ke maintenance.html
+    async function approveAndSchedule() {
+        if (!currentSuggestionPayload) return;
+
+        if (!confirm('Apakah Anda yakin ingin menyetujui dan menjadwalkan pemeliharaan ini?')) return;
+
+        try {
+            // 1. Simpan ke koleksi Maintenance (Jadwal Resmi)
+            const maintenanceTask = {
+                task: "Tindak Lanjut Anomali: " + (currentSuggestionPayload.message || 'Perbaikan Mesin'),
+                type: currentSuggestionPayload.decisionStatus === 'BAHAYA' ? 'Corrective' : 'Preventive',
+                priority: currentSuggestionPayload.decisionStatus === 'BAHAYA' ? 'High' : 'Medium',
+                status: 'scheduled',
+                dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000), // Jadwalkan untuk besok
+                source: 'CBM System'
+            };
+
+            const saveRes = await fetch('/api/maintenance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(maintenanceTask)
+            });
+
+            const saveResult = await saveRes.json();
+
+            if (saveResult.success) {
+                // 2. Redirect ke halaman maintenance
+                alert('Pemeliharaan berhasil dijadwalkan! Mengalihkan ke halaman Maintenance...');
+                window.location.href = 'maintenance.html';
+            } else {
+                alert('Gagal menjadwalkan pemeliharaan: ' + saveResult.error);
+            }
+        } catch (error) {
+            console.error('Approval Error:', error);
+            alert('Terjadi kesalahan saat menyimpan jadwal.');
+        }
+    }
+
+    function renderCbmCharts(rows, analysis, sensor) {
+        // Render Grafik Tren
+        const timeLabels = rows.map(r => {
+            const d = new Date(r.timestamp);
+            return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+        });
+        const sensorValues = rows.map(r => r[sensor]);
+
+        const ctxTrend = document.getElementById('cbmTrendChart').getContext('2d');
+        if (cbmTrendChartInst) cbmTrendChartInst.destroy();
+        cbmTrendChartInst = new Chart(ctxTrend, {
+            type: 'line',
+            data: {
+                labels: timeLabels,
+                datasets: [{
+                    label: `Tren ${sensor.toUpperCase()}`,
+                    data: sensorValues,
+                    borderColor: '#17a2b8',
+                    backgroundColor: 'rgba(23, 162, 184, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: true
+                }]
+            },
+            options: { responsive: true, scales: { x: { display: false } } }
+        });
+
+        // Render Grafik FFT
+        const fftLabels = analysis.spectrum.map(s => s.freq.toFixed(1) + ' Hz');
+        const fftValues = analysis.spectrum.map(s => s.amp);
+
+        const ctxFft = document.getElementById('cbmFftChart').getContext('2d');
+        if (cbmFftChartInst) cbmFftChartInst.destroy();
+        cbmFftChartInst = new Chart(ctxFft, {
+            type: 'bar',
+            data: {
+                labels: fftLabels,
+                datasets: [{
+                    label: 'Magnitude',
+                    data: fftValues,
+                    backgroundColor: '#e83e8c'
+                }]
+            },
+            options: { responsive: true }
+        });
+    }
 
 // --- 12. GLOBAL FUNCTIONS ---
 window.loadReportData = loadReportData;

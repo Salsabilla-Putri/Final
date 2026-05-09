@@ -148,6 +148,50 @@
                     <div id="fftInsights" class="fft-insights"></div>
                 </div>
             </div>
+        <div class="cbm-dashboard-container" style="background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-top: 20px;">
+    <h3 style="border-bottom: 2px solid #eee; padding-bottom: 10px;">Analisis Kondisi & Keputusan Maintenance</h3>
+    
+    <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;">
+        <select id="cbmSensorSelect" style="padding: 8px; border-radius: 5px; border: 1px solid #ccc;">
+            <option value="rpm">RPM Mesin</option>
+            <option value="temp">Suhu / Coolant (°C)</option>
+            <option value="volt">Tegangan (Volt)</option>
+            <option value="freq">Frekuensi Output (Hz)</option>
+        </select>
+        <select id="cbmTimeRange" style="padding: 8px; border-radius: 5px; border: 1px solid #ccc;">
+            <option value="1">1 Jam Terakhir</option>
+            <option value="6">6 Jam Terakhir</option>
+            <option value="24" selected>24 Jam Terakhir</option>
+        </select>
+        <button onclick="runCbmAnalysis()" style="padding: 8px 15px; background: #0275d8; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">
+            Jalankan Analisis & Cek Keputusan
+        </button>
+    </div>
+
+    <div id="maintenanceDecisionCard" style="display: none; background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #ccc; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h4 style="margin: 0 0 5px 0;">Status Mesin: <span id="decisionStatus" style="padding: 3px 8px; border-radius: 4px; color: #fff;">-</span></h4>
+                <p id="decisionMessage" style="margin: 5px 0; font-weight: bold;"></p>
+                <p id="decisionRecommendation" style="margin: 0; font-size: 14px; color: #555;"></p>
+            </div>
+            <button id="approveBtn" onclick="approveAndSchedule()" style="display: none; padding: 10px 15px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                Setujui & Jadwalkan Pemeliharaan
+            </button>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div style="border: 1px solid #eee; padding: 15px; border-radius: 8px;">
+            <h4 style="text-align: center; margin-top: 0;">Tren Waktu (Time-Domain)</h4>
+            <canvas id="cbmTrendChart" height="150"></canvas>
+        </div>
+        <div style="border: 1px solid #eee; padding: 15px; border-radius: 8px;">
+            <h4 style="text-align: center; margin-top: 0;">Spektrum FFT (Frequency-Domain)</h4>
+            <canvas id="cbmFftChart" height="150"></canvas>
+        </div>
+    </div>
+</div>
 
         </div> </div> <script src="js/sidebar.js"></script>
     <script src="js/reports.js"></script>
