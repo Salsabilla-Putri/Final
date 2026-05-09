@@ -8,6 +8,9 @@ const net = require('net');
 const tls = require('tls');
 const { EventEmitter } = require('events');
 require('dotenv').config();
+
+const sgMail = require('@sendgrid/mail');
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 const { transformPublicStatus } = require('./public_status');
 
 mongoose.set('bufferCommands', false);
@@ -256,28 +259,61 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 }
 
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
-    if (!RESEND_API_KEY) {
-        console.warn('⚠️ RESEND_API_KEY belum dikonfigurasi. Email alert critical tidak akan dikirim.');
+    if (!process.env.SENDGRID_API_KEY) {
+        console.warn('⚠️ SENDGRID_API_KEY belum dikonfigurasi. Email alert critical tidak akan dikirim.');
         return;
     }
 
+    // Ambil daftar email dari koleksi User
     const recipients = (await User.find({}, { email: 1, _id: 0 }).lean())
         .map((u) => String(u.email || '').trim().toLowerCase())
         .filter(Boolean);
 
     if (recipients.length === 0) return;
 
+    // Hapus duplikasi email
     const uniqueRecipients = [...new Set(recipients)];
+
+    // Buat daftar (list) parameter yang bermasalah untuk di HTML
     const rows = alertItems
-        .map((a) => `<li><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} (${a.message})</li>`)
+        .map((a) => `<li style="margin-bottom: 5px;"><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} <i>(${a.message})</i></li>`)
         .join('');
 
-    await sendViaResend({
-        from: EMAIL_NOTIF_FROM,
-        to: uniqueRecipients,
-        subject: `[CRITICAL ALERT] ${latestSnapshot?.deviceId || 'Generator'}`,
-        html: `<p>Terdeteksi alert <b>CRITICAL</b> pada generator.</p><ul>${rows}</ul><p>Waktu: ${new Date().toISOString()}</p>`
-    });
+    // Konfigurasi Pesan SendGrid
+    const msg = {
+        to: uniqueRecipients, 
+        from: process.env.SENDER_EMAIL || EMAIL_NOTIF_FROM, // Email pengirim yang diverifikasi
+        subject: `🚨 [CRITICAL ALERT] Mesin: ${latestSnapshot?.deviceId || 'Generator'}`,
+        html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 8px;">
+                <h2 style="color: #d9534f; text-align: center;">🚨 Peringatan Sistem Kritis</h2>
+                <p>Halo,</p>
+                <p>Sistem mendeteksi adanya anomali <b>CRITICAL</b> pada generator Anda yang memerlukan perhatian segera.</p>
+                
+                <div style="background-color: #fff3cd; border-left: 5px solid #d9534f; padding: 15px; margin: 20px 0;">
+                    <ul style="margin: 0; padding-left: 20px;">
+                        ${rows}
+                    </ul>
+                </div>
+                
+                <p><b>Waktu Kejadian:</b> ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}</p>
+                <p>Harap segera buka dashboard monitoring atau lakukan pengecekan fisik pada mesin.</p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                <p style="font-size: 12px; color: #999; text-align: center;">Pesan ini dikirim secara otomatis oleh Sistem Monitoring Generator.</p>
+            </div>
+        `
+    };
+
+    try {
+        // Menggunakan sendMultiple agar user tidak bisa melihat email user lainnya (berfungsi seperti BCC)
+        await sgMail.sendMultiple(msg);
+        console.log(`📧 SendGrid: Email alert critical berhasil dikirim ke ${uniqueRecipients.length} user.`);
+    } catch (error) {
+        console.error('❌ SendGrid Error:', error.message);
+        if (error.response) {
+            console.error(error.response.body);
+        }
+    }
 }
 
 // --- DYNAMIC THRESHOLDS ---
@@ -461,17 +497,17 @@ async function checkAndSaveAlerts(data) {
             }
         }
 
-        // const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
-        // const now = Date.now();
-        // if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
-        //     try {
-        //         await sendCriticalAlertEmail(criticalAlerts, data);
-        //         lastCriticalEmailAt = now;
-        //         console.log(`📧 Critical alert email sent (${criticalAlerts.length} alert)`);
-        //     } catch (emailError) {
-        //         console.error('❌ Gagal mengirim email alert critical:', emailError.message);
-        //     }
-        // }
+        const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
+        const now = Date.now();
+        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+            try {
+                await sendCriticalAlertEmail(criticalAlerts, data);
+                lastCriticalEmailAt = now;
+                console.log(`📧 Critical alert email sent (${criticalAlerts.length} alert)`);
+            } catch (emailError) {
+                console.error('❌ Gagal mengirim email alert critical:', emailError.message);
+            }
+        }
     }
 }
 // --- TAMBAHAN API UNTUK HALAMAN ALARM ---
