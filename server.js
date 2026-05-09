@@ -259,6 +259,7 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 }
 
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
+    console.log("🔎 Cek tipe API Key:", typeof process.env.SENDGRID_API_KEY, "| Cek SENDER:", process.env.SENDER_EMAIL);
     if (!process.env.SENDGRID_API_KEY) {
         console.warn('⚠️ SENDGRID_API_KEY belum dikonfigurasi. Email alert critical tidak akan dikirim.');
         throw new Error('SENDGRID_API_KEY missing'); // <-- Tambahkan ini agar masuk ke blok catch
