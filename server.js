@@ -261,7 +261,7 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
     if (!process.env.SENDGRID_API_KEY) {
         console.warn('⚠️ SENDGRID_API_KEY belum dikonfigurasi. Email alert critical tidak akan dikirim.');
-        return;
+        throw new Error('SENDGRID_API_KEY missing'); // <-- Tambahkan ini agar masuk ke blok catch
     }
 
     // Ambil daftar email dari koleksi User
