@@ -259,10 +259,19 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 }
 
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
-    console.log("🔎 Cek tipe API Key:", typeof process.env.SENDGRID_API_KEY, "| Cek SENDER:", process.env.SENDER_EMAIL);
-    if (!process.env.SENDGRID_API_KEY) {
-        console.warn('⚠️ SENDGRID_API_KEY belum dikonfigurasi. Email alert critical tidak akan dikirim.');
-        throw new Error('SENDGRID_API_KEY missing'); // <-- Tambahkan ini agar masuk ke blok catch
+    async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
+    // 1. TULIS LANGSUNG API KEY DAN EMAIL ANDA DI SINI (Sebagai Backup)
+    const apiKey = process.env.SENDGRID_API_KEY || "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";
+    const senderEmail = process.env.SENDER_EMAIL || "13222011@std.stei.itb.ac.id";
+
+    console.log("🔎 Cek API Key:", typeof apiKey, "| Cek SENDER:", senderEmail);
+    
+    // 2. Set ulang API key khusus untuk eksekusi ini
+    sgMail.setApiKey(apiKey);
+
+    if (apiKey.includes("TULIS_API_KEY")) {
+        console.warn('⚠️ API Key belum dimasukkan ke dalam kode!');
+        return;
     }
 
     // Ambil daftar email dari koleksi User
