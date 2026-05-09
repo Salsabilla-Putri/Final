@@ -259,70 +259,52 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 }
 
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
-    async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
-    // 1. TULIS LANGSUNG API KEY DAN EMAIL ANDA DI SINI (Sebagai Backup)
-    const apiKey = process.env.SENDGRID_API_KEY || "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";
-    const senderEmail = process.env.SENDER_EMAIL || "13222011@std.stei.itb.ac.id";
-
-    console.log("🔎 Cek API Key:", typeof apiKey, "| Cek SENDER:", senderEmail);
+    // 1. TULIS LANGSUNG API KEY ANDA DI SINI
+    // Ganti string "SG.xxx..." di bawah dengan API Key asli Anda
+    const apiKey = process.env.SENDGRID_API_KEY || "SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; 
     
-    // 2. Set ulang API key khusus untuk eksekusi ini
+    // Ganti email di bawah dengan email pengirim Anda yang sudah di-verifikasi di SendGrid
+    const senderEmail = process.env.SENDER_EMAIL || "email_pengirim@domain.com";
+
+    // 2. Set API Key langsung
+    const sgMail = require('@sendgrid/mail');
     sgMail.setApiKey(apiKey);
 
-    if (apiKey.includes("TULIS_API_KEY")) {
-        console.warn('⚠️ API Key belum dimasukkan ke dalam kode!');
-        return;
-    }
-
-    // Ambil daftar email dari koleksi User
+    // Ambil daftar email dari database
     const recipients = (await User.find({}, { email: 1, _id: 0 }).lean())
         .map((u) => String(u.email || '').trim().toLowerCase())
         .filter(Boolean);
 
     if (recipients.length === 0) return;
-
-    // Hapus duplikasi email
     const uniqueRecipients = [...new Set(recipients)];
 
-    // Buat daftar (list) parameter yang bermasalah untuk di HTML
     const rows = alertItems
         .map((a) => `<li style="margin-bottom: 5px;"><b>${a.parameter?.toUpperCase() || '-'}</b>: ${a.value} <i>(${a.message})</i></li>`)
         .join('');
 
-    // Konfigurasi Pesan SendGrid
     const msg = {
         to: uniqueRecipients, 
-        from: process.env.SENDER_EMAIL || EMAIL_NOTIF_FROM, // Email pengirim yang diverifikasi
+        from: senderEmail, // <-- Menggunakan variabel senderEmail
         subject: `🚨 [CRITICAL ALERT] Mesin: ${latestSnapshot?.deviceId || 'Generator'}`,
         html: `
-            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 8px;">
-                <h2 style="color: #d9534f; text-align: center;">🚨 Peringatan Sistem Kritis</h2>
-                <p>Halo,</p>
-                <p>Sistem mendeteksi adanya anomali <b>CRITICAL</b> pada generator Anda yang memerlukan perhatian segera.</p>
-                
-                <div style="background-color: #fff3cd; border-left: 5px solid #d9534f; padding: 15px; margin: 20px 0;">
-                    <ul style="margin: 0; padding-left: 20px;">
-                        ${rows}
-                    </ul>
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; border: 1px solid #ddd; border-radius: 8px;">
+                <h2 style="color: #d9534f;">🚨 Peringatan Sistem Kritis</h2>
+                <p>Sistem mendeteksi adanya anomali <b>CRITICAL</b> pada generator.</p>
+                <div style="background-color: #fff3cd; border-left: 5px solid #d9534f; padding: 15px;">
+                    <ul>${rows}</ul>
                 </div>
-                
-                <p><b>Waktu Kejadian:</b> ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}</p>
-                <p>Harap segera buka dashboard monitoring atau lakukan pengecekan fisik pada mesin.</p>
-                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                <p style="font-size: 12px; color: #999; text-align: center;">Pesan ini dikirim secara otomatis oleh Sistem Monitoring Generator.</p>
+                <p><b>Waktu:</b> ${new Date().toLocaleString('id-ID')}</p>
+                <p>Harap segera lakukan pengecekan.</p>
             </div>
         `
     };
 
     try {
-        // Menggunakan sendMultiple agar user tidak bisa melihat email user lainnya (berfungsi seperti BCC)
         await sgMail.sendMultiple(msg);
         console.log(`📧 SendGrid: Email alert critical berhasil dikirim ke ${uniqueRecipients.length} user.`);
     } catch (error) {
         console.error('❌ SendGrid Error:', error.message);
-        if (error.response) {
-            console.error(error.response.body);
-        }
+        if (error.response) console.error(error.response.body);
     }
 }
 
