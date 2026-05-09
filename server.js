@@ -261,10 +261,10 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 async function sendCriticalAlertEmail(alertItems, latestSnapshot) {
     // 1. TULIS LANGSUNG API KEY ANDA DI SINI
     // Ganti string "SG.xxx..." di bawah dengan API Key asli Anda
-    const apiKey = process.env.SENDGRID_API_KEY || "SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; 
+    const apiKey = process.env.SENDGRID_API_KEY || "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"; 
     
     // Ganti email di bawah dengan email pengirim Anda yang sudah di-verifikasi di SendGrid
-    const senderEmail = process.env.SENDER_EMAIL || "email_pengirim@domain.com";
+    const senderEmail = process.env.SENDER_EMAIL || "gensys20@gmail.com";
 
     // 2. Set API Key langsung
     const sgMail = require('@sendgrid/mail');
