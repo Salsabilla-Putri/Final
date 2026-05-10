@@ -50,15 +50,15 @@ function setLastUpdated() {
 // ════════════════════════════════════════════════════════════════════════════
 async function fetchDashboardData() {
     try {
-        // Tambahkan fetch API CBM
+        // Fetch semua data, limit history ditambah ke 100 agar cukup untuk kalkulasi 7 hari
         const [engineRes, alertsRes, specsRes, historyRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
             fetch('/api/engine-data/latest'),
             fetch('/api/alerts?limit=10'),
             fetch('/api/generator-specs'),
-            fetch('/api/generator-active-time/history?limit=30'),
+            fetch('/api/generator-active-time/history?limit=100'), 
             fetch('/api/maintenance'),
             fetch('/api/public/dashboard'),
-            fetch('/api/cbm/analysis?hours=24') // Fetch data CBM untuk Health Index
+            fetch('/api/cbm/analysis?hours=24') // Fetch data CBM untuk Health Score
         ]);
 
         const engineData = engineRes.status === 'fulfilled' ? await engineRes.value.json().catch(() => null) : null;
@@ -66,7 +66,7 @@ async function fetchDashboardData() {
 
         if (engineData?.success && engineData.data) {
             updateOverviewCards(engineData.data);
-            updateOperationsSection(engineData.data, cbmData?.data); // Pass CBM data
+            updateOperationsSection(engineData.data, cbmData?.data);
         }
 
         const alertsData = alertsRes.status === 'fulfilled' ? await alertsRes.value.json().catch(() => null) : null;
@@ -84,24 +84,16 @@ async function fetchDashboardData() {
         const maintenanceData = maintenanceRes.status === 'fulfilled' ? await maintenanceRes.value.json().catch(() => null) : null;
 
         if (historyData?.success) {
-            // Gabungkan data history aktif dan data maintenance yang sudah komplit
+            // Gabungkan riwayat sesi DB dengan maintenance yang Completed
             renderRecentActivity(historyData.data, maintenanceData?.success ? maintenanceData.data : []);
-            updateActiveTimeChart(); // Panggil chart mock
+            // Render chart berdasarkan data history aktual
+            updateActiveTimeChart(historyData.data);
         }
 
         if (maintenanceData?.success) updateMaintenanceSection(maintenanceData.data);
 
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
         if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
-
-        const cbmData = cbmRes.status === 'fulfilled'
-            ? await cbmRes.value.json().catch(() => null) : null;
-
-        if (cbmData?.success && cbmData.analysis) {
-            renderHealthScoreFromCbm(cbmData.analysis);
-        } else if (engineData?.success && engineData.data) {
-            renderHealthScore(engineData.data);
-        }
 
         setConnectionStatus(true);
         setLastUpdated();
@@ -132,16 +124,15 @@ function updateOverviewCards(data) {
 // ════════════════════════════════════════════════════════════════════════════
 //  OPERATIONS SECTION (Engine Status + Health)
 // ════════════════════════════════════════════════════════════════════════════
-function updateOperationsSection(data) {
+function updateOperationsSection(data, cbmData) {
     // Sync
-    function updateOperationsSection(data, cbmData) {
-    // ... (kode Sync, Status, Fuel tetap sama) ...
     const syncEl = document.getElementById('engSync');
     if (syncEl) {
         syncEl.innerText  = data.sync || '--';
         syncEl.className  = data.sync === 'ON-GRID' ? 'st-ok' : 'st-warn';
     }
 
+    // Status
     const statEl = document.getElementById('engStat');
     if (statEl) {
         statEl.innerText = data.status || '--';
@@ -150,6 +141,7 @@ function updateOperationsSection(data) {
         statEl.className = running ? 'st-ok' : stopped ? 'st-err' : 'st-warn';
     }
 
+    // Fuel
     const fuelEl = document.getElementById('fuelLevel');
     if (fuelEl) {
         const f = data.fuel || 0;
@@ -157,50 +149,6 @@ function updateOperationsSection(data) {
         fuelEl.className  = f > 30 ? 'st-ok' : f > 15 ? 'st-warn' : 'st-err';
     }
 
-    // Pass data CBM ke fungsi renderHealthScore
-    renderHealthScore(data, cbmData);
-}
-
-function renderHealthScore(engineData, cbmData) {
-    const container = document.getElementById('systemHealthContainer');
-    if (!container) return;
-
-    let health = 100;
-    const warnings = [];
-
-    // Jika data CBM tersedia, gunakan skor CBM
-    if (cbmData && typeof cbmData.overallHealth !== 'undefined') {
-        health = Math.round(cbmData.overallHealth);
-        if (cbmData.components) {
-            Object.values(cbmData.components).forEach(comp => {
-                if (comp.status === 'critical') warnings.push({ label: `Kritis: ${comp.name || 'Sistem'}`, cls: 'danger' });
-                else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${comp.name || 'Sistem'}`, cls: 'warn' });
-            });
-        }
-    } else {
-        // Fallback jika CBM gagal diload
-        health = calculateHealth(engineData);
-        const temp = engineData.coolant || engineData.temp || 0;
-        if (temp > 95) warnings.push({ label: 'Suhu Kritis', cls: 'danger' });
-        if ((engineData.fuel || 0) < 20) warnings.push({ label: 'BBM Hampir Habis', cls: 'warn' });
-    }
-
-    const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
-    const pillsHTML = warnings.length
-        ? warnings.map(w => `<span class="status-pill ${w.cls}">${w.label}</span>`).join('')
-        : `<span class="status-pill ok"><i class="fas fa-check"></i> Kondisi Mesin Ideal (CBM)</span>`;
-
-    container.innerHTML = `
-        <div class="health-ring" style="--hc:${color};">
-            <div class="health-ring-value" style="color:${color};">${health}%</div>
-            <div class="health-ring-label">Health Score</div>
-        </div>
-        <div class="health-warning-wrap">${pillsHTML}</div>
-    `;
-}
-
-
-    // Analytics: System Health rows (samakan logika dengan dashboard/index)
     const applyHealth = (id, value, min, max) => {
         const el = document.getElementById(id);
         if (!el) return;
@@ -214,16 +162,14 @@ function renderHealthScore(engineData, cbmData) {
     applyHealth('st-fuel', data.fuel,20,  100);
     applyHealth('st-afr',  data.afr, 10,  18);
 
-    // Today's active time (async, non-blocking)
-    fetch('/api/generator-active-time/stats?hours=24')
-        .then(r => r.json())
-        .then(sd => {
-            if (!sd?.success) return;
-            const el = document.getElementById('engToday');
-            if (el) el.innerText = formatActiveHours(sd.data.totalDurationHours || 0);
-        })
-        .catch(() => {});
+    renderHealthScore(data, cbmData);
+}
 
+function healthStatus(value, min, max) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return { text: '--', cls: 'st-err' };
+    if (v >= min && v <= max) return { text: 'Normal', cls: 'st-ok' };
+    return { text: v < min ? 'Low' : 'High', cls: 'st-err' };
 }
 
 function calculateHealth(data) {
@@ -245,7 +191,7 @@ function renderHealthScore(engineData, cbmData) {
     let health = 100;
     const warnings = [];
 
-    // Jika data CBM tersedia, gunakan skor CBM
+    // Prioritaskan skor dari sistem analitik CBM
     if (cbmData && typeof cbmData.overallHealth !== 'undefined') {
         health = Math.round(cbmData.overallHealth);
         if (cbmData.components) {
@@ -255,45 +201,24 @@ function renderHealthScore(engineData, cbmData) {
             });
         }
     } else {
-        // Fallback jika CBM gagal diload
+        // Fallback
         health = calculateHealth(engineData);
         const temp = engineData.coolant || engineData.temp || 0;
         if (temp > 95) warnings.push({ label: 'Suhu Kritis', cls: 'danger' });
+        else if (temp > 85) warnings.push({ label: 'Suhu Tinggi', cls: 'warn' });
         if ((engineData.fuel || 0) < 20) warnings.push({ label: 'BBM Hampir Habis', cls: 'warn' });
+        if (engineData.volt > 0 && (engineData.volt < 190 || engineData.volt > 250)) warnings.push({ label: 'Tegangan Tidak Normal', cls: 'danger' });
     }
 
     const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
     const pillsHTML = warnings.length
         ? warnings.map(w => `<span class="status-pill ${w.cls}">${w.label}</span>`).join('')
-        : `<span class="status-pill ok"><i class="fas fa-check"></i> Kondisi Mesin Ideal (CBM)</span>`;
+        : `<span class="status-pill ok"><i class="fas fa-check"></i> Kondisi Mesin Ideal</span>`;
 
     container.innerHTML = `
         <div class="health-ring" style="--hc:${color};">
             <div class="health-ring-value" style="color:${color};">${health}%</div>
             <div class="health-ring-label">Health Score</div>
-        </div>
-        <div class="health-warning-wrap">${pillsHTML}</div>
-    `;
-}
-
-
-function renderHealthScoreFromCbm(analysis) {
-    const container = document.getElementById('systemHealthContainer');
-    if (!container) return;
-
-    const score = Math.max(0, Math.min(100, Number(analysis.healthScore || 0)));
-    const status = (analysis.healthStatus || '').toUpperCase();
-    const color = score >= 80 ? '#10b981' : score >= 55 ? '#f59e0b' : '#ef4444';
-
-    const findings = Array.isArray(analysis.findings) ? analysis.findings.slice(0, 3) : [];
-    const pillsHTML = findings.length
-        ? findings.map(f => `<span class="status-pill ${f.level === 'critical' ? 'danger' : 'warn'}">${f.component || 'Komponen'}: ${f.action || 'Perlu perhatian'}</span>`).join('')
-        : `<span class="status-pill ok"><i class="fas fa-check"></i> ${status || 'AMAN'}</span>`;
-
-    container.innerHTML = `
-        <div class="health-ring" style="--hc:${color};">
-            <div class="health-ring-value" style="color:${color};">${score}%</div>
-            <div class="health-ring-label">Health Score (CBM)</div>
         </div>
         <div class="health-warning-wrap">${pillsHTML}</div>
     `;
@@ -340,7 +265,7 @@ function renderAlertList(alerts) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  RECENT ACTIVITY (active-time sessions)
+//  RECENT ACTIVITY (Sesi Aktif + Maintenance Selesai)
 // ════════════════════════════════════════════════════════════════════════════
 function renderRecentActivity(activities, maintenanceList) {
     const container = document.getElementById('recentActivityContainer');
@@ -348,7 +273,7 @@ function renderRecentActivity(activities, maintenanceList) {
 
     let combined = [];
 
-    if (activities) {
+    if (activities && Array.isArray(activities)) {
         combined = activities.map(act => ({
             type: 'session',
             date: new Date(act.startedAt),
@@ -357,18 +282,16 @@ function renderRecentActivity(activities, maintenanceList) {
         }));
     }
 
-    if (maintenanceList) {
-        // Ambil hanya yang statusnya completed
+    if (maintenanceList && Array.isArray(maintenanceList)) {
         const completed = maintenanceList.filter(m => (m.status || '').toLowerCase() === 'completed');
         combined = combined.concat(completed.map(m => ({
             type: 'maintenance',
             date: new Date(m.completedAt || m.updatedAt || m.createdAt),
             title: m.task || 'Tugas Maintenance',
-            desc: 'Maintenance selesai dilakukan'
+            desc: 'Telah diselesaikan oleh teknisi'
         })));
     }
 
-    // Urutkan paling baru di atas
     combined.sort((a, b) => b.date - a.date);
 
     if (!combined.length) {
@@ -388,7 +311,7 @@ function renderRecentActivity(activities, maintenanceList) {
         return `
         <div class="list-row">
             <div style="display:flex; gap:8px; align-items:center;">
-                <i class="${isMaint ? 'fas fa-tools' : 'fas fa-calendar-day'}" style="color:${isMaint ? '#10b981' : '#1745a5'}; font-size:14px;"></i>
+                <i class="${isMaint ? 'fas fa-tools' : 'fas fa-calendar-day'}" style="color:${isMaint ? '#10b981' : '#1745a5'}; width:16px; text-align:center;"></i>
                 <div style="display:flex;flex-direction:column;gap:2px;">
                     <span style="font-weight:600;color:#1e293b;font-size:13px;">${item.title}</span>
                     <span style="font-size:11px;color:#64748b;">${item.desc}</span>
@@ -396,29 +319,39 @@ function renderRecentActivity(activities, maintenanceList) {
             </div>
             <div style="text-align:right;">
                 <span style="font-size:11px; font-weight:600; color:#475569; display:block;">${dateStr}</span>
-                <span style="font-size:11px; color:#64748b; display:block;">${timeStr}</span>
+                <span style="font-size:11px; color:#64748b; display:block;">${timeStr} WIB</span>
             </div>
         </div>`;
     }).join('');
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  MAINTENANCE (Hanya Scheduled/Pending)
+// ════════════════════════════════════════════════════════════════════════════
 function updateMaintenanceSection(data) {
     const container = document.getElementById('maintenanceContainer');
     if (!container) return;
 
     if (!Array.isArray(data) || !data.length) {
-        container.innerHTML = `<div class="empty-state"><p>Tidak ada jadwal maintenance</p></div>`;
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-tools" style="font-size:1.8rem; color:#94a3b8;"></i>
+                <p>Tidak ada jadwal maintenance</p>
+            </div>`;
         return;
     }
 
-    // Filter yang terjadwal dan urutkan berdasarkan yang paling baru dibuat (terbaru)
     const upcoming = data
         .filter(m => (m.status || '').toLowerCase() === 'scheduled' || (m.status || '').toLowerCase() === 'pending')
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) // Terbaru di atas
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .slice(0, 4);
 
     if (!upcoming.length) {
-        container.innerHTML = `<div class="empty-state"><p>Semua maintenance telah selesai</p></div>`;
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-check-circle" style="color:#10b981; font-size:1.8rem;"></i>
+                <p>Semua maintenance telah selesai</p>
+            </div>`;
         return;
     }
 
@@ -431,7 +364,7 @@ function updateMaintenanceSection(data) {
         return `
         <div class="maintenance-item">
             <div class="maint-header">
-                <span class="maint-task">${m.task || 'Task'}</span>
+                <span class="maint-task">${m.task || 'Tugas Maintenance'}</span>
                 ${m.priority ? `<span class="maint-badge" style="background:${prioColor}20;color:${prioColor}">${m.priority}</span>` : ''}
             </div>
             <div class="maint-meta">
@@ -442,53 +375,57 @@ function updateMaintenanceSection(data) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  ANALYTICS — Active Time Bar Chart
+//  ANALYTICS — Active Time Bar Chart (Real Data from History)
 // ════════════════════════════════════════════════════════════════════════════
-
-function formatActiveHours(hours) {
-    const safe = Number(hours || 0);
-    const h = Math.floor(safe);
-    const m = Math.round((safe - h) * 60);
-    if (h === 0) return `${m}m`;
-    return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
-
-
-function dayLabelWib(dateStr) {
-    const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
-    const d = new Date(dateStr + 'T12:00:00+07:00');
-    return days[d.getDay()];
-}
-
-function healthStatus(value, min, max) {
-    const v = Number(value);
-    if (!Number.isFinite(v)) return { text: '--', cls: 'st-err' };
-    if (v >= min && v <= max) return { text: 'Normal', cls: 'st-ok' };
-    return { text: v < min ? 'Low' : 'High', cls: 'st-err' };
-}
-function getWibDayKey(offsetDay = 0) {
-    const WIB_OFFSET_MS = 7 * 3600 * 1000;
-    const d = new Date(Date.now() + WIB_OFFSET_MS + offsetDay * 86400000);
-    return d.toISOString().slice(0, 10);
-}
-
-function updateActiveTimeChart() {
+function updateActiveTimeChart(historyRows) {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) return;
 
     const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const dayMap = {}; 
+    const WIB_OFFSET = 7 * 60 * 60 * 1000;
+    const now = new Date();
+
+    // Inisialisasi map untuk 7 hari terakhir
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
+        const key = d.toISOString().slice(0, 10);
+        dayMap[key] = 0;
+    }
+
+    // Akumulasi durasi mesin aktif berdasarkan data aktual dari DB
+    if (historyRows && Array.isArray(historyRows)) {
+        historyRows.forEach(r => {
+            const start = new Date(r.startedAt);
+            const end   = r.endedAt ? new Date(r.endedAt) : now;
+            
+            // Konversi waktu mulai ke WIB untuk kunci (key) hari
+            const key = new Date(start.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
+
+            if (dayMap.hasOwnProperty(key)) {
+                // Hitung durasi jam
+                const durHours = Math.max(0, end - start) / 3600000;
+                dayMap[key] += durHours;
+            }
+        });
+    }
+
     const labels = [];
     const dataPoints = [];
-    const today = new Date();
-    
-    // Menghasilkan data mock yang terlihat natural menggunakan generator berdasarkan tanggal
-    for (let i = 6; i >= 0; i--) {
-        const d = new Date(today.getTime() - i * 86400000);
+    const todayKey = new Date(now.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
+    let todayHours = 0;
+
+    // Masukkan data ke array untuk Chart.js
+    Object.keys(dayMap).sort().forEach(key => {
+        // Tentukan hari menggunakan string dengan zona waktu tetap
+        const d = new Date(key + 'T12:00:00+07:00'); 
         labels.push(days[d.getDay()]);
-        const seed = d.getDate();
-        const fakeHours = (seed % 4) + 1 + (seed % 3) * 0.5; // Angka antara 1 hingga 5.5
-        dataPoints.push(parseFloat(fakeHours.toFixed(1)));
-    }
+        
+        const val = parseFloat(dayMap[key].toFixed(2));
+        dataPoints.push(val);
+        
+        if (key === todayKey) todayHours = val;
+    });
 
     if (activeChart) activeChart.destroy();
 
@@ -509,11 +446,12 @@ function updateActiveTimeChart() {
             maintainAspectRatio: false,
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: ctx => `${ctx.parsed.y} jam aktif` } }
+                tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} jam aktif` } }
             },
             scales: {
                 y: {
-                    beginAtZero: true, max: 8,
+                    beginAtZero: true,
+                    suggestedMax: 8,
                     ticks: { callback: v => `${v}h` },
                     grid: { color: 'rgba(0,0,0,0.05)' }
                 },
@@ -521,6 +459,14 @@ function updateActiveTimeChart() {
             }
         }
     });
+
+    // Update Text "Hari Ini" agar akurat berdasarkan hitungan kalkulasi di atas
+    const tEl = document.getElementById('engToday');
+    if (tEl) {
+        const h = Math.floor(todayHours);
+        const m = Math.round((todayHours - h) * 60);
+        tEl.innerText = m > 0 ? `${h}j ${m}m` : `${h}j 0m`;
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -552,7 +498,6 @@ function updatePerformanceSection(data) {
         ).join('');
     }
 
-    // Radar chart
     renderSystemRadar({
         volt:  p.voltage?.value     || 0,
         freq:  p.frequency?.value   || 0,
@@ -567,7 +512,6 @@ function renderSystemRadar({ volt, freq, fuel, temp, power }) {
     if (!ctx) return;
     if (systemChart) systemChart.destroy();
 
-    // Normalize each param to 0-100 (higher = better)
     const normVolt  = Math.min(100, Math.max(0, volt  > 0 ? ((volt - 180) / (250 - 180)) * 100  : 0));
     const normFreq  = Math.min(100, Math.max(0, freq  > 0 ? (1 - Math.abs(freq - 50) / 10) * 100 : 0));
     const normFuel  = Math.min(100, Math.max(0, fuel));
@@ -640,10 +584,6 @@ function buildSpecList(rows) {
         `<li><span class="spec-label">${label}</span><span class="spec-val">${val}</span></li>`
     ).join('')}</ul>`;
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-//  MAINTENANCE
-// ════════════════════════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════════════════════════
 //  INIT
