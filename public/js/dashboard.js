@@ -322,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderClock = () => {
         const el = document.getElementById('clock');
-        if(el) el.innerText = new Date().toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
+        if(el) el.innerText = new Date().toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'} ) + ' WIB';
     };
 
     renderClock();
