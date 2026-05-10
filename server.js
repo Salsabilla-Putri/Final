@@ -129,9 +129,14 @@ const activeTimeHistorySchema = new mongoose.Schema({
     startedAt: { type: Date, required: true, index: true },
     endedAt: { type: Date, default: null, index: true },
     durationMs: { type: Number, default: 0 },
-    source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' }
+    source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' },
+    calc: {
+        rpmThreshold: { type: Number, default: 0 },
+        rule: { type: String, default: 'status=RUNNING OR rpm>threshold' },
+        sampledAt: { type: Date, default: Date.now }
+    }
 }, { timestamps: true });
-const ActiveTimeHistory = mongoose.model('ActiveTimeHistory', activeTimeHistorySchema);
+const ActiveTimeHistory = mongoose.models.ActiveTimeHistory || mongoose.model('ActiveTimeHistory', activeTimeHistorySchema, 'activetimehistories');
 
 
 const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || 'onboarding@resend.dev';
@@ -398,7 +403,8 @@ let activeSessions = new Map();
 async function syncActiveTimeHistory(data) {
     const status = String(data?.status || '').toUpperCase();
     const rpm = Number(data?.rpm || 0);
-    const isRunning = status === 'RUNNING' || rpm > 0;
+    const rpmThreshold = 0;
+    const isRunning = status === 'RUNNING' || rpm > rpmThreshold;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const eventTime = data?.timestamp ? new Date(data.timestamp) : new Date();
     const key = `${deviceId}`;
@@ -406,7 +412,8 @@ async function syncActiveTimeHistory(data) {
 
     if (isRunning && !startedAt) {
         activeSessions.set(key, eventTime);
-        await ActiveTimeHistory.create({ deviceId, startedAt: eventTime, source: 'mqtt' });
+        await ActiveTimeHistory.create({ deviceId, startedAt: eventTime, source: 'mqtt',
+            calc: { rpmThreshold, sampledAt: eventTime } });
         return;
     }
 
