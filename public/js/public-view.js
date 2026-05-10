@@ -51,13 +51,14 @@ function setLastUpdated() {
 async function fetchDashboardData() {
     try {
         // 1. Latest engine sensor data (realtime from MQTT memory)
-        const [engineRes, alertsRes, specsRes, historyRes, maintenanceRes, dashRes] = await Promise.allSettled([
+        const [engineRes, alertsRes, specsRes, historyRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
             fetch('/api/engine-data/latest'),
             fetch('/api/alerts?limit=10'),
             fetch('/api/generator-specs'),
             fetch('/api/generator-active-time/history?limit=30'),
             fetch('/api/maintenance'),
-            fetch('/api/public/dashboard')
+            fetch('/api/public/dashboard'),
+            fetch('/api/cbm/analysis?hours=24')
         ]);
 
         const engineData = engineRes.status === 'fulfilled'
@@ -86,20 +87,30 @@ async function fetchDashboardData() {
         const historyData = historyRes.status === 'fulfilled'
             ? await historyRes.value.json().catch(() => null) : null;
 
-        if (historyData?.success) {
-            renderRecentActivity(historyData.data);
-            updateActiveTimeChart(historyData.data);
-        }
+        const historyRows = historyData?.success ? historyData.data : [];
+
 
         const maintenanceData = maintenanceRes.status === 'fulfilled'
             ? await maintenanceRes.value.json().catch(() => null) : null;
 
-        if (maintenanceData?.success) updateMaintenanceSection(maintenanceData.data);
+        const maintenanceRows = maintenanceData?.success ? maintenanceData.data : [];
+        renderRecentActivity(historyRows, maintenanceRows);
+        updateActiveTimeChart(historyRows);
+        updateMaintenanceSection(maintenanceRows);
 
         const dashData = dashRes.status === 'fulfilled'
             ? await dashRes.value.json().catch(() => null) : null;
 
         if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
+
+        const cbmData = cbmRes.status === 'fulfilled'
+            ? await cbmRes.value.json().catch(() => null) : null;
+
+        if (cbmData?.success && cbmData.analysis) {
+            renderHealthScoreFromCbm(cbmData.analysis);
+        } else if (engineData?.success && engineData.data) {
+            renderHealthScore(engineData.data);
+        }
 
         setConnectionStatus(true);
         setLastUpdated();
@@ -179,8 +190,6 @@ function updateOperationsSection(data) {
         })
         .catch(() => {});
 
-    // Health score
-    renderHealthScore(data);
 }
 
 function calculateHealth(data) {
@@ -218,6 +227,29 @@ function renderHealthScore(data) {
         <div class="health-ring" style="--hc:${color};">
             <div class="health-ring-value" style="color:${color};">${health}%</div>
             <div class="health-ring-label">Health Score</div>
+        </div>
+        <div class="health-warning-wrap">${pillsHTML}</div>
+    `;
+}
+
+
+function renderHealthScoreFromCbm(analysis) {
+    const container = document.getElementById('systemHealthContainer');
+    if (!container) return;
+
+    const score = Math.max(0, Math.min(100, Number(analysis.healthScore || 0)));
+    const status = (analysis.healthStatus || '').toUpperCase();
+    const color = score >= 80 ? '#10b981' : score >= 55 ? '#f59e0b' : '#ef4444';
+
+    const findings = Array.isArray(analysis.findings) ? analysis.findings.slice(0, 3) : [];
+    const pillsHTML = findings.length
+        ? findings.map(f => `<span class="status-pill ${f.level === 'critical' ? 'danger' : 'warn'}">${f.component || 'Komponen'}: ${f.action || 'Perlu perhatian'}</span>`).join('')
+        : `<span class="status-pill ok"><i class="fas fa-check"></i> ${status || 'AMAN'}</span>`;
+
+    container.innerHTML = `
+        <div class="health-ring" style="--hc:${color};">
+            <div class="health-ring-value" style="color:${color};">${score}%</div>
+            <div class="health-ring-label">Health Score (CBM)</div>
         </div>
         <div class="health-warning-wrap">${pillsHTML}</div>
     `;
@@ -266,11 +298,21 @@ function renderAlertList(alerts) {
 // ════════════════════════════════════════════════════════════════════════════
 //  RECENT ACTIVITY (active-time sessions)
 // ════════════════════════════════════════════════════════════════════════════
-function renderRecentActivity(activities) {
+function renderRecentActivity(activities, maintenanceLogs = []) {
     const container = document.getElementById('recentActivityContainer');
     if (!container) return;
 
-    if (!activities || activities.length === 0) {
+    const engineActivities = (activities || []).map(act => ({ type: 'engine', ts: new Date(act.startedAt), payload: act }));
+    const completedMaintenance = (maintenanceLogs || [])
+        .filter(m => ['completed', 'done'].includes((m.status || '').toLowerCase()))
+        .map(m => ({ type: 'maintenance', ts: new Date(m.completedAt || m.updatedAt || m.createdAt || m.dueDate), payload: m }));
+
+    const merged = [...engineActivities, ...completedMaintenance]
+        .filter(x => x.ts instanceof Date && !Number.isNaN(x.ts.getTime()))
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, 6);
+
+    if (!merged.length) {
         container.innerHTML = `
             <div class="empty-state">
                 <i class="fas fa-history" style="font-size:1.8rem; color:#94a3b8;"></i>
@@ -279,7 +321,13 @@ function renderRecentActivity(activities) {
         return;
     }
 
-    container.innerHTML = activities.slice(0, 6).map(act => {
+    container.innerHTML = merged.map(item => {
+        if (item.type === 'maintenance') {
+            const m = item.payload;
+            const dateStr = item.ts.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+            return `<div class="list-row"><div style="display:flex;flex-direction:column;gap:2px;"><span style="font-weight:600;color:#1e293b;font-size:13px;"><i class="fas fa-tools" style="color:#16a34a;margin-right:5px;font-size:11px;"></i>${m.task || 'Maintenance'}</span><span style="font-size:11px;color:#64748b;">${dateStr} • selesai oleh ${m.assignedTo || '-'}</span></div><div style="text-align:right;"><span class="badge-active" style="background:#dcfce7;color:#166534;"><i class="fas fa-check-circle"></i> Selesai</span></div></div>`;
+        }
+        const act = item.payload;
         const start     = new Date(act.startedAt);
         const end       = act.endedAt ? new Date(act.endedAt) : new Date();
         const durMs     = Math.max(0, end - start);
@@ -352,8 +400,8 @@ function updateActiveTimeChart(rows) {
                     data: dataPoints,
                     backgroundColor: dataPoints.map((_, i) =>
                         i === highlightIdx ? '#f97316' : 'rgba(23,69,165,0.8)'),
-                    borderRadius: 8,
-                    barPercentage: 0.55
+                    borderRadius: 6,
+                    barPercentage: 0.6
                 }]
             },
             options: {
@@ -363,13 +411,14 @@ function updateActiveTimeChart(rows) {
                     legend: { display: false },
                     tooltip: {
                         callbacks: {
-                            label: ctx => `${ctx.parsed.y.toFixed(1)} jam aktif`
+                            label: ctx => ` ${formatActiveHours(ctx.parsed.y)}`
                         }
                     }
                 },
                 scales: {
                     y: {
                         beginAtZero: true, max: 24,
+                        title: { display: true, text: 'Jam' },
                         ticks: { callback: v => `${v}h` },
                         grid: { color: 'rgba(0,0,0,0.05)' }
                     },
@@ -385,43 +434,36 @@ function updateActiveTimeChart(rows) {
         dayMap[getWibDayKey(-i)] = 0;
     }
 
-    // Try dedicated endpoint first, fallback to history rows
-    Promise.allSettled([
-        fetch('/api/daily-active-time?days=7').then(r => r.ok ? r.json() : null),
-        fetch('/api/daily-active-time/today').then(r => r.ok ? r.json() : null)
-    ]).then(([histResult, todayResult]) => {
-        const histJson  = histResult.status  === 'fulfilled' ? histResult.value  : null;
-        const todayJson = todayResult.status === 'fulfilled' ? todayResult.value : null;
-
-        if (histJson?.success && Array.isArray(histJson.data)) {
-            histJson.data.forEach(r => {
-                if (Object.prototype.hasOwnProperty.call(dayMap, r.date)) {
-                    dayMap[r.date] = r.activeHours || 0;
-                }
-            });
-        } else {
-            // Fallback: accumulate from session history
-            (rows || []).forEach(r => {
-                const start = new Date(r.startedAt);
-                const end   = r.endedAt ? new Date(r.endedAt) : new Date();
-                const key   = new Date(start.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-                if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
-                    dayMap[key] += Math.max(0, (end - start) / 3600000);
-                }
-            });
-        }
+    // Gunakan endpoint yang benar-benar tersedia di server:
+    // - history (session list)
+    // - stats?hours=24 (nilai realtime hari ini)
+    Promise.resolve().then(() => {
+        (rows || []).forEach(r => {
+            const start = new Date(r.startedAt);
+            const end   = r.endedAt ? new Date(r.endedAt) : new Date();
+            const key   = new Date(start.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+            if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
+                dayMap[key] += Math.max(0, (end - start) / 3600000);
+            }
+        });
 
         const todayKey = getWibDayKey(0);
-        if (todayJson?.success && todayJson.activeHours != null) {
-            dayMap[todayKey] = todayJson.activeHours;
-        }
+        return fetch('/api/generator-active-time/stats?hours=24')
+            .then(r => r.ok ? r.json() : null)
+            .then(todayJson => {
+                if (todayJson?.success && todayJson.data?.totalDurationHours != null) {
+                    dayMap[todayKey] = todayJson.data.totalDurationHours;
+                }
 
-        const keys = Object.keys(dayMap);
-        renderChart(
-            keys.map(dayLabelWib),
-            keys.map(k => +((dayMap[k] || 0).toFixed(2))),
-            keys.findIndex(k => k === todayKey)
-        );
+                const keys = Object.keys(dayMap);
+                renderChart(
+                    keys.map(dayLabelWib),
+                    keys.map(k => +((dayMap[k] || 0).toFixed(2))),
+                    keys.findIndex(k => k === todayKey)
+                );
+            });
+    }).catch(err => {
+        console.warn('Active-time chart fallback error:', err);
     });
 }
 
@@ -560,7 +602,7 @@ function updateMaintenanceSection(data) {
     }
 
     const upcoming = data
-        .filter(m => (m.status || '').toLowerCase() !== 'completed')
+        .filter(m => (m.status || '').toLowerCase() === 'scheduled')
         .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
         .slice(0, 4);
 
