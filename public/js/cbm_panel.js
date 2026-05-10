@@ -112,10 +112,6 @@
       </div>
     </div>
 
-    // <!-- Summary -->
-    // <div id="cbmSummaryBox"
-    //      style="background:#f8fafc;border-left:4px solid #1745a5;border-radius:0 8px 8px 0;
-    //             padding:11px 14px;margin-bottom:14px;font-size:13px;color:#334155;"></div>
 
     <!-- Findings -->
     <div style="background:#fff;border-radius:12px;padding:18px 16px;
@@ -131,24 +127,6 @@
       <div id="cbmFindingsList"></div>
     </div>
 
-    // <!-- Preventive Schedule -->
-    // <div style="background:#fff;border-radius:12px;padding:18px 16px;
-    //             border:1px solid #f1f5f9;box-shadow:0 1px 5px rgba(0,0,0,.05);">
-    //   <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-    //     <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-    //                 text-transform:uppercase;">
-    //       Jadwal Preventive Maintenance
-    //     </div>
-    //     <span id="cbmTotalHoursTag"
-    //           style="padding:2px 9px;border-radius:20px;font-size:11px;
-    //                  background:#e0e7ff;color:#3730a3;font-weight:700;"></span>
-    //   </div>
-    //   <div id="cbmPreventiveEmpty"
-    //        style="display:none;padding:14px;text-align:center;color:#94a3b8;font-size:13px;">
-    //     Tidak ada jadwal perawatan yang mendekati atau terlambat.
-    //   </div>
-    //   <div id="cbmPreventiveList"></div>
-    // </div>
 
   </div>
 </section>`;
@@ -382,8 +360,8 @@
         renderFindings(data.findings ?? []);
         renderPreventive(data.preventiveSchedule ?? [], data.totalOperatingHours ?? 0);
 
-        const summary = document.getElementById('cbmSummaryBox');
-        if (summary) summary.textContent = data.summary ?? '';
+        // const summary = document.getElementById('cbmSummaryBox');
+        // if (summary) summary.textContent = data.summary ?? '';
 
         const analyzedAt = document.getElementById('cbmAnalyzedAt');
         if (analyzedAt && data.analyzedAt) {
