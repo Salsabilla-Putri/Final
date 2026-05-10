@@ -1,41 +1,61 @@
 /**
- * public/js/cbm_panel.js
- * ============================================================
- * Condition-Based Maintenance (CBM) Panel
- *
- * Cara penggunaan:
- *  1. Tambahkan <div id="cbmPanelContainer"></div> di reports.html
- *  2. Load script SETELAH reports.js:
- *     <script src="js/cbm_panel.js"></script>
- *
- * Panel otomatis di-render dan di-refresh setiap kali:
- *  - Halaman selesai load
- *  - reports.js memanggil _triggerCbmRefresh() setelah data dimuat
- *  - Tombol "Analisis Sekarang" diklik
- *  - Tombol "+ FFT Peaks" diklik (kirim peaks ke server)
- * ============================================================
+ * public/js/cbm_panel.js  (v2 — redesigned)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Desain selaras dengan reports.css:
+ *  • Warna dominan: #1745a5 (primary)
+ *  • Card: white, border-radius 20px, shadow halus
+ *  • Finding card: left-border coloured, background PUTIH (tidak warna-warni)
+ *  • Badge: pill-shape, warna muted
+ *  • Tombol: border-radius 999px, font-weight 600
+ *  • Tabel: heading uppercase kecil, border #f1f5f9
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
-/* global selectedSensors, currentData, getReportDeviceId, fftChart */
+/* global currentData, getReportDeviceId, fftChart */
 
 (function CBMPanel() {
     'use strict';
 
     const CBM_API     = '/api/cbm/analysis';
-    const SUGGEST_API = '/api/cbm/suggestion';
+    const CONVERT_API = '/api/cbm/convert-to-task';
 
-    const LEVEL = {
-        critical: { label: 'KRITIS',  color: '#dc2626', bg: '#fef2f2', border: '#fca5a5', icon: '🔴' },
-        warn:     { label: 'WASPADA', color: '#ea580c', bg: '#fff7ed', border: '#fdba74', icon: '🟠' },
-        watch:    { label: 'PANTAU',  color: '#ca8a04', bg: '#fefce8', border: '#fde68a', icon: '🟡' },
-        ok:       { label: 'NORMAL',  color: '#16a34a', bg: '#f0fdf4', border: '#86efac', icon: '🟢' },
+    /* Severity config — hanya border & badge yang berwarna, card tetap putih */
+    const SEV = {
+        critical: {
+            borderColor: '#dc2626',
+            badgeClass:  'cbm-badge-critical',
+            dotColor:    '#dc2626',
+            label:       'Kritis',
+            icon:        'fa-circle-exclamation'
+        },
+        warn: {
+            borderColor: '#f97316',
+            badgeClass:  'cbm-badge-warn',
+            dotColor:    '#f97316',
+            label:       'Waspada',
+            icon:        'fa-triangle-exclamation'
+        },
+        watch: {
+            borderColor: '#d97706',
+            badgeClass:  'cbm-badge-watch',
+            dotColor:    '#d97706',
+            label:       'Pantau',
+            icon:        'fa-eye'
+        },
+        ok: {
+            borderColor: '#10b981',
+            badgeClass:  'cbm-badge-ok',
+            dotColor:    '#10b981',
+            label:       'Normal',
+            icon:        'fa-circle-check'
+        }
     };
 
     const URGENCY = {
-        overdue:    { label: 'TERLAMBAT', color: '#dc2626' },
-        'due-now':  { label: 'SEGERA',    color: '#ea580c' },
-        'due-soon': { label: 'MENDEKATI', color: '#ca8a04' },
-        scheduled:  { label: 'TERJADWAL', color: '#6b7280' },
+        overdue:    { label: 'Terlambat', badgeClass: 'cbm-badge-critical', barColor: '#dc2626' },
+        'due-now':  { label: 'Segera',    badgeClass: 'cbm-badge-warn',     barColor: '#f97316' },
+        'due-soon': { label: 'Mendekati', badgeClass: 'cbm-badge-watch',    barColor: '#d97706' },
+        scheduled:  { label: 'Terjadwal', badgeClass: 'cbm-badge-ok',       barColor: '#1745a5' }
     };
 
     let _loading    = false;
@@ -44,91 +64,93 @@
     // ── HTML TEMPLATE ─────────────────────────────────────────────────────────
     function buildHTML() {
         return `
-<section id="cbmPanel" style="margin-top:24px; font-family:inherit;">
+<section id="cbmPanel" style="padding:30px;">
+
+  <!-- Header ────────────────────────────────────────────── -->
   <div style="display:flex;align-items:flex-start;justify-content:space-between;
-              margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-    <div>
-      <h2 style="margin:0;font-size:17px;font-weight:700;color:#1e293b;">
-        ⚙️ Condition-Based Maintenance (CBM)
-      </h2>
-      <p style="margin:3px 0 0;font-size:12px;color:#64748b;">
-        Analisis degradasi komponen berbasis tren histori sensor &amp; FFT
-      </p>
-    </div>
+              margin-bottom:24px;flex-wrap:wrap;gap:12px;">
+    <h2 class="section-title" style="margin-bottom:0;">
+      <i class="fas fa-stethoscope"></i> Condition-Based Maintenance
+    </h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button id="cbmRefreshBtn"
-              style="padding:7px 14px;background:#1745a5;color:#fff;border:none;
-                     border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;">
+      <button id="cbmRefreshBtn" class="cbm-btn-primary">
         <i class="fas fa-sync-alt" id="cbmRefreshIcon"></i> Analisis Sekarang
       </button>
-      <button id="cbmSendFftBtn"
-              title="Kirim FFT peaks dari chart aktif ke analisis server"
-              style="padding:7px 12px;background:#0ea5e9;color:#fff;border:none;
-                     border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;">
+      <button id="cbmSendFftBtn" class="cbm-btn-secondary"
+              title="Kirim FFT peaks dari chart aktif ke analisis server">
         <i class="fas fa-wave-square"></i> + FFT Peaks
       </button>
     </div>
   </div>
 
+  <!-- Loading ────────────────────────────────────────────── -->
   <div id="cbmLoading"
-       style="display:none;padding:18px;text-align:center;color:#64748b;font-size:13px;">
-    <i class="fas fa-spinner fa-spin"></i>&nbsp; Menganalisis data sensor...
+       style="display:none;padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+    <i class="fas fa-spinner fa-spin" style="margin-right:8px;color:#1745a5;"></i>
+    Menganalisis data sensor...
   </div>
 
+  <!-- Content ────────────────────────────────────────────── -->
   <div id="cbmContent" style="display:none;">
 
-    <!-- Row 1: Health Score + Component Health -->
-    <div style="display:grid;grid-template-columns:200px 1fr;gap:14px;margin-bottom:14px;">
+    <!-- Baris 1: Health + Komponen ──────────────────────── -->
+    <div class="cbm-top-row"
+         style="display:grid;grid-template-columns:200px 1fr;gap:20px;margin-bottom:20px;">
 
-      <div style="background:#fff;border-radius:12px;padding:18px 16px;
-                  border:1px solid #f1f5f9;text-align:center;box-shadow:0 1px 5px rgba(0,0,0,.05);">
-        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-                    text-transform:uppercase;margin-bottom:10px;">Health Score</div>
-        <div style="position:relative;width:120px;height:120px;margin:0 auto 12px;">
+      <!-- Health Score -->
+      <div style="background:#fff;border-radius:20px;border:1px solid #e2e8f0;
+                  padding:24px 20px;text-align:center;box-shadow:0 4px 6px -1px rgba(0,0,0,.05);">
+        <p class="cbm-label" style="margin-bottom:16px;">Skor Kesehatan</p>
+        <div class="cbm-ring-wrap" style="margin:0 auto 14px;">
           <canvas id="cbmHealthCanvas" width="120" height="120"></canvas>
-          <div style="position:absolute;top:50%;left:50%;
-                      transform:translate(-50%,-50%);text-align:center;line-height:1.2;">
+          <div class="cbm-ring-center">
             <div id="cbmScoreNum"
-                 style="font-size:28px;font-weight:700;color:#1e293b;">--</div>
+                 style="font-size:28px;font-weight:700;color:#0f172a;line-height:1;">--</div>
             <div style="font-size:11px;color:#94a3b8;">/100</div>
           </div>
         </div>
-        <span id="cbmStatusBadge"
-              style="display:inline-block;padding:3px 12px;border-radius:20px;
-                     font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;">
-          ---
-        </span>
+        <span id="cbmStatusBadge" class="cbm-badge" style="font-size:12px;">---</span>
         <div id="cbmAnalyzedAt"
-             style="margin-top:7px;font-size:10px;color:#94a3b8;"></div>
+             style="margin-top:10px;font-size:10px;color:#94a3b8;line-height:1.5;"></div>
       </div>
 
-      <div style="background:#fff;border-radius:12px;padding:18px 16px;
-                  border:1px solid #f1f5f9;box-shadow:0 1px 5px rgba(0,0,0,.05);">
-        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-                    text-transform:uppercase;margin-bottom:12px;">Status Komponen</div>
-        <div id="cbmComponentGrid"
-             style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:7px;">
-        </div>
+      <!-- Status Komponen -->
+      <div style="background:#fff;border-radius:20px;border:1px solid #e2e8f0;
+                  padding:24px 20px;box-shadow:0 4px 6px -1px rgba(0,0,0,.05);">
+        <p class="cbm-label">Status Komponen</p>
+        <div id="cbmComponentList"></div>
       </div>
     </div>
 
+    <!-- Summary ──────────────────────────────────────────── -->
+    <div id="cbmSummaryBox" class="cbm-summary" style="margin-bottom:20px;"></div>
 
-    <!-- Findings -->
-    <div style="background:#fff;border-radius:12px;padding:18px 16px;
-                border:1px solid #f1f5f9;box-shadow:0 1px 5px rgba(0,0,0,.05);margin-bottom:14px;">
-      <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-                  text-transform:uppercase;margin-bottom:14px;">
-        Temuan &amp; Rekomendasi CBM
-      </div>
-      <div id="cbmFindingsEmpty"
-           style="display:none;padding:20px;text-align:center;color:#94a3b8;font-size:13px;">
-        ✅ Tidak ada anomali terdeteksi pada rentang waktu ini.
+    <!-- Temuan ──────────────────────────────────────────── -->
+    <div style="background:#fff;border-radius:20px;border:1px solid #e2e8f0;
+                padding:24px 20px;box-shadow:0 4px 6px -1px rgba(0,0,0,.05);margin-bottom:20px;">
+      <p class="cbm-label">Temuan &amp; Rekomendasi</p>
+      <div id="cbmFindingsEmpty" class="cbm-empty" style="display:none;">
+        <i class="fas fa-circle-check"
+           style="font-size:28px;color:#10b981;display:block;margin-bottom:10px;"></i>
+        Tidak ada anomali terdeteksi pada rentang waktu ini.
       </div>
       <div id="cbmFindingsList"></div>
     </div>
 
+    <!-- Jadwal Preventive ───────────────────────────────── -->
+    <div style="background:#fff;border-radius:20px;border:1px solid #e2e8f0;
+                padding:24px 20px;box-shadow:0 4px 6px -1px rgba(0,0,0,.05);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+        <p class="cbm-label" style="margin-bottom:0;">Jadwal Preventive Maintenance</p>
+        <span id="cbmTotalHoursTag" class="cbm-badge cbm-badge-blue"></span>
+      </div>
+      <div id="cbmPreventiveEmpty" class="cbm-empty" style="display:none;">
+        Tidak ada jadwal yang mendekati atau terlambat.
+      </div>
+      <div id="cbmPreventiveList" style="overflow-x:auto;"></div>
+    </div>
 
-  </div>
+  </div><!-- /cbmContent -->
 </section>`;
     }
 
@@ -137,14 +159,17 @@
         const canvas = document.getElementById('cbmHealthCanvas');
         if (!canvas) return;
         const ctx   = canvas.getContext('2d');
-        const cx = 60, cy = 60, r = 52, lw = 10;
+        const cx = 60, cy = 60, r = 50, lw = 9;
         const start = -Math.PI / 2;
         const end   = start + (score / 100) * 2 * Math.PI;
-        const color = score >= 80 ? '#16a34a' : score >= 55 ? '#ea580c' : '#dc2626';
+        /* Warna ring mengikuti primary kecuali kondisi merah */
+        const color = score >= 80 ? '#1745a5' : score >= 55 ? '#f97316' : '#dc2626';
 
         ctx.clearRect(0, 0, 120, 120);
+        /* Track */
         ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-        ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = lw; ctx.stroke();
+        ctx.strokeStyle = '#f1f5f9'; ctx.lineWidth = lw; ctx.stroke();
+        /* Progress */
         ctx.beginPath(); ctx.arc(cx, cy, r, start, end);
         ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke();
 
@@ -153,33 +178,37 @@
     }
 
     function renderStatusBadge(status) {
-        const badge  = document.getElementById('cbmStatusBadge');
+        const badge = document.getElementById('cbmStatusBadge');
         if (!badge) return;
-        const colors = {
-            AMAN:    { bg: '#dcfce7', color: '#15803d' },
-            WASPADA: { bg: '#fef9c3', color: '#a16207' },
-            BAHAYA:  { bg: '#fee2e2', color: '#b91c1c' }
+        const map = {
+            AMAN:    { cls: 'cbm-badge-ok',       text: '● Aman'    },
+            WASPADA: { cls: 'cbm-badge-watch',     text: '● Waspada' },
+            BAHAYA:  { cls: 'cbm-badge-critical',  text: '● Bahaya'  }
         };
-        const c = colors[status] || { bg: '#e2e8f0', color: '#475569' };
-        badge.textContent = status;
-        badge.style.background = c.bg;
-        badge.style.color = c.color;
+        const m = map[status] || { cls: 'cbm-badge-blue', text: status };
+        badge.className = `cbm-badge ${m.cls}`;
+        badge.textContent = m.text;
     }
 
-    // ── COMPONENT HEALTH ──────────────────────────────────────────────────────
-    function renderComponentHealth(componentHealth) {
-        const grid = document.getElementById('cbmComponentGrid');
-        if (!grid) return;
-        grid.innerHTML = Object.entries(componentHealth).map(([comp, level]) => {
-            const m = LEVEL[level] || LEVEL.ok;
+    // ── COMPONENT LIST (compact, no coloured tiles) ───────────────────────────
+    function renderComponentList(componentHealth) {
+        const list = document.getElementById('cbmComponentList');
+        if (!list) return;
+
+        if (!Object.keys(componentHealth).length) {
+            list.innerHTML = '<p class="cbm-empty">Data komponen belum tersedia.</p>';
+            return;
+        }
+
+        list.innerHTML = Object.entries(componentHealth).map(([comp, level]) => {
+            const s = SEV[level] || SEV.ok;
             return `
-            <div style="display:flex;align-items:center;gap:7px;padding:7px 9px;
-                        background:${m.bg};border-radius:8px;border:1px solid ${m.border};">
-                <span style="font-size:14px;">${m.icon}</span>
-                <div>
-                    <div style="font-size:11px;font-weight:600;color:#1e293b;">${comp}</div>
-                    <div style="font-size:10px;color:${m.color};font-weight:700;">${m.label}</div>
-                </div>
+            <div class="cbm-comp-item">
+                <div class="cbm-comp-dot" style="background:${s.dotColor};"></div>
+                <span class="cbm-comp-name">${comp}</span>
+                <span class="cbm-badge ${s.badgeClass}" style="font-size:10px;">
+                    ${s.label}
+                </span>
             </div>`;
         }).join('');
     }
@@ -196,71 +225,71 @@
         empty.style.display = 'none';
 
         list.innerHTML = findings.map((f, idx) => {
-            const m        = LEVEL[f.level] || LEVEL.ok;
-            const isRising = (f.trend?.slopePerHour ?? 0) >= 0;
+            const s       = SEV[f.level] || SEV.ok;
+            const isUp    = (f.trend?.slopePerHour ?? 0) >= 0;
             const slopeAbs = Math.abs(f.trend?.slopePerHour ?? 0).toFixed(3);
+            const trendCls = isUp ? 'cbm-trend-up' : 'cbm-trend-down';
+            const trendTxt = `${isUp ? '▲' : '▼'} ${slopeAbs}/jam`;
+
+            /* Chip-chip statistik */
+            const chips = f.sensor !== 'rpm_fft' ? `
+                <span class="cbm-stat-chip">
+                    Sensor: <b>${f.sensor?.toUpperCase()}</b>
+                </span>
+                <span class="cbm-stat-chip">
+                    Terkini: <b>${f.trend?.latest ?? '--'}</b>
+                </span>
+                <span class="cbm-stat-chip ${trendCls}">
+                    Tren: <b>${trendTxt}</b>
+                </span>
+                <span class="cbm-stat-chip">
+                    R² <b>${f.trend?.r2 ?? '--'}</b>
+                </span>
+                <span class="cbm-stat-chip">
+                    CV <b>${f.trend?.cv ?? '--'}%</b>
+                </span>
+                <span class="cbm-stat-chip">
+                    Keyakinan <b>${f.confidence ?? '--'}%</b>
+                </span>` : `
+                <span class="cbm-stat-chip">
+                    <i class="fas fa-wave-square" style="color:#1745a5;"></i>
+                    Sumber: FFT Spectrum Analysis
+                </span>`;
 
             return `
-            <div class="cbm-finding-card" style="border:1px solid ${m.border};border-radius:10px;padding:13px 15px;
-                        margin-bottom:9px;background:${m.bg};">
-              <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-                <div style="flex:1;min-width:200px;">
-                  <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;flex-wrap:wrap;">
-                    <span>${m.icon}</span>
-                    <span style="font-weight:700;font-size:13px;color:#1e293b;">${f.component}</span>
-                    <span style="padding:2px 8px;border-radius:20px;font-size:11px;
-                                 background:${m.color}22;color:${m.color};font-weight:700;">${m.label}</span>
-                    <span style="padding:2px 8px;border-radius:20px;font-size:11px;
-                                 background:#e0e7ff;color:#3730a3;">
-                        ${f.type || 'Corrective'} · ${(f.priority || 'MED').toUpperCase()}
-                    </span>
-                  </div>
-                  <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:3px;">
-                    ${f.action}
-                  </div>
-                  <div style="font-size:12px;color:#64748b;margin-bottom:8px;">${f.details}</div>
-                  ${f.sensor !== 'rpm_fft' ? `
-                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                    <span style="font-size:11px;color:#94a3b8;">Sensor: <b style="color:#475569;">${f.sensor?.toUpperCase()}</b></span>
-                    <span style="font-size:11px;color:#94a3b8;">Terkini: <b style="color:#475569;">${f.trend?.latest ?? '--'}</b></span>
-                    <span style="font-size:11px;color:${isRising ? '#dc2626' : '#16a34a'};">
-                        ${isRising ? '▲' : '▼'} ${slopeAbs}/jam
-                    </span>
-                    <span style="font-size:11px;color:#94a3b8;">R²: <b style="color:#475569;">${f.trend?.r2 ?? '--'}</b></span>
-                    <span style="font-size:11px;color:#94a3b8;">CV: <b style="color:#475569;">${f.trend?.cv ?? '--'}%</b></span>
-                    <span style="font-size:11px;color:#94a3b8;">Keyakinan: <b style="color:#475569;">${f.confidence ?? '--'}%</b></span>
-                  </div>` : `
-                  <span style="font-size:11px;color:#64748b;">Sumber: FFT Spectrum Analysis</span>`}
+            <div class="cbm-finding cbm-finding-${f.level}"
+                 style="border-left-color:${s.borderColor};">
+              <div style="flex:1;min-width:200px;">
+                <div style="display:flex;align-items:center;gap:8px;
+                            margin-bottom:6px;flex-wrap:wrap;">
+                  <i class="fas ${s.icon}" style="color:${s.borderColor};"></i>
+                  <span style="font-weight:700;font-size:14px;color:#0f172a;">${f.component}</span>
+                  <span class="cbm-badge ${s.badgeClass}">${s.label}</span>
+                  <span class="cbm-badge" style="background:#f8fafc;color:#475569;">
+                    ${f.type || 'Corrective'}
+                  </span>
+                  <span class="cbm-badge" style="background:#f8fafc;color:#475569;">
+                    ${(f.priority || 'medium').toUpperCase()}
+                  </span>
                 </div>
-                <div style="display:flex;gap:6px;align-items:flex-start;">
-                    <button class="cbm-approve-btn" data-idx="${idx}"
-                            style="padding:7px 12px;background:#16a34a;color:#fff;border:none;
-                                   border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
-                                   white-space:nowrap;">✅ Setujui</button>
-                    <button class="cbm-reject-btn" data-idx="${idx}"
-                            style="padding:7px 12px;background:#ef4444;color:#fff;border:none;
-                                   border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
-                                   white-space:nowrap;">❌ Tolak</button>
-                </div>
+                <p style="font-size:13px;font-weight:600;color:#1e293b;margin:0 0 3px;">
+                  ${f.action}
+                </p>
+                <p style="font-size:12px;color:#64748b;margin:0 0 8px;line-height:1.5;">
+                  ${f.details}
+                </p>
+                <div class="cbm-stat-row">${chips}</div>
               </div>
+              <button class="cbm-btn-action cbm-create-task-btn"
+                      data-idx="${idx}">
+                + Buat Task
+              </button>
             </div>`;
         }).join('');
 
-        list.querySelectorAll('.cbm-approve-btn').forEach(btn => {
+        list.querySelectorAll('.cbm-create-task-btn').forEach(btn => {
             btn.addEventListener('click', async function () {
-                const finding = findings[parseInt(this.dataset.idx, 10)];
-                await handleApproveFinding(finding, this);
-            });
-        });
-        list.querySelectorAll('.cbm-reject-btn').forEach(btn => {
-            btn.addEventListener('click', function () {
-                const card = this.closest('.cbm-finding-card');
-                if (card) card.remove();
-                // Jika semua kartu hilang, tampilkan pesan kosong
-                if (!list.querySelector('.cbm-finding-card')) {
-                    const empty = document.getElementById('cbmFindingsEmpty');
-                    if (empty) empty.style.display = 'block';
-                }
+                await handleCreateTask(findings[parseInt(this.dataset.idx, 10)], this);
             });
         });
     }
@@ -280,53 +309,41 @@
         empty.style.display = 'none';
 
         list.innerHTML = `
-        <table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead><tr style="background:#f8fafc;">
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:left;border-bottom:1px solid #f1f5f9;">Komponen</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:left;border-bottom:1px solid #f1f5f9;">Tugas</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:center;border-bottom:1px solid #f1f5f9;">Interval</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:center;border-bottom:1px solid #f1f5f9;">Sisa Jam</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:center;border-bottom:1px solid #f1f5f9;">Status</th>
-            <th style="padding:7px 10px;border-bottom:1px solid #f1f5f9;"></th>
+        <table class="cbm-tbl">
+          <thead><tr>
+            <th>Komponen</th>
+            <th>Tugas</th>
+            <th style="text-align:center;">Interval</th>
+            <th style="text-align:center;">Sisa Jam</th>
+            <th style="text-align:center;">Status</th>
+            <th></th>
           </tr></thead>
           <tbody>
             ${schedule.map((s, idx) => {
-                const um       = URGENCY[s.urgency] || URGENCY.scheduled;
-                const barColor = s.urgency === 'overdue'   ? '#dc2626'
-                               : s.urgency === 'due-now'   ? '#ea580c'
-                               : s.urgency === 'due-soon'  ? '#ca8a04' : '#16a34a';
-                const pct      = Math.min(100, s.percentDue ?? 0);
+                const u   = URGENCY[s.urgency] || URGENCY.scheduled;
+                const pct = Math.min(100, s.percentDue ?? 0);
                 return `
-                <tr style="border-top:1px solid #f1f5f9;">
-                  <td style="padding:9px 10px;font-weight:600;color:#374151;">${s.component}</td>
-                  <td style="padding:9px 10px;color:#475569;">${s.task}</td>
-                  <td style="padding:9px 10px;text-align:center;color:#64748b;">${s.intervalHours} jam</td>
-                  <td style="padding:9px 10px;text-align:center;">
-                    <div style="font-size:12px;${s.hoursRemaining <= 0 ? 'font-weight:700;color:#dc2626;' : 'color:#374151;'}">
-                        ${s.hoursRemaining <= 0 ? 'OVERDUE' : s.hoursRemaining + ' jam'}
+                <tr>
+                  <td style="font-weight:600;color:#1e293b;">${s.component}</td>
+                  <td>${s.task}</td>
+                  <td style="text-align:center;color:#64748b;">${s.intervalHours} jam</td>
+                  <td style="text-align:center;">
+                    <div style="font-size:12px;font-weight:${s.hoursRemaining <= 0 ? 700 : 400};
+                                color:${s.hoursRemaining <= 0 ? '#dc2626' : '#334155'};">
+                      ${s.hoursRemaining <= 0 ? 'Overdue' : s.hoursRemaining + ' jam'}
                     </div>
-                    <div style="background:#e2e8f0;border-radius:4px;height:4px;
-                                margin-top:3px;width:70px;margin-left:auto;margin-right:auto;">
-                        <div style="background:${barColor};height:4px;border-radius:4px;width:${pct}%;"></div>
+                    <div class="cbm-progress" style="margin-left:auto;margin-right:auto;">
+                      <div class="cbm-progress-fill"
+                           style="width:${pct}%;background:${u.barColor};"></div>
                     </div>
                   </td>
-                  <td style="padding:9px 10px;text-align:center;">
-                    <span style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;
-                                 background:${um.color}22;color:${um.color};">
-                        ${um.label}
-                    </span>
+                  <td style="text-align:center;">
+                    <span class="cbm-badge ${u.badgeClass}">${u.label}</span>
                   </td>
-                  <td style="padding:9px 10px;">
-                    <button class="cbm-prev-approve-btn" data-prev-idx="${idx}"
-                            style="padding:4px 9px;background:#16a34a;color:#fff;
-                                   border:none;border-radius:5px;
-                                   cursor:pointer;font-size:11px;font-weight:600;">
-                        ✅ Setujui
+                  <td>
+                    <button class="cbm-btn-action cbm-prev-task-btn"
+                            data-prev-idx="${idx}">
+                      + Task
                     </button>
                   </td>
                 </tr>`;
@@ -334,19 +351,17 @@
           </tbody>
         </table>`;
 
-        list.querySelectorAll('.cbm-prev-approve-btn').forEach(btn => {
+        list.querySelectorAll('.cbm-prev-task-btn').forEach(btn => {
             btn.addEventListener('click', async function () {
                 const s = schedule[parseInt(this.dataset.prevIdx, 10)];
-                // Buat finding tiruan dari preventive schedule
-                const finding = {
-                    action:   s.task,
-                    details:  `Preventive berkala. Interval ${s.intervalHours} jam. Sisa ${s.hoursRemaining} jam.`,
-                    priority: s.urgency === 'overdue' ? 'high' : s.urgency === 'due-soon' ? 'medium' : 'low',
-                    type:     'Preventive',
-                    component: s.component,
-                    estimatedCost: 0
-                };
-                await handleApproveFinding(finding, this);
+                await handleCreateTask({
+                    action:    s.task,
+                    details:   `Preventive berkala. Interval ${s.intervalHours} jam. Sisa ${s.hoursRemaining} jam.`,
+                    priority:  s.urgency === 'overdue' ? 'high'
+                              : s.urgency === 'due-soon' ? 'medium' : 'low',
+                    type:      'Preventive',
+                    component: s.component
+                }, this);
             });
         });
     }
@@ -356,53 +371,62 @@
         if (!data) return;
         renderHealthRing(data.healthScore ?? 0);
         renderStatusBadge(data.overallStatus ?? '---');
-        renderComponentHealth(data.componentHealth ?? {});
+        renderComponentList(data.componentHealth ?? {});
         renderFindings(data.findings ?? []);
         renderPreventive(data.preventiveSchedule ?? [], data.totalOperatingHours ?? 0);
 
-        // const summary = document.getElementById('cbmSummaryBox');
-        // if (summary) summary.textContent = data.summary ?? '';
+        const summary = document.getElementById('cbmSummaryBox');
+        if (summary) summary.textContent = data.summary ?? '';
 
         const analyzedAt = document.getElementById('cbmAnalyzedAt');
         if (analyzedAt && data.analyzedAt) {
             const d = new Date(data.analyzedAt);
-            analyzedAt.textContent =
-                `${d.toLocaleString('id-ID')} · ${(data.dataPoints ?? 0).toLocaleString()} data pts`;
+            analyzedAt.innerHTML =
+                `${d.toLocaleString('id-ID')}<br>${(data.dataPoints ?? 0).toLocaleString('en-US')} data points`;
         }
     }
 
-    // ── APPROVE FINDING (Redirect Flow) ──────────────────────────────────────
-    async function handleApproveFinding(finding, btn) {
+    // ── CREATE TASK ───────────────────────────────────────────────────────────
+    async function handleCreateTask(finding, btn) {
         const original = btn.innerHTML;
         btn.disabled   = true;
-        btn.textContent = '⏳';
+        btn.innerHTML  = '<i class="fas fa-spinner fa-spin"></i>';
 
         try {
-            const res = await fetch(SUGGEST_API, {
+            const res = await fetch(CONVERT_API, {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify({ finding })
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json();
-            if (!json.success) throw new Error(json.error);
-
-            btn.textContent = '✅ Tersimpan';
-            // Simpan saran lengkap ke sessionStorage
-            sessionStorage.setItem('pendingCbmSuggestion', JSON.stringify(json.data));
-            // Redirect ke halaman maintenance
-            window.location.href = 'maintenance.html';
-        } catch (err) {
-            console.error('Approve finding error:', err);
-            btn.textContent = '❌ Gagal';
+            btn.innerHTML  = '<i class="fas fa-check"></i> Tersimpan';
+            btn.style.background = '#f0fdf4';
+            btn.style.color      = '#166534';
+            btn.style.borderColor = '#bbf7d0';
             setTimeout(() => {
-                btn.innerHTML = original;
-                btn.disabled = false;
+                btn.innerHTML        = original;
+                btn.style.background = '';
+                btn.style.color      = '';
+                btn.style.borderColor = '';
+                btn.disabled         = false;
+            }, 2500);
+        } catch (err) {
+            console.error('Create task error:', err);
+            btn.innerHTML  = '<i class="fas fa-xmark"></i> Gagal';
+            btn.style.background  = '#fef2f2';
+            btn.style.color       = '#dc2626';
+            btn.style.borderColor = '#fca5a5';
+            setTimeout(() => {
+                btn.innerHTML        = original;
+                btn.style.background = '';
+                btn.style.color      = '';
+                btn.style.borderColor = '';
+                btn.disabled         = false;
             }, 2000);
         }
     }
 
-    // ── FFT PEAKS EXTRACTION ──────────────────────────────────────────────────
+    // ── FFT PEAK EXTRACTION ───────────────────────────────────────────────────
     function extractFftPeaks() {
         try {
             const chart = window.fftChart;
@@ -410,7 +434,6 @@
             const labels = chart.data.labels;
             const data   = chart.data.datasets[0].data;
             if (!labels?.length || !data?.length) return [];
-
             const peaks = [];
             for (let i = 1; i < data.length - 1; i++) {
                 if (data[i] >= data[i - 1] && data[i] >= data[i + 1] && data[i] > 0.001) {
@@ -418,7 +441,7 @@
                 }
             }
             return peaks.sort((a, b) => b.amp - a.amp).slice(0, 5);
-        } catch (err) { console.warn('extractFftPeaks error:', err); return []; }
+        } catch (e) { console.warn('[CBM] extractFftPeaks:', e); return []; }
     }
 
     // ── MAIN LOAD ─────────────────────────────────────────────────────────────
@@ -443,13 +466,11 @@
                 ? getReportDeviceId() : null;
 
             const body = { hours: 168, deviceId };
-
             if (dateFromEl?.value && dateToEl?.value) {
                 body.startDate = dateFromEl.value;
                 body.endDate   = dateToEl.value;
                 delete body.hours;
             }
-
             if (useFftPeaks) {
                 const peaks = extractFftPeaks();
                 if (peaks.length) {
@@ -458,9 +479,8 @@
                         const rpmVals = currentData
                             .map(d => Number(d.rpm))
                             .filter(v => Number.isFinite(v) && v > 0);
-                        if (rpmVals.length) {
+                        if (rpmVals.length)
                             body.rpmMean = rpmVals.reduce((a, b) => a + b, 0) / rpmVals.length;
-                        }
                     }
                 }
             }
@@ -470,7 +490,6 @@
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify(body)
             });
-
             if (!res.ok) throw new Error(`CBM API ${res.status}`);
             const json = await res.json();
             if (!json.success) throw new Error(json.error || 'Unknown error');
@@ -479,14 +498,13 @@
             renderAll(json.data);
 
         } catch (err) {
-            console.error('[CBMPanel] load error:', err);
-
-            // Fallback: GET
+            console.error('[CBM] load error:', err);
+            /* Fallback: GET */
             try {
                 const deviceId = typeof getReportDeviceId === 'function'
                     ? getReportDeviceId() : '';
-                const url  = `${CBM_API}?hours=168${deviceId ? '&deviceId=' + deviceId : ''}`;
-                const res  = await fetch(url);
+                const res  = await fetch(
+                    `${CBM_API}?hours=168${deviceId ? '&deviceId=' + deviceId : ''}`);
                 const json = await res.json();
                 if (!json.success) throw new Error(json.error);
                 _lastResult = json.data;
@@ -495,20 +513,30 @@
                 if (contentEl) {
                     contentEl.style.display = 'block';
                     contentEl.innerHTML = `
-                      <div style="padding:14px;background:#fef2f2;border-radius:10px;
-                                  color:#b91c1c;font-size:13px;border:1px solid #fca5a5;">
-                        ⚠️ Gagal memuat CBM: ${err.message}<br>
-                        <small style="color:#94a3b8;">
-                          Pastikan <code>/api/cbm/analysis</code> sudah ditambahkan ke server.js
-                          dan file <code>lib_cbm_analysis.js</code> sudah ada di root project.
+                      <div style="padding:16px;background:#fef2f2;border-radius:12px;
+                                  border:1px solid #fca5a5;color:#dc2626;font-size:13px;">
+                        <i class="fas fa-triangle-exclamation" style="margin-right:6px;"></i>
+                        Gagal memuat analisis CBM: ${err.message}<br>
+                        <small style="color:#94a3b8;display:block;margin-top:6px;">
+                          Pastikan endpoint
+                          <code style="background:#f8fafc;padding:1px 5px;border-radius:4px;">
+                            /api/cbm/analysis
+                          </code>
+                          sudah ditambahkan ke server.js dan
+                          <code style="background:#f8fafc;padding:1px 5px;border-radius:4px;">
+                            lib_cbm_analysis.js
+                          </code>
+                          ada di root project.
                         </small>
                       </div>`;
                 }
             }
         } finally {
-            if (loadingEl)   loadingEl.style.display  = 'none';
-            if (contentEl && contentEl.innerHTML !== '')
-                             contentEl.style.display  = 'block';
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (contentEl && !contentEl.innerHTML.trim().startsWith('<div'))
+                contentEl.style.display = 'block';
+            else if (contentEl)
+                contentEl.style.display = 'block';
             if (refreshIcon) refreshIcon.classList.remove('fa-spin');
             if (refreshBtn)  refreshBtn.disabled = false;
             _loading = false;
@@ -519,7 +547,7 @@
     function init() {
         const container = document.getElementById('cbmPanelContainer');
         if (!container) {
-            console.warn('[CBMPanel] #cbmPanelContainer tidak ditemukan di HTML.');
+            console.warn('[CBM] #cbmPanelContainer tidak ditemukan.');
             return;
         }
 
@@ -530,14 +558,13 @@
         document.getElementById('cbmSendFftBtn')
             ?.addEventListener('click', () => loadCBM(true));
 
-        // Hook tombol Apply & time-btn (delay agar data selesai dimuat lebih dulu)
+        /* Hook: Apply + time-btn (delay supaya data selesai dulu) */
         document.getElementById('applyDateRange')
             ?.addEventListener('click', () => setTimeout(() => loadCBM(false), 700));
-        document.querySelectorAll('.time-btn').forEach(btn => {
-            btn.addEventListener('click', () => setTimeout(() => loadCBM(false), 700));
-        });
+        document.querySelectorAll('.time-btn')
+            .forEach(b => b.addEventListener('click',
+                () => setTimeout(() => loadCBM(false), 700)));
 
-        // Auto-load pertama kali
         loadCBM(false);
     }
 
@@ -547,10 +574,5 @@
         init();
     }
 
-    // Expose ke global untuk di-trigger dari reports.js
-    window.CBMPanel = {
-        reload:        loadCBM,
-        getLastResult: () => _lastResult
-    };
-
+    window.CBMPanel = { reload: loadCBM, getLastResult: () => _lastResult };
 })();

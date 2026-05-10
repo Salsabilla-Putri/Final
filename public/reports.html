@@ -3,97 +3,271 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- <script src="js/auth-guard.js"></script> -->
+    <script src="js/auth-guard.js"></script>
     <title>GENSYS — Engine Activity Summary</title>
-    
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
     <link rel="stylesheet" href="sidebar.css">
     <link rel="stylesheet" href="css/topbar.css">
     <link rel="stylesheet" href="css/reports.css">
     <link rel="stylesheet" href="css/typography.css">
 
-    <!-- CBM Panel Styles (inline supaya tidak perlu file CSS baru) -->
     <style>
+        /* ── Data Source Notice ──────────────────────────────────────── */
         .data-source-notice {
             display: none;
             align-items: center;
             gap: 10px;
-            padding: 10px 14px;
-            border-radius: 8px;
+            padding: 10px 16px;
+            border-radius: 999px;
             font-size: 13px;
-            margin-bottom: 12px;
-            background: #f0f9ff;
-            color: #0369a1;
-            border: 1px solid #bae6fd;
+            margin-bottom: 16px;
+            background: #f8fafc;
+            color: #475569;
+            border: 1px solid #e2e8f0;
+            font-weight: 500;
         }
-        .data-source-notice.notice-success  { background:#f0fdf4; color:#15803d; border-color:#bbf7d0; }
-        .data-source-notice.notice-warning  { background:#fffbeb; color:#b45309; border-color:#fde68a; }
+        .data-source-notice.notice-success {
+            background: #f0fdf4;
+            color: #166534;
+            border-color: #bbf7d0;
+        }
+        .data-source-notice.notice-warning {
+            background: #fffbeb;
+            color: #92400e;
+            border-color: #fde68a;
+        }
 
+        /* ── Chart Description ───────────────────────────────────────── */
         #chartDescription {
             font-size: 12px;
-            color: #64748b;
-            padding: 6px 0 2px;
-            min-height: 18px;
+            color: #94a3b8;
+            padding: 4px 0 0;
+            min-height: 16px;
+            font-weight: 400;
         }
 
-        /* ── CBM Panel ── */
+        /* ── CBM Panel — mengikuti design token reports.css ─────────── */
         #cbmPanel {
             font-family: inherit;
         }
-        #cbmPanel .cbm-card {
-            background: #fff;
-            border-radius: 12px;
-            padding: 18px 20px;
-            border: 1px solid #f1f5f9;
-            box-shadow: 0 1px 6px rgba(0,0,0,.05);
-        }
-        #cbmPanel .cbm-sec-label {
-            font-size: 10px;
+
+        /* Section label kecil di atas grup */
+        .cbm-label {
+            font-size: 11px;
             font-weight: 700;
-            letter-spacing: .08em;
-            color: #64748b;
+            letter-spacing: .06em;
             text-transform: uppercase;
-            margin-bottom: 12px;
+            color: #94a3b8;
+            margin-bottom: 14px;
         }
-        #cbmPanel .cbm-tag {
-            display: inline-block;
-            padding: 2px 9px;
-            border-radius: 20px;
+
+        /* Badge status — mengikuti .status-normal / .status-warning */
+        .cbm-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 10px;
+            border-radius: 999px;
             font-size: 11px;
             font-weight: 700;
         }
-        #cbmPanel .cbm-btn {
-            padding: 7px 14px;
-            border: none;
-            border-radius: 7px;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 700;
+        .cbm-badge-critical { background: #fef2f2; color: #dc2626; }
+        .cbm-badge-warn     { background: #fff7ed; color: #c2410c; }
+        .cbm-badge-watch    { background: #fefce8; color: #92400e; }
+        .cbm-badge-ok       { background: #f0fdf4; color: #166534; }
+        .cbm-badge-blue     { background: #eff6ff; color: #1745a5; }
+
+        /* Tombol — mengikuti .apply-btn / .time-btn */
+        .cbm-btn-primary {
+            padding: 8px 18px;
+            background: #1745a5;
             color: #fff;
+            border: none;
+            border-radius: 999px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
             transition: opacity .15s;
         }
-        #cbmPanel .cbm-btn:hover { opacity: .88; }
-        #cbmPanel .cbm-btn:disabled { opacity: .5; cursor: default; }
-        #cbmPanel table.cbm-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-        #cbmPanel table.cbm-tbl th {
-            padding: 8px 10px;
-            font-size: 11px;
-            color: #64748b;
+        .cbm-btn-primary:hover   { opacity: .88; }
+        .cbm-btn-primary:disabled{ opacity: .45; cursor: default; }
+
+        .cbm-btn-secondary {
+            padding: 7px 16px;
+            background: #f8fafc;
+            color: #475569;
+            border: 1px solid #e2e8f0;
+            border-radius: 999px;
+            cursor: pointer;
+            font-size: 13px;
             font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            transition: background .15s, color .15s;
+        }
+        .cbm-btn-secondary:hover { background: #1745a5; color: #fff; border-color: #1745a5; }
+
+        /* Tombol aksi kecil (+ Buat Task di setiap finding) */
+        .cbm-btn-action {
+            padding: 5px 12px;
+            background: #f1f5f9;
+            color: #1745a5;
+            border: 1px solid #e2e8f0;
+            border-radius: 999px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+            transition: background .15s, color .15s;
+        }
+        .cbm-btn-action:hover    { background: #1745a5; color: #fff; border-color: #1745a5; }
+        .cbm-btn-action:disabled { opacity: .45; cursor: default; }
+
+        /* Card finding — white + left border, NO coloured background */
+        .cbm-finding {
+            background: #fff;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            border-left-width: 4px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .cbm-finding-critical { border-left-color: #dc2626; }
+        .cbm-finding-warn     { border-left-color: #f97316; }
+        .cbm-finding-watch    { border-left-color: #d97706; }
+
+        /* Grid statistik kecil di dalam finding */
+        .cbm-stat-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .cbm-stat-chip {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 4px 9px;
+            font-size: 11px;
+            color: #475569;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+        .cbm-stat-chip b { color: #0f172a; }
+
+        /* Tren panah */
+        .cbm-trend-up   { color: #dc2626; font-weight: 700; }
+        .cbm-trend-down { color: #16a34a; font-weight: 700; }
+
+        /* Health ring wrapper */
+        .cbm-ring-wrap {
+            position: relative;
+            width: 120px;
+            height: 120px;
+            flex-shrink: 0;
+        }
+        .cbm-ring-center {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            line-height: 1.2;
+        }
+
+        /* Component health compact list */
+        .cbm-comp-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 0;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 13px;
+        }
+        .cbm-comp-item:last-child { border-bottom: none; }
+        .cbm-comp-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .cbm-comp-name  { flex: 1; color: #334155; font-weight: 500; }
+        .cbm-comp-level { font-size: 11px; font-weight: 700; }
+
+        /* Preventive table */
+        .cbm-tbl {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .cbm-tbl th {
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #94a3b8;
             text-align: left;
             border-bottom: 1px solid #f1f5f9;
+            text-transform: uppercase;
+            letter-spacing: .04em;
         }
-        #cbmPanel table.cbm-tbl td {
-            padding: 9px 10px;
+        .cbm-tbl td {
+            padding: 10px 12px;
             border-top: 1px solid #f1f5f9;
-            color: #374151;
+            color: #334155;
+            vertical-align: middle;
         }
-        .cbm-finding-card { border-radius: 10px; padding: 13px 15px; margin-bottom: 9px; }
-        .cbm-mini-stat { background: #fff; border-radius: 7px; padding: 6px 8px; border: 1px solid #f1f5f9; }
-        .cbm-bar-track { background: #e2e8f0; border-radius: 4px; height: 4px; margin-top: 4px; width: 80px; margin: 4px auto 0; }
-        .cbm-bar-fill  { height: 4px; border-radius: 4px; }
+
+        /* Progress bar sisa jam */
+        .cbm-progress {
+            background: #f1f5f9;
+            border-radius: 4px;
+            height: 4px;
+            width: 72px;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+        .cbm-progress-fill {
+            height: 4px;
+            border-radius: 4px;
+            background: #1745a5;
+            transition: width .4s;
+        }
+
+        /* Summary box */
+        .cbm-summary {
+            background: #f8fafc;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+            padding: 12px 16px;
+            font-size: 13px;
+            color: #475569;
+            line-height: 1.6;
+        }
+
+        /* Empty state */
+        .cbm-empty {
+            text-align: center;
+            padding: 28px;
+            color: #94a3b8;
+            font-size: 13px;
+        }
+
+        /* Responsif: stack health ring + component list */
+        @media (max-width: 640px) {
+            .cbm-top-row { grid-template-columns: 1fr !important; }
+        }
     </style>
 </head>
 <body>
@@ -109,128 +283,125 @@
             </div>
         </div>
 
-        <!-- Data source notice (diisi oleh reports.js) -->
-        <!-- <div id="dataSourceNotice" class="data-source-notice"></div> -->
+        <div id="dataSourceNotice" class="data-source-notice"></div>
 
-            <div class="overview-cards">
-                <div class="overview-card">
-                    <div class="overview-icon primary"><i class="fas fa-clock"></i></div>
-                    <div class="overview-content">
-                        <div class="overview-value" id="dailyAverage">-- hrs</div>
-                        <div class="overview-label">Daily Average</div>
-                    </div>
+        <div class="overview-cards">
+            <div class="overview-card">
+                <div class="overview-icon primary"><i class="fas fa-clock"></i></div>
+                <div class="overview-content">
+                    <div class="overview-value" id="dailyAverage">-- hrs</div>
+                    <div class="overview-label">Daily Average</div>
                 </div>
-                <div class="overview-card">
-                    <div class="overview-icon secondary"><i class="fas fa-hourglass-half"></i></div>
-                    <div class="overview-content">
-                        <div class="overview-value" id="totalHours">-- hrs</div>
-                        <div class="overview-label">Total Hours (7 days)</div>
-                    </div>
+            </div>
+            <div class="overview-card">
+                <div class="overview-icon secondary"><i class="fas fa-hourglass-half"></i></div>
+                <div class="overview-content">
+                    <div class="overview-value" id="totalHours">-- hrs</div>
+                    <div class="overview-label">Total Hours (7 days)</div>
                 </div>
-                <div class="overview-card">
-                    <div class="overview-icon warning"><i class="fas fa-calendar-day"></i></div>
-                    <div class="overview-content">
-                        <div class="overview-value" id="daysActive">-- days</div>
-                        <div class="overview-label">Days Active (7 days)</div>
-                    </div>
+            </div>
+            <div class="overview-card">
+                <div class="overview-icon warning"><i class="fas fa-calendar-day"></i></div>
+                <div class="overview-content">
+                    <div class="overview-value" id="daysActive">-- days</div>
+                    <div class="overview-label">Days Active (7 days)</div>
                 </div>
-                <div class="overview-card">
-                    <div class="overview-icon danger"><i class="fas fa-hourglass-end"></i></div>
-                    <div class="overview-content">
-                        <div class="overview-value" id="longestSession">-- hrs</div>
-                        <div class="overview-label">Longest Session</div>
-                    </div>
+            </div>
+            <div class="overview-card">
+                <div class="overview-icon danger"><i class="fas fa-hourglass-end"></i></div>
+                <div class="overview-content">
+                    <div class="overview-value" id="longestSession">-- hrs</div>
+                    <div class="overview-label">Longest Session</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Engine Parameters -->
+        <div class="executive-summary">
+            <h2 class="section-title">
+                <i class="fas fa-cogs"></i> Engine Parameters
+            </h2>
+
+            <div class="filter-section">
+                <div class="time-filter">
+                    <button class="time-btn active" data-hours="24">Last 24h</button>
+                    <button class="time-btn" data-hours="168">Last 7d</button>
+                    <button class="time-btn" data-hours="720">Last 30d</button>
+                    <button class="time-btn" data-hours="8760">Year to Date</button>
+                </div>
+                <div class="date-range">
+                    <div class="date-selector"></div>
+                    <button class="apply-btn" id="applyDateRange">Apply</button>
                 </div>
             </div>
 
-            <div class="executive-summary">
-                <h2 class="section-title">
-                    <i class="fas fa-cogs"></i> Engine Parameters
-                </h2>
-                
-                <div class="filter-section">
-                    <div class="time-filter">
-                        <button class="time-btn active" data-hours="24">Last 24h</button>
-                        <button class="time-btn" data-hours="168">Last 7d</button>
-                        <button class="time-btn" data-hours="720">Last 30d</button>
-                        <button class="time-btn" data-hours="8760">Year to Date</button>
-                    </div>
-                    <div class="date-range">
-                        <div class="date-selector">
-                            <!-- Date picker dibuat otomatis oleh JavaScript -->
-                        </div>
-                        <button class="apply-btn" id="applyDateRange">Apply</button>
-                    </div>
-                </div>
-
-                <div id="sensorsLoading" class="loading">
-                    <i class="fas fa-spinner fa-spin"></i> Loading sensor data...
-                </div>
-                
-                <div id="sensorsContainer" class="sensors-grid" style="display: none;"></div>
+            <div id="sensorsLoading" class="loading">
+                <i class="fas fa-spinner fa-spin"></i> Loading sensor data...
             </div>
+            <div id="sensorsContainer" class="sensors-grid" style="display:none;"></div>
+        </div>
 
-            <div class="executive-summary">
-                <h2 class="section-title">
-                    <i class="fas fa-chart-line"></i> Sensor Trends
-                </h2>
+        <!-- Sensor Trends -->
+        <div class="executive-summary">
+            <h2 class="section-title">
+                <i class="fas fa-chart-line"></i> Sensor Trends
+            </h2>
 
-                <div id="chartContainer" class="chart-container">
-                    <div class="chart-header">
-                        <div>
-                            <h3 class="chart-title" id="chartTitle">Sensor Data</h3>
-                            <!-- Deskripsi bucket/interval ditampilkan di sini -->
-                            <div id="chartDescription"></div>
-                        </div>
-                        <div class="chart-actions">
-                            <button class="chart-action-btn" id="toggleExport"><i class="fas fa-download"></i> Export</button>
-                            <button class="chart-action-btn" id="printChart"><i class="fas fa-print"></i> Print</button>
-                        </div>
+            <div id="chartContainer" class="chart-container">
+                <div class="chart-header">
+                    <div>
+                        <h3 class="chart-title" id="chartTitle">Sensor Data</h3>
+                        <div id="chartDescription"></div>
                     </div>
-                    <div style="height: 300px; width: 100%;">
-                        <canvas id="mainChart"></canvas>
-                    </div>
-                    
-                    <div id="exportOptions" class="export-options">
-                        <h4>Export Data</h4>
-                        <div class="export-buttons">
-                            <button class="export-btn" data-format="csv">CSV</button>
-                            <button class="export-btn" data-format="json">JSON</button>
-                            <button class="export-btn" data-format="png">PNG Image</button>
-                            <button class="export-btn" data-format="pdf">PDF</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="analysis-panel">
-                    <div class="analysis-header">
-                        <h3 class="analysis-title">
-                            <i class="fas fa-wave-square"></i> FFT Spectrum Analysis
-                        </h3>
-                        <button class="chart-action-btn" id="recalculateFft" style="margin-left:auto;">
-                            <i class="fas fa-sync-alt"></i> Recalculate
+                    <div class="chart-actions">
+                        <button class="chart-action-btn" id="toggleExport">
+                            <i class="fas fa-download"></i> Export
+                        </button>
+                        <button class="chart-action-btn" id="printChart">
+                            <i class="fas fa-print"></i> Print
                         </button>
                     </div>
-                    <div class="analysis-subtitle" id="fftSummary"></div>
-                    <div class="fft-chart-wrap">
-                        <canvas id="fftChart"></canvas>
+                </div>
+                <div style="height:300px; width:100%;">
+                    <canvas id="mainChart"></canvas>
+                </div>
+                <div id="exportOptions" class="export-options">
+                    <h4>Export Data</h4>
+                    <div class="export-buttons">
+                        <button class="export-btn" data-format="csv">CSV</button>
+                        <button class="export-btn" data-format="json">JSON</button>
+                        <button class="export-btn" data-format="png">PNG Image</button>
+                        <button class="export-btn" data-format="pdf">PDF</button>
                     </div>
-                    <div id="fftInsights" class="fft-insights"></div>
                 </div>
             </div>
 
-        <!-- ══════════════════════════════════════════════════════════════
-             CBM PANEL — diisi oleh public/js/cbm_panel.js secara otomatis
-             ══════════════════════════════════════════════════════════════ -->
-        <div class="executive-summary" style="margin-top: 20px; padding: 0;">
+            <div class="analysis-panel">
+                <div class="analysis-header">
+                    <h3 class="analysis-title">
+                        <i class="fas fa-wave-square"></i> FFT Spectrum Analysis
+                    </h3>
+                    <button class="chart-action-btn" id="recalculateFft" style="margin-left:auto;">
+                        <i class="fas fa-sync-alt"></i> Recalculate
+                    </button>
+                </div>
+                <div class="analysis-subtitle" id="fftSummary"></div>
+                <div class="fft-chart-wrap">
+                    <canvas id="fftChart"></canvas>
+                </div>
+                <div id="fftInsights" class="fft-insights"></div>
+            </div>
+        </div>
+
+        <!-- CBM Panel -->
+        <div class="executive-summary" style="padding:0; overflow:visible;">
             <div id="cbmPanelContainer"></div>
         </div>
 
-    </div><!-- /main-content -->
+    </div>
 
     <script src="js/sidebar.js"></script>
     <script src="js/reports.js"></script>
-    <!-- CBM Panel — harus setelah reports.js supaya currentData & selectedSensors tersedia -->
     <script src="js/cbm_panel.js"></script>
 </body>
 </html>
