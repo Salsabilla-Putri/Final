@@ -9,8 +9,9 @@ const tls = require('tls');
 const { EventEmitter } = require('events');
 require('dotenv').config();
 
-const sgMail = require('@sendgrid/mail');
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// const sgMail = require('@sendgrid/mail');
+// sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const nodemailer = require('nodemailer');
 const { transformPublicStatus } = require('./public_status');
 
 mongoose.set('bufferCommands', false);
@@ -261,11 +262,11 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 
 // Tambahkan parameter targetEmail
 async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
-    const apiKey = process.env.SENDGRID_API_KEY;
-    const senderEmail = process.env.SENDER_EMAIL;
+    const emailUser = process.env.EMAIL_USER;
+    const emailPass = process.env.EMAIL_APP_PASSWORD;
 
-    if (!apiKey) {
-        console.warn('⚠️ SENDGRID_API_KEY tidak ditemukan.');
+    if (!emailUser || !emailPass) {
+        console.warn('⚠️ Konfigurasi EMAIL_USER atau EMAIL_APP_PASSWORD tidak ditemukan di .env');
         return;
     }
 
@@ -280,11 +281,16 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
 
     if (uniqueRecipients.length === 0) return;
 
-    const sgMail = require('@sendgrid/mail');
-    sgMail.setApiKey(apiKey);
+    // Konfigurasi Nodemailer Transporter
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: emailUser,
+            pass: emailPass
+        }
+    });
 
     // LOGIKA GRUP: Membuat ringkasan untuk Subjek Email
-    // Contoh Subjek: [CRITICAL] Masalah pada RPM, VOLT, TEMP
     const parameterNames = alertItems.map(a => a.parameter.toUpperCase()).join(', ');
     const subjectTitle = alertItems.length > 1 
         ? `🚨 MULTI-ALERT: Masalah pada ${parameterNames}`
@@ -299,9 +305,9 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
         </tr>
     `).join('');
 
-    const msg = {
-        to: uniqueRecipients,
-        from: senderEmail,
+    const mailOptions = {
+        from: `"Gen-Track Alert" <${emailUser}>`,
+        bcc: uniqueRecipients, // Gunakan BCC agar daftar email tidak saling terlihat antar penerima
         subject: subjectTitle,
         html: `
             <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #d9534f; border-radius: 10px; overflow: hidden;">
@@ -341,10 +347,10 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
     };
 
     try {
-        await sgMail.sendMultiple(msg);
+        await transporter.sendMail(mailOptions);
         console.log(`✅ Grup Alert terkirim (${alertItems.length} parameter) ke: ${uniqueRecipients}`);
     } catch (error) {
-        console.error('❌ SendGrid Error:', error.message);
+        console.error('❌ Nodemailer Error:', error.message);
     }
 }
 
