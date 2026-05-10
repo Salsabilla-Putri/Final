@@ -33,6 +33,7 @@ function createDisabledMqttClient() {
 
 const { analyzeReportRows } = require('./lib_report_analysis');
 const { generateMaintenanceDecision, toSuggestionDocument } = require('./maintenance_decision');
+const { analyzeCBM } = require('./lib_cbm_analysis');
 
 const app = express();
 
@@ -1627,6 +1628,171 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+/**
+ * ================================================================
+ * TAMBAHAN UNTUK server.js — CBM Endpoints
+ * ================================================================
+ *
+ * LANGKAH INTEGRASI:
+ *
+ * 1. Di BAGIAN PALING ATAS server.js, tambahkan setelah baris
+ *    require('./maintenance_decision'):
+ *
+ *       const { analyzeCBM } = require('./lib_cbm_analysis');
+ *
+ * 2. Paste seluruh kode di bawah ini ke server.js SEBELUM baris:
+ *       app.use('/api', (req, res) => { ... });   // ← catch-all /api
+ *
+ * ================================================================
+ */
+
+// ─── HELPER: Total Jam Operasi ────────────────────────────────────────────────
+async function getTotalOperatingHours(deviceId) {
+    const query = {};
+    if (deviceId) query.deviceId = deviceId;
+
+    const agg = await ActiveTimeHistory.aggregate([
+        { $match: query },
+        { $group: { _id: null, totalMs: { $sum: '$durationMs' } } }
+    ]);
+
+    return agg[0] ? agg[0].totalMs / 3_600_000 : 0;
+}
+
+// ─── CBM ANALYSIS  (GET) ──────────────────────────────────────────────────────
+// Dipanggil oleh cbm_panel.js sebagai fallback jika POST gagal
+app.get('/api/cbm/analysis', async (req, res) => {
+    try {
+        await ensureDbReady().catch(() => undefined);
+        if (!isDbReady()) {
+            return res.status(503).json({ success: false, error: 'Database not ready' });
+        }
+
+        const { deviceId, hours, startDate, endDate } = req.query;
+        const effectiveDeviceId = deviceId
+            || process.env.DEFAULT_REPORT_DEVICE_ID
+            || null;
+
+        const timeQuery = {};
+        if (startDate && endDate) {
+            let start = new Date(startDate);
+            let end   = new Date(endDate);
+            if (startDate.length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
+            if (endDate.length   === 10) end   = new Date(endDate   + 'T23:59:59.999+07:00');
+            if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())) {
+                timeQuery.timestamp = { $gte: start, $lte: end };
+            }
+        } else {
+            const h = parseInt(hours || '168', 10);
+            timeQuery.timestamp = { $gte: new Date(Date.now() - h * 3_600_000) };
+        }
+
+        const matchQuery = { ...timeQuery };
+        if (effectiveDeviceId) matchQuery.deviceId = effectiveDeviceId;
+
+        const historicalRows = await GeneratorData.find(matchQuery)
+            .sort({ timestamp: -1 }).limit(10_000).lean();
+
+        const totalOpHours = await getTotalOperatingHours(effectiveDeviceId);
+
+        const result = analyzeCBM(
+            historicalRows,
+            ACTIVE_THRESHOLDS,
+            totalOpHours
+        );
+
+        res.json({ success: true, data: result });
+    } catch (error) {
+        console.error('CBM GET Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ─── CBM ANALYSIS  (POST) ─────────────────────────────────────────────────────
+// Menerima { deviceId, hours, startDate, endDate, fftPeaks, rpmMean }
+// fftPeaks dikirim dari cbm_panel.js tombol "+ FFT Peaks"
+app.post('/api/cbm/analysis', async (req, res) => {
+    try {
+        await ensureDbReady().catch(() => undefined);
+        if (!isDbReady()) {
+            return res.status(503).json({ success: false, error: 'Database not ready' });
+        }
+
+        const {
+            deviceId,
+            hours    = 168,
+            startDate,
+            endDate,
+            fftPeaks = [],
+            rpmMean  = 0
+        } = req.body || {};
+
+        const effectiveDeviceId = deviceId
+            || process.env.DEFAULT_REPORT_DEVICE_ID
+            || null;
+
+        const matchQuery = {};
+        if (startDate && endDate) {
+            let start = new Date(startDate);
+            let end   = new Date(endDate);
+            if (String(startDate).length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
+            if (String(endDate).length   === 10) end   = new Date(endDate   + 'T23:59:59.999+07:00');
+            if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())) {
+                matchQuery.timestamp = { $gte: start, $lte: end };
+            }
+        } else {
+            const h = parseInt(hours, 10) || 168;
+            matchQuery.timestamp = { $gte: new Date(Date.now() - h * 3_600_000) };
+        }
+        if (effectiveDeviceId) matchQuery.deviceId = effectiveDeviceId;
+
+        const historicalRows = await GeneratorData.find(matchQuery)
+            .sort({ timestamp: -1 }).limit(10_000).lean();
+
+        const totalOpHours = await getTotalOperatingHours(effectiveDeviceId);
+
+        const result = analyzeCBM(
+            historicalRows,
+            ACTIVE_THRESHOLDS,
+            totalOpHours,
+            Array.isArray(fftPeaks) ? fftPeaks : [],
+            Number(rpmMean) || 0
+        );
+
+        res.json({ success: true, data: result });
+    } catch (error) {
+        console.error('CBM POST Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ─── CBM CONVERT TO TASK ─────────────────────────────────────────────────────
+// Dipanggil saat user klik "+ Buat Task" di panel CBM
+// Body: { finding: { action, details, priority, type, component }, dueDate? }
+app.post('/api/cbm/convert-to-task', async (req, res) => {
+    try {
+        const { finding, dueDate, assignedTo } = req.body || {};
+        if (!finding?.action) {
+            return res.status(400).json({ success: false, error: 'finding.action is required' });
+        }
+
+        const task = await new Maintenance({
+            task:       finding.action,
+            type:       finding.type     || 'Corrective',
+            priority:   finding.priority || 'medium',
+            status:     'scheduled',
+            source:     'cbm',
+            dueDate:    dueDate ? new Date(dueDate) : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+            assignedTo: assignedTo || null
+        }).save();
+
+        console.log(`🔧 CBM Task created: ${task.task}`);
+        res.json({ success: true, data: task });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // ── CRITICAL: Semua /api/* yang tidak cocok harus return JSON, BUKAN HTML.
 // Tanpa ini, catch-all di bawah mengembalikan login.html → error "Unexpected token '<'"
