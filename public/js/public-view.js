@@ -155,26 +155,27 @@ function updateOperationsSection(data) {
         fuelEl.className  = f > 30 ? 'st-ok' : f > 15 ? 'st-warn' : 'st-err';
     }
 
-    // Analytics: System Health rows
-    const set = (id, val, unit) => {
+    // Analytics: System Health rows (samakan logika dengan dashboard/index)
+    const applyHealth = (id, value, min, max) => {
         const el = document.getElementById(id);
-        if (el) el.innerText = (val != null && val !== 0 ? val : '--') + (val ? unit : '');
+        if (!el) return;
+        const state = healthStatus(value, min, max);
+        el.innerText = state.text;
+        el.className = state.cls;
     };
-    set('st-volt', data.volt,  ' V');
-    set('st-amp',  data.amp,   ' A');
-    set('st-freq', data.freq,  ' Hz');
-    set('st-fuel', data.fuel,  '%');
-    set('st-afr',  data.afr,   '');
+    applyHealth('st-volt', data.volt, 200, 240);
+    applyHealth('st-amp',  data.amp, 0,   100);
+    applyHealth('st-freq', data.freq,48,  52);
+    applyHealth('st-fuel', data.fuel,20,  100);
+    applyHealth('st-afr',  data.afr, 10,  18);
 
     // Today's active time (async, non-blocking)
     fetch('/api/generator-active-time/stats?hours=24')
         .then(r => r.json())
         .then(sd => {
             if (!sd?.success) return;
-            const h = Math.floor(sd.data.totalDurationHours || 0);
-            const m = Math.floor(((sd.data.totalDurationHours || 0) - h) * 60);
             const el = document.getElementById('engToday');
-            if (el) el.innerText = `${h}h ${m}m`;
+            if (el) el.innerText = formatActiveHours(sd.data.totalDurationHours || 0);
         })
         .catch(() => {});
 
@@ -308,6 +309,34 @@ function renderRecentActivity(activities) {
 // ════════════════════════════════════════════════════════════════════════════
 //  ANALYTICS — Active Time Bar Chart
 // ════════════════════════════════════════════════════════════════════════════
+
+function formatActiveHours(hours) {
+    const safe = Number(hours || 0);
+    const h = Math.floor(safe);
+    const m = Math.round((safe - h) * 60);
+    if (h === 0) return `${m}m`;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+
+function dayLabelWib(dateStr) {
+    const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const d = new Date(dateStr + 'T12:00:00+07:00');
+    return days[d.getDay()];
+}
+
+function healthStatus(value, min, max) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return { text: '--', cls: 'st-err' };
+    if (v >= min && v <= max) return { text: 'Normal', cls: 'st-ok' };
+    return { text: v < min ? 'Low' : 'High', cls: 'st-err' };
+}
+function getWibDayKey(offsetDay = 0) {
+    const WIB_OFFSET_MS = 7 * 3600 * 1000;
+    const d = new Date(Date.now() + WIB_OFFSET_MS + offsetDay * 86400000);
+    return d.toISOString().slice(0, 10);
+}
+
 function updateActiveTimeChart(rows) {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) return;
@@ -350,12 +379,10 @@ function updateActiveTimeChart(rows) {
         });
     };
 
-    // Build 7-day map (WIB offset +7h)
-    const WIB_OFFSET_MS = 7 * 3600 * 1000;
+    // Build 7-day map WIB (selaras dengan index.html/dashboard.js)
     const dayMap = {};
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(Date.now() + WIB_OFFSET_MS - i * 86400000);
-        dayMap[d.toISOString().slice(0, 10)] = 0;
+        dayMap[getWibDayKey(-i)] = 0;
     }
 
     // Try dedicated endpoint first, fallback to history rows
@@ -377,21 +404,21 @@ function updateActiveTimeChart(rows) {
             (rows || []).forEach(r => {
                 const start = new Date(r.startedAt);
                 const end   = r.endedAt ? new Date(r.endedAt) : new Date();
-                const key   = new Date(start.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+                const key   = new Date(start.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
                 if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
                     dayMap[key] += Math.max(0, (end - start) / 3600000);
                 }
             });
         }
 
-        const todayKey = new Date(Date.now() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+        const todayKey = getWibDayKey(0);
         if (todayJson?.success && todayJson.activeHours != null) {
             dayMap[todayKey] = todayJson.activeHours;
         }
 
         const keys = Object.keys(dayMap);
         renderChart(
-            keys.map(k => new Date(k).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit' })),
+            keys.map(dayLabelWib),
             keys.map(k => +((dayMap[k] || 0).toFixed(2))),
             keys.findIndex(k => k === todayKey)
         );
