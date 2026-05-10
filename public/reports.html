@@ -183,6 +183,15 @@
         </div>
     </div>
 
+    <div id="maintenanceDecisionCard" style="display: none;">
+    <h4>Status: <span id="decisionStatus">-</span></h4>
+    <p id="decisionMessage"></p>
+    <p id="decisionRecommendation"></p>
+    <button id="approveBtn" onclick="approveAndSchedule()" style="display: none;">
+        Setujui & Jadwalkan Pemeliharaan
+    </button>
+</div>
+
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
         <div style="border: 1px solid #eee; padding: 15px; border-radius: 8px;">
             <h4 style="text-align: center; margin-top: 0;">Tren Waktu (Time-Domain)</h4>

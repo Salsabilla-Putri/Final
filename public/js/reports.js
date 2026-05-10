@@ -1972,6 +1972,171 @@ function printChart() {
         });
     }
 
+    // ============================================================================
+// MODUL CONDITION-BASED MAINTENANCE (CBM) & PREDICTIVE LOGIC
+// ============================================================================
+
+let pendingCbmTask = null; // Menyimpan data task sebelum disetujui
+
+async function runCbmAnalysis() {
+    const sensor = document.getElementById('cbmSensorSelect').value;
+    const hours = document.getElementById('cbmTimeRange').value;
+    
+    // UI Loading State
+    const decisionCard = document.getElementById('maintenanceDecisionCard');
+    decisionCard.style.display = 'block';
+    document.getElementById('decisionStatus').innerText = 'Menganalisis...';
+    document.getElementById('decisionStatus').style.background = '#6c757d';
+    document.getElementById('decisionMessage').innerText = 'Mengambil data dari server dan memproses FFT...';
+    document.getElementById('decisionRecommendation').innerText = '';
+    document.getElementById('approveBtn').style.display = 'none';
+
+    try {
+        // 1. Ambil Data Histori
+        const reportRes = await fetch(`/api/reports?hours=${hours}`);
+        const reportData = await reportRes.json();
+
+        if (reportData.success && reportData.data.length > 0) {
+            // Urutkan kronologis
+            const rows = reportData.data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            
+            // 2. Kirim ke Python Analysis API (FFT & Trend)
+            const analysisRes = await fetch('/api/reports/analysis', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rows: rows, sensor: sensor, maxPoints: 150 })
+            });
+            const analysisResult = await analysisRes.json();
+
+            if (analysisResult.success && analysisResult.data.ok) {
+                // 3. Render Grafik (Fungsi renderCbmCharts sudah ada sebelumnya)
+                if (typeof renderCbmCharts === 'function') {
+                    renderCbmCharts(rows, analysisResult.data, sensor);
+                }
+                
+                // 4. Evaluasi Kondisi Berdasarkan Algoritma
+                evaluateCondition(sensor, analysisResult.data);
+            } else {
+                alert("Data tidak cukup untuk Analisis FFT.");
+            }
+        } else {
+            alert("Tidak ada data histori pada rentang waktu ini.");
+            decisionCard.style.display = 'none';
+        }
+    } catch (error) {
+        console.error("CBM Analysis Error:", error);
+        alert("Gagal menghubungi server backend.");
+    }
+}
+
+function evaluateCondition(sensor, analysisData) {
+    let status = 'AMAN';
+    let message = 'Parameter beroperasi dalam batas normal.';
+    let recommendation = 'Lanjutkan pemantauan rutin. Tidak perlu tindakan khusus.';
+    let priority = 'low';
+    let type = 'Preventive';
+
+    const trend = analysisData.stats.trend; // 'up', 'down', 'flat'
+    const peaks = analysisData.peaks; // Array [ {freq, amp}, ... ]
+    const maxVal = analysisData.stats.max;
+
+    // --- SKENARIO 1: Analisis Getaran / Mekanis (RPM via FFT) ---
+    if (sensor === 'rpm') {
+        if (peaks.length > 1 && peaks[1].amp > (peaks[0].amp * 0.4)) {
+            status = 'BAHAYA';
+            message = 'Anomali getaran tinggi! Harmonik sekunder FFT > 40%.';
+            recommendation = 'Segera matikan mesin (Corrective). Indikasi bearing aus parah atau misfire silinder.';
+            priority = 'high'; type = 'Corrective';
+        } else if (peaks.length > 1 && peaks[1].amp > (peaks[0].amp * 0.2)) {
+            status = 'WASPADA';
+            message = 'Mulai terdeteksi getaran abnormal (Noise frekuensi).';
+            recommendation = 'Jadwalkan pengecekan V-belt dan pelumasan bearing segera.';
+            priority = 'medium'; type = 'Preventive';
+        }
+    } 
+    // --- SKENARIO 2: Analisis Overheat (Suhu / Coolant via Tren Regresi) ---
+    else if (sensor === 'temp' || sensor === 'coolant') {
+        if (trend === 'up' && maxVal > 90) {
+            status = 'BAHAYA';
+            message = `Overheat sistematis! Suhu terus naik menyentuh ${maxVal.toFixed(1)}°C.`;
+            recommendation = 'Matikan genset. Cek kebocoran radiator, putaran kipas, atau ganti coolant.';
+            priority = 'high'; type = 'Corrective';
+        } else if (trend === 'up') {
+            status = 'WASPADA';
+            message = 'Tren suhu menunjukkan peningkatan konstan dari waktu ke waktu.';
+            recommendation = 'Lakukan pembersihan kisi-kisi radiator pada jadwal maintenance terdekat.';
+            priority = 'medium'; type = 'Preventive';
+        }
+    }
+    // --- SKENARIO 3: Analisis Elektrikal (Voltase via Tren Regresi) ---
+    else if (sensor === 'volt') {
+        if (trend === 'down' && maxVal < 215) {
+            status = 'WASPADA';
+            message = 'Tegangan output mengalami degradasi perlahan saat dibebani.';
+            recommendation = 'Cek komponen AVR (Automatic Voltage Regulator) dan ketebalan carbon brush.';
+            priority = 'medium'; type = 'Preventive';
+        }
+    }
+
+    // --- UPDATE TAMPILAN KARTU (UI) ---
+    const statusEl = document.getElementById('decisionStatus');
+    statusEl.innerText = status;
+    if (status === 'BAHAYA') {
+        statusEl.style.background = '#dc3545'; // Merah
+    } else if (status === 'WASPADA') {
+        statusEl.style.background = '#ffc107'; // Kuning
+        statusEl.style.color = '#000';
+    } else {
+        statusEl.style.background = '#28a745'; // Hijau
+    }
+
+    document.getElementById('decisionMessage').innerText = message;
+    document.getElementById('decisionRecommendation').innerText = recommendation;
+
+    // --- SIAPKAN PAYLOAD UNTUK DIKIRIM KE DATABASE ---
+    pendingCbmTask = {
+        task: `[Predictive CBM] ${sensor.toUpperCase()}: ${message}`,
+        type: type,
+        priority: priority,
+        cost: 0, // Estimasi awal
+        dueDate: new Date(Date.now() + 86400000).toISOString().split('T')[0], // Besok
+        assignedTo: 'Teknisi Sistem',
+        status: 'scheduled'
+    };
+
+    // Tampilkan tombol "Setujui" hanya jika ada masalah
+    document.getElementById('approveBtn').style.display = (status !== 'AMAN') ? 'block' : 'none';
+}
+
+// Fungsi untuk menyetujui rekomendasi dan mengirim ke API Maintenance
+async function approveAndSchedule() {
+    if (!pendingCbmTask) return;
+
+    if (!confirm('Apakah Anda yakin ingin menjadwalkan rekomendasi pemeliharaan ini?')) return;
+
+    try {
+        // Mengirim data ke API Maintenance (Sama dengan form di maintenance.html)
+        const saveRes = await fetch('/api/maintenance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pendingCbmTask)
+        });
+
+        const saveResult = await saveRes.json();
+
+        if (saveResult.success) {
+            alert('Pemeliharaan berbasis CBM berhasil dijadwalkan!');
+            // Redirect otomatis ke halaman maintenance
+            window.location.href = 'maintenance.html';
+        } else {
+            alert('Gagal menjadwalkan pemeliharaan: ' + saveResult.error);
+        }
+    } catch (error) {
+        console.error('Approval Error:', error);
+        alert('Terjadi kesalahan jaringan saat menyimpan jadwal.');
+    }
+}
+
 // --- 12. GLOBAL FUNCTIONS ---
 window.loadReportData = loadReportData;
 window.updateDateFromHours = updateDateFromHours;
