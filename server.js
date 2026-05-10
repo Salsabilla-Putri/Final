@@ -1849,6 +1849,29 @@ app.get('/api/maintenance/cost-summary', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+app.get('/api/alerts/count', async (req, res) => {
+    try {
+        const { deviceId, startDate, endDate, resolved } = req.query;
+        let query = {};
+        
+        if (deviceId) query.deviceId = deviceId;
+        
+        // Filter berdasarkan status resolved jika dikirim frontend
+        if (resolved !== undefined) {
+            query.resolved = resolved === 'true'; 
+        }
+
+        if (startDate && endDate) {
+            query.timestamp = { $gte: new Date(startDate), $lte: new Date(endDate) };
+        }
+
+        // Gunakan countDocuments agar lebih ringan dibanding mengambil datanya
+        const count = await Alert.countDocuments(query);
+        res.json({ success: true, count });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // ── CRITICAL: Semua /api/* yang tidak cocok harus return JSON, BUKAN HTML.
 // Tanpa ini, catch-all di bawah mengembalikan login.html → error "Unexpected token '<'"
