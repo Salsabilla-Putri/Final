@@ -929,11 +929,12 @@ const Maintenance = mongoose.model('Maintenance', maintenanceSchema);
 
 const maintenanceSuggestionSchema = new mongoose.Schema({
     source: { type: String, default: 'system' },
-    status: { type: String, default: 'pending', enum: ['pending', 'approved', 'consumed'] },
+    status: { type: String, default: 'pending', enum: ['pending', 'approved', 'scheduled', 'consumed'] },
     decisionStatus: { type: String, enum: ['AMAN', 'WASPADA', 'BAHAYA'], required: true },
     message: { type: String, required: true },
     recommendation: { type: String, required: true },
     priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
+    estimatedCost: { type: Number, default: 0 },          // <-- TAMBAHKAN
     suggestedDate: Date,
     createdAt: { type: Date, default: Date.now },
     approvedAt: Date
@@ -1789,6 +1790,54 @@ app.post('/api/cbm/convert-to-task', async (req, res) => {
 
         console.log(`🔧 CBM Task created: ${task.task}`);
         res.json({ success: true, data: task });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Letakkan setelah blok “TAMBAHAN UNTUK server.js — CBM Endpoints”
+// di dalam server.js (sebelum app.use('/api', ...) catch‑all)
+
+app.post('/api/cbm/suggestion', async (req, res) => {
+    try {
+        const { finding, dueDate } = req.body || {};
+        if (!finding?.action) {
+            return res.status(400).json({ success: false, error: 'finding.action diperlukan' });
+        }
+
+        // Konversi level CBM ke decisionStatus
+        const level = finding.level || 'watch';
+        let decisionStatus = 'WASPADA';
+        if (level === 'critical') decisionStatus = 'BAHAYA';
+        else if (level === 'ok') decisionStatus = 'AMAN';
+
+        const suggestion = await new MaintenanceSuggestion({
+            source: 'cbm',
+            status: 'pending',
+            decisionStatus,
+            message: finding.details || finding.action,
+            recommendation: finding.action,
+            priority: finding.priority || 'medium',
+            estimatedCost: finding.estimatedCost || 0,
+            suggestedDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 3 * 24 * 3600000),
+            createdAt: new Date()
+        }).save();
+
+        res.json({ success: true, data: suggestion });
+    } catch (error) {
+        console.error('CBM Suggestion Error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+app.get('/api/maintenance/cost-summary', async (req, res) => {
+    try {
+        const { deviceId } = req.query;
+        const match = deviceId ? { deviceId } : {};
+        const summary = await Maintenance.aggregate([
+            { $match: { ...match, status: { $ne: 'cancelled' } } },
+            { $group: { _id: '$deviceId', totalCost: { $sum: '$cost' }, count: { $sum: 1 } } }
+        ]);
+        res.json({ success: true, data: summary });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

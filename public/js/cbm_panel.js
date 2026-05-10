@@ -22,7 +22,7 @@
     'use strict';
 
     const CBM_API     = '/api/cbm/analysis';
-    const CONVERT_API = '/api/cbm/convert-to-task';
+    const SUGGEST_API = '/api/cbm/suggestion';
 
     const LEVEL = {
         critical: { label: 'KRITIS',  color: '#dc2626', bg: '#fef2f2', border: '#fca5a5', icon: '🔴' },
@@ -223,7 +223,7 @@
             const slopeAbs = Math.abs(f.trend?.slopePerHour ?? 0).toFixed(3);
 
             return `
-            <div style="border:1px solid ${m.border};border-radius:10px;padding:13px 15px;
+            <div class="cbm-finding-card" style="border:1px solid ${m.border};border-radius:10px;padding:13px 15px;
                         margin-bottom:9px;background:${m.bg};">
               <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
                 <div style="flex:1;min-width:200px;">
@@ -254,19 +254,35 @@
                   </div>` : `
                   <span style="font-size:11px;color:#64748b;">Sumber: FFT Spectrum Analysis</span>`}
                 </div>
-                <button class="cbm-create-task-btn" data-idx="${idx}"
-                        style="padding:7px 12px;background:#1745a5;color:#fff;border:none;
-                               border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
-                               height:fit-content;white-space:nowrap;">
-                    + Buat Task
-                </button>
+                <div style="display:flex;gap:6px;align-items:flex-start;">
+                    <button class="cbm-approve-btn" data-idx="${idx}"
+                            style="padding:7px 12px;background:#16a34a;color:#fff;border:none;
+                                   border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
+                                   white-space:nowrap;">✅ Setujui</button>
+                    <button class="cbm-reject-btn" data-idx="${idx}"
+                            style="padding:7px 12px;background:#ef4444;color:#fff;border:none;
+                                   border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
+                                   white-space:nowrap;">❌ Tolak</button>
+                </div>
               </div>
             </div>`;
         }).join('');
 
-        list.querySelectorAll('.cbm-create-task-btn').forEach(btn => {
+        list.querySelectorAll('.cbm-approve-btn').forEach(btn => {
             btn.addEventListener('click', async function () {
-                await handleCreateTask(findings[parseInt(this.dataset.idx, 10)], this);
+                const finding = findings[parseInt(this.dataset.idx, 10)];
+                await handleApproveFinding(finding, this);
+            });
+        });
+        list.querySelectorAll('.cbm-reject-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const card = this.closest('.cbm-finding-card');
+                if (card) card.remove();
+                // Jika semua kartu hilang, tampilkan pesan kosong
+                if (!list.querySelector('.cbm-finding-card')) {
+                    const empty = document.getElementById('cbmFindingsEmpty');
+                    if (empty) empty.style.display = 'block';
+                }
             });
         });
     }
@@ -328,11 +344,11 @@
                     </span>
                   </td>
                   <td style="padding:9px 10px;">
-                    <button class="cbm-prev-task-btn" data-prev-idx="${idx}"
-                            style="padding:4px 9px;background:#f1f5f9;color:#374151;
-                                   border:1px solid #e2e8f0;border-radius:5px;
+                    <button class="cbm-prev-approve-btn" data-prev-idx="${idx}"
+                            style="padding:4px 9px;background:#16a34a;color:#fff;
+                                   border:none;border-radius:5px;
                                    cursor:pointer;font-size:11px;font-weight:600;">
-                        + Task
+                        ✅ Setujui
                     </button>
                   </td>
                 </tr>`;
@@ -340,16 +356,19 @@
           </tbody>
         </table>`;
 
-        list.querySelectorAll('.cbm-prev-task-btn').forEach(btn => {
+        list.querySelectorAll('.cbm-prev-approve-btn').forEach(btn => {
             btn.addEventListener('click', async function () {
                 const s = schedule[parseInt(this.dataset.prevIdx, 10)];
-                await handleCreateTask({
+                // Buat finding tiruan dari preventive schedule
+                const finding = {
                     action:   s.task,
                     details:  `Preventive berkala. Interval ${s.intervalHours} jam. Sisa ${s.hoursRemaining} jam.`,
                     priority: s.urgency === 'overdue' ? 'high' : s.urgency === 'due-soon' ? 'medium' : 'low',
                     type:     'Preventive',
-                    component: s.component
-                }, this);
+                    component: s.component,
+                    estimatedCost: 0
+                };
+                await handleApproveFinding(finding, this);
             });
         });
     }
@@ -374,34 +393,33 @@
         }
     }
 
-    // ── CREATE TASK ───────────────────────────────────────────────────────────
-    async function handleCreateTask(finding, btn) {
+    // ── APPROVE FINDING (Redirect Flow) ──────────────────────────────────────
+    async function handleApproveFinding(finding, btn) {
         const original = btn.innerHTML;
         btn.disabled   = true;
         btn.textContent = '⏳';
 
         try {
-            const res = await fetch(CONVERT_API, {
+            const res = await fetch(SUGGEST_API, {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify({ finding })
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            btn.textContent      = '✅ Tersimpan';
-            btn.style.background = '#16a34a';
-            setTimeout(() => {
-                btn.innerHTML        = original;
-                btn.style.background = '';
-                btn.disabled         = false;
-            }, 2500);
+            const json = await res.json();
+            if (!json.success) throw new Error(json.error);
+
+            btn.textContent = '✅ Tersimpan';
+            // Simpan saran lengkap ke sessionStorage
+            sessionStorage.setItem('pendingCbmSuggestion', JSON.stringify(json.data));
+            // Redirect ke halaman maintenance
+            window.location.href = 'maintenance.html';
         } catch (err) {
-            console.error('Create task error:', err);
-            btn.textContent      = '❌ Gagal';
-            btn.style.background = '#ef4444';
+            console.error('Approve finding error:', err);
+            btn.textContent = '❌ Gagal';
             setTimeout(() => {
-                btn.innerHTML        = original;
-                btn.style.background = '';
-                btn.disabled         = false;
+                btn.innerHTML = original;
+                btn.disabled = false;
             }, 2000);
         }
     }

@@ -1,5 +1,6 @@
 const API_URL = '/api/maintenance';
 const SUGGESTION_API_URL = '/api/maintenance/suggestion';
+const COST_SUMMARY_URL = '/api/maintenance/cost-summary';
 let allTasks = [];
 let currentFilter = 'all';
 let pendingSuggestion = null;
@@ -16,7 +17,7 @@ async function fetchTasks() {
         const res = await fetch(API_URL);
         const json = await res.json();
         if (json.success) {
-            allTasks = json.data; // Simpan data dari DB
+            allTasks = json.data;
             render();
         }
     } catch (e) { console.error("Fetch error:", e); }
@@ -26,12 +27,23 @@ async function fetchMaintenanceSuggestion() {
     try {
         const res = await fetch(SUGGESTION_API_URL);
         const json = await res.json();
-        const suggestion = json?.suggestion;
+        const suggestion = json?.data?.suggestion || json?.suggestion;
         pendingSuggestion = suggestion && suggestion.status === 'pending' ? suggestion : null;
         renderSuggestionBanner();
     } catch (error) {
         console.error('Suggestion fetch error:', error);
     }
+}
+
+async function fetchCostSummary() {
+    try {
+        const res = await fetch(COST_SUMMARY_URL);
+        const json = await res.json();
+        if (json.success && json.data.length) {
+            const total = json.data[0].totalCost || 0;
+            document.getElementById('totalCostDisplay').innerText = formatIDR(total);
+        }
+    } catch (e) { /* silent */ }
 }
 
 function renderSuggestionBanner() {
@@ -133,7 +145,6 @@ function render() {
     // Render Timeline
     if(timeline) {
         timeline.innerHTML = '';
-        // Sort by createdAt descending
         const recentTasks = [...allTasks].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
         
         recentTasks.forEach(t => {
@@ -163,9 +174,16 @@ async function saveMaintenance() {
         cost: Number(document.getElementById('cost').value || 0),
         dueDate: document.getElementById('dueDate').value,
         assignedTo: document.getElementById('assignedTo').value,
-        source: pendingSuggestion ? 'system' : 'manual',
-        suggestionId: pendingSuggestion?._id || null
+        source: 'manual',
+        suggestionId: null
     };
+
+    const modal = document.getElementById('addMaintenanceModal');
+    const suggestionId = modal?.dataset?.suggestionId;
+    if (suggestionId) {
+        payload.source = 'system';
+        payload.suggestionId = suggestionId;
+    }
 
     if(!payload.task || !payload.dueDate) return showNotif('Please fill required fields', 'error');
 
@@ -176,24 +194,27 @@ async function saveMaintenance() {
         body: JSON.stringify(payload)
     });
 
-    if (pendingSuggestion?._id) {
-        await fetch(`/api/maintenance/suggestion/${pendingSuggestion._id}/status`, {
+    if (suggestionId) {
+        // Update status saran menjadi scheduled
+        await fetch(`/api/maintenance/suggestion/${suggestionId}/status`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: 'scheduled' })
         });
-        pendingSuggestion = null;
+        // Hapus atribut saran dari modal
+        delete modal.dataset.suggestionId;
+        // Refresh banner
+        fetchMaintenanceSuggestion();
     }
 
     closeAddModal();
-    fetchTasks(); // Refresh data
+    fetchTasks();
     showNotif('Task scheduled successfully', 'success');
 }
 
 // UPDATE STATUS (COMPLETE)
 async function completeTask(id) {
     if(!confirm("Mark task as completed?")) return;
-    // PUT ke Server
     await fetch(`${API_URL}/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -206,7 +227,6 @@ async function completeTask(id) {
 // HAPUS DATA
 async function deleteTask(id) {
     if(!confirm("Delete this task?")) return;
-    // DELETE ke Server
     await fetch(`${API_URL}/${id}`, { method: 'DELETE' });
     fetchTasks();
     showNotif('Task deleted', 'success');
@@ -224,21 +244,41 @@ function openAddModal() { document.getElementById('addMaintenanceModal').style.d
 function closeAddModal() { document.getElementById('addMaintenanceModal').style.display = 'none'; }
 
 function openAddModalFromSuggestion() {
+    // Gunakan saran dari banner sistem, bukan dari CBM
     if (!pendingSuggestion) return openAddModal();
     openAddModal();
-
+    // Isi form dari saran yang ada
     document.getElementById('taskName').value = pendingSuggestion.recommendation || '';
     document.getElementById('taskType').value = 'preventive';
-    document.getElementById('priority').value = pendingSuggestion.priority || (
-        pendingSuggestion.decisionStatus === 'BAHAYA' ? 'high' :
-        pendingSuggestion.decisionStatus === 'WASPADA' ? 'medium' : 'low'
-    );
+    document.getElementById('priority').value = pendingSuggestion.priority || 'medium';
+    document.getElementById('cost').value = pendingSuggestion.estimatedCost || 0;
     if (pendingSuggestion.suggestedDate) {
         const due = new Date(pendingSuggestion.suggestedDate);
-        if (!Number.isNaN(due.getTime())) {
+        if (!isNaN(due.getTime())) {
             document.getElementById('dueDate').value = due.toISOString().slice(0, 10);
         }
     }
+}
+
+// Auto-fill from CBM suggestion (dipanggil saat redirect)
+function autoFillFromSuggestion(suggestion) {
+    openAddModal();
+
+    document.getElementById('taskName').value = suggestion.recommendation || '';
+    document.getElementById('taskType').value = suggestion.priority === 'high' ? 'corrective' : 'preventive';
+    document.getElementById('priority').value = suggestion.priority || 'medium';
+    document.getElementById('cost').value = suggestion.estimatedCost || 0;
+
+    if (suggestion.suggestedDate) {
+        const due = new Date(suggestion.suggestedDate);
+        if (!isNaN(due.getTime())) {
+            document.getElementById('dueDate').value = due.toISOString().slice(0, 10);
+        }
+    }
+
+    // Simpan suggestion ID di dataset modal untuk digunakan saat save
+    const modal = document.getElementById('addMaintenanceModal');
+    modal.dataset.suggestionId = suggestion._id || '';
 }
 
 function showNotif(msg, type) {
@@ -266,13 +306,24 @@ function exportCSV() {
 document.addEventListener('DOMContentLoaded', () => {
     // Load Sidebar
     fetch('sidebar.html').then(r=>r.text()).then(h =>document.getElementById('sidebar-container').innerHTML = h);
-    document.getElementById('userarea').querySelector('span').innerText = localStorage.getItem('username') || 'Pengguna';
-    
-    // User Info
     const user = localStorage.getItem('username') || 'Pengguna';
     document.getElementById('userarea').querySelector('span').innerText = user;
 
     // Load Data Pertama Kali
     fetchTasks();
     fetchMaintenanceSuggestion();
+    fetchCostSummary();
+
+    // Cek apakah ada saran dari CBM (redirect dari reports)
+    const pendingCbm = sessionStorage.getItem('pendingCbmSuggestion');
+    if (pendingCbm) {
+        try {
+            const suggestion = JSON.parse(pendingCbm);
+            autoFillFromSuggestion(suggestion);
+            sessionStorage.removeItem('pendingCbmSuggestion');
+        } catch (e) {
+            console.warn('Invalid CBM suggestion in sessionStorage');
+            sessionStorage.removeItem('pendingCbmSuggestion');
+        }
+    }
 });
