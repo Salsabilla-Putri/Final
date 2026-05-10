@@ -434,43 +434,36 @@ function updateActiveTimeChart(rows) {
         dayMap[getWibDayKey(-i)] = 0;
     }
 
-    // Try dedicated endpoint first, fallback to history rows
-    Promise.allSettled([
-        fetch('/api/daily-active-time?days=7').then(r => r.ok ? r.json() : null),
-        fetch('/api/daily-active-time/today').then(r => r.ok ? r.json() : null)
-    ]).then(([histResult, todayResult]) => {
-        const histJson  = histResult.status  === 'fulfilled' ? histResult.value  : null;
-        const todayJson = todayResult.status === 'fulfilled' ? todayResult.value : null;
-
-        if (histJson?.success && Array.isArray(histJson.data)) {
-            histJson.data.forEach(r => {
-                if (Object.prototype.hasOwnProperty.call(dayMap, r.date)) {
-                    dayMap[r.date] = r.activeHours || 0;
-                }
-            });
-        } else {
-            // Fallback: accumulate from session history
-            (rows || []).forEach(r => {
-                const start = new Date(r.startedAt);
-                const end   = r.endedAt ? new Date(r.endedAt) : new Date();
-                const key   = new Date(start.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-                if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
-                    dayMap[key] += Math.max(0, (end - start) / 3600000);
-                }
-            });
-        }
+    // Gunakan endpoint yang benar-benar tersedia di server:
+    // - history (session list)
+    // - stats?hours=24 (nilai realtime hari ini)
+    Promise.resolve().then(() => {
+        (rows || []).forEach(r => {
+            const start = new Date(r.startedAt);
+            const end   = r.endedAt ? new Date(r.endedAt) : new Date();
+            const key   = new Date(start.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+            if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
+                dayMap[key] += Math.max(0, (end - start) / 3600000);
+            }
+        });
 
         const todayKey = getWibDayKey(0);
-        if (todayJson?.success && todayJson.activeHours != null) {
-            dayMap[todayKey] = todayJson.activeHours;
-        }
+        return fetch('/api/generator-active-time/stats?hours=24')
+            .then(r => r.ok ? r.json() : null)
+            .then(todayJson => {
+                if (todayJson?.success && todayJson.data?.totalDurationHours != null) {
+                    dayMap[todayKey] = todayJson.data.totalDurationHours;
+                }
 
-        const keys = Object.keys(dayMap);
-        renderChart(
-            keys.map(dayLabelWib),
-            keys.map(k => +((dayMap[k] || 0).toFixed(2))),
-            keys.findIndex(k => k === todayKey)
-        );
+                const keys = Object.keys(dayMap);
+                renderChart(
+                    keys.map(dayLabelWib),
+                    keys.map(k => +((dayMap[k] || 0).toFixed(2))),
+                    keys.findIndex(k => k === todayKey)
+                );
+            });
+    }).catch(err => {
+        console.warn('Active-time chart fallback error:', err);
     });
 }
 
