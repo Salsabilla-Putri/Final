@@ -94,6 +94,15 @@ async function fetchDashboardData() {
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
         if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
 
+        const cbmData = cbmRes.status === 'fulfilled'
+            ? await cbmRes.value.json().catch(() => null) : null;
+
+        if (cbmData?.success && cbmData.analysis) {
+            renderHealthScoreFromCbm(cbmData.analysis);
+        } else if (engineData?.success && engineData.data) {
+            renderHealthScore(engineData.data);
+        }
+
         setConnectionStatus(true);
         setLastUpdated();
 
@@ -215,8 +224,6 @@ function renderHealthScore(engineData, cbmData) {
         })
         .catch(() => {});
 
-    // Health score
-    renderHealthScore(data);
 }
 
 function calculateHealth(data) {
@@ -264,6 +271,29 @@ function renderHealthScore(engineData, cbmData) {
         <div class="health-ring" style="--hc:${color};">
             <div class="health-ring-value" style="color:${color};">${health}%</div>
             <div class="health-ring-label">Health Score</div>
+        </div>
+        <div class="health-warning-wrap">${pillsHTML}</div>
+    `;
+}
+
+
+function renderHealthScoreFromCbm(analysis) {
+    const container = document.getElementById('systemHealthContainer');
+    if (!container) return;
+
+    const score = Math.max(0, Math.min(100, Number(analysis.healthScore || 0)));
+    const status = (analysis.healthStatus || '').toUpperCase();
+    const color = score >= 80 ? '#10b981' : score >= 55 ? '#f59e0b' : '#ef4444';
+
+    const findings = Array.isArray(analysis.findings) ? analysis.findings.slice(0, 3) : [];
+    const pillsHTML = findings.length
+        ? findings.map(f => `<span class="status-pill ${f.level === 'critical' ? 'danger' : 'warn'}">${f.component || 'Komponen'}: ${f.action || 'Perlu perhatian'}</span>`).join('')
+        : `<span class="status-pill ok"><i class="fas fa-check"></i> ${status || 'AMAN'}</span>`;
+
+    container.innerHTML = `
+        <div class="health-ring" style="--hc:${color};">
+            <div class="health-ring-value" style="color:${color};">${score}%</div>
+            <div class="health-ring-label">Health Score (CBM)</div>
         </div>
         <div class="health-warning-wrap">${pillsHTML}</div>
     `;
