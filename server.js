@@ -287,12 +287,20 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
     if (uniqueRecipients.length === 0) return;
 
     // Konfigurasi Nodemailer Transporter
+    // Konfigurasi Nodemailer Transporter yang lebih tangguh untuk Cloud (Render)
     const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true, // Wajib true jika menggunakan port 465 (SSL)
         auth: {
             user: emailUser,
             pass: emailPass
-        }
+        },
+        // Tambahan opsi untuk mencegah timeout di lingkungan cloud tertentu
+        tls: {
+            rejectUnauthorized: false
+        },
+        connectionTimeout: 10000 // Beri waktu toleransi 10 detik
     });
 
     // LOGIKA GRUP: Membuat ringkasan untuk Subjek Email
