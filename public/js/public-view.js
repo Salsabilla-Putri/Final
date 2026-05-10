@@ -171,10 +171,8 @@ function updateOperationsSection(data) {
         .then(r => r.json())
         .then(sd => {
             if (!sd?.success) return;
-            const h = Math.floor(sd.data.totalDurationHours || 0);
-            const m = Math.floor(((sd.data.totalDurationHours || 0) - h) * 60);
             const el = document.getElementById('engToday');
-            if (el) el.innerText = `${h}h ${m}m`;
+            if (el) el.innerText = formatActiveHours(sd.data.totalDurationHours || 0);
         })
         .catch(() => {});
 
@@ -308,6 +306,21 @@ function renderRecentActivity(activities) {
 // ════════════════════════════════════════════════════════════════════════════
 //  ANALYTICS — Active Time Bar Chart
 // ════════════════════════════════════════════════════════════════════════════
+
+function formatActiveHours(hours) {
+    const safe = Number(hours || 0);
+    const h = Math.floor(safe);
+    const m = Math.round((safe - h) * 60);
+    if (h === 0) return `${m}m`;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function getWibDayKey(offsetDay = 0) {
+    const WIB_OFFSET_MS = 7 * 3600 * 1000;
+    const d = new Date(Date.now() + WIB_OFFSET_MS + offsetDay * 86400000);
+    return d.toISOString().slice(0, 10);
+}
+
 function updateActiveTimeChart(rows) {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) return;
@@ -350,12 +363,10 @@ function updateActiveTimeChart(rows) {
         });
     };
 
-    // Build 7-day map (WIB offset +7h)
-    const WIB_OFFSET_MS = 7 * 3600 * 1000;
+    // Build 7-day map WIB (selaras dengan index.html/dashboard.js)
     const dayMap = {};
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(Date.now() + WIB_OFFSET_MS - i * 86400000);
-        dayMap[d.toISOString().slice(0, 10)] = 0;
+        dayMap[getWibDayKey(-i)] = 0;
     }
 
     // Try dedicated endpoint first, fallback to history rows
@@ -377,14 +388,14 @@ function updateActiveTimeChart(rows) {
             (rows || []).forEach(r => {
                 const start = new Date(r.startedAt);
                 const end   = r.endedAt ? new Date(r.endedAt) : new Date();
-                const key   = new Date(start.getTime() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+                const key   = new Date(start.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
                 if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
                     dayMap[key] += Math.max(0, (end - start) / 3600000);
                 }
             });
         }
 
-        const todayKey = new Date(Date.now() + WIB_OFFSET_MS).toISOString().slice(0, 10);
+        const todayKey = getWibDayKey(0);
         if (todayJson?.success && todayJson.activeHours != null) {
             dayMap[todayKey] = todayJson.activeHours;
         }
