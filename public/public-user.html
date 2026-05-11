@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
   <meta charset="utf-8" />
-  <title>GENSYS — Pengaturan Akun</title>
+  <title>GENSYS — Profil Pengguna</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="js/auth-guard.js"></script>
   
@@ -12,67 +12,114 @@
   <link rel="stylesheet" href="css/typography.css">
 
   <style>
-    .profile-wrap { display: flex; justify-content: center; margin-top: 30px; }
-    .profile-card { width: 100%; max-width: 500px; padding: 30px; background: #fff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    .profile-wrap { display: flex; justify-content: center; margin-top: 30px; padding: 0 20px; }
+    .profile-card { 
+        width: 100%; max-width: 500px; padding: 35px; background: #fff; 
+        border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); 
+        border: 1px solid #e2e8f0;
+    }
+    .profile-header { text-align: center; margin-bottom: 30px; }
+    .profile-img { 
+        width: 100px; height: 100px; border-radius: 50%; margin-bottom: 15px; 
+        border: 4px solid #f1f5f9; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    }
+    .role-badge { 
+        background: #1745a5; color: white; padding: 4px 12px; 
+        border-radius: 20px; font-size: 11px; font-weight: 700; 
+        text-transform: uppercase; display: inline-block;
+    }
+    .section-title { 
+        font-size: 12px; font-weight: 700; color: #64748b; 
+        text-transform: uppercase; letter-spacing: 0.5px; 
+        margin: 25px 0 15px 0; display: flex; align-items: center; gap: 8px;
+    }
+    .section-title::after { content: ""; flex: 1; height: 1px; background: #f1f5f9; }
+    
     .form-group { margin-bottom: 16px; }
-    .form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #475569; font-size: 14px; }
-    .form-group input { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; outline: none; }
-    .form-group input:focus { border-color: #1745a5; }
-    .form-group input[readonly] { background-color: #f1f5f9; color: #64748b; cursor: not-allowed; }
-    .btn-save { width: 100%; padding: 12px; background: #1745a5; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+    .form-group label { display: block; margin-bottom: 6px; font-weight: 600; color: #475569; font-size: 13px; }
+    .input-wrapper { position: relative; }
+    .input-wrapper i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 14px; }
+    .form-group input { 
+        width: 100%; padding: 10px 12px 10px 38px; border: 1.5px solid #e2e8f0; 
+        border-radius: 8px; font-size: 14px; outline: none; transition: all 0.2s;
+    }
+    .form-group input:focus { border-color: #1745a5; box-shadow: 0 0 0 3px rgba(23, 69, 165, 0.1); }
+    .form-group input[readonly] { background-color: #f8fafc; color: #94a3b8; cursor: not-allowed; border-style: dashed; }
+    
+    .btn-save { 
+        width: 100%; padding: 12px; background: #1745a5; color: white; 
+        border: none; border-radius: 8px; font-weight: 600; cursor: pointer; 
+        margin-top: 20px; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
     .btn-save:hover { background: #11327a; }
-    .alert-msg { padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 14px; display: none; }
-    .alert-success { background: #d1fae5; color: #065f46; border: 1px solid #10b981; }
-    .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #ef4444; }
+    
+    .alert-msg { padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 13px; display: none; }
+    .alert-success { background: #ecfdf5; color: #065f46; border: 1px solid #10b981; }
+    .alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #ef4444; }
   </style>
 </head>
 <body>
 
-  <div class="sidebar-overlay"></div>
-  <button class="mobile-menu-toggle" aria-label="Toggle menu"><i class="fas fa-bars"></i></button>
   <div id="sidebar-container"></div>
 
   <div class="main-content">
     <div class="topbar">
       <div class="topbar-title">Pengaturan Akun</div>
       <div class="user-info" style="cursor: default;">
-         <i class="fas fa-user"></i> <span id="topbar-username">Pengguna</span>
+         <i class="fas fa-user-circle"></i> <span id="topbar-username">Pengguna</span>
       </div>
     </div>
 
     <div class="profile-wrap">
       <div class="profile-card">
-          <div style="text-align: center; margin-bottom: 20px;">
-              <h2 style="color: #1e293b; margin: 0;">Profil Saya</h2>
-              <p style="color: #64748b; font-size: 14px;">Perbarui informasi akun Anda</p>
+          <div class="profile-header">
+              <img id="prof-avatar" src="https://ui-avatars.com/api/?background=1745a5&color=fff&size=128" class="profile-img">
+              <h2 id="display-name" style="margin: 0; color: #1e293b; font-size: 20px;">Memuat...</h2>
+              <div class="role-badge" id="display-role">Masyarakat</div>
           </div>
 
           <div id="status-msg" class="alert-msg"></div>
 
+          <div class="section-title">Informasi Akun</div>
           <div class="form-group">
-              <label>Device ID (Terhubung)</label>
-              <input type="text" id="prof-device" readonly>
+              <label>Device ID</label>
+              <div class="input-wrapper">
+                  <i class="fas fa-microchip"></i>
+                  <input type="text" id="prof-device" readonly>
+              </div>
           </div>
           <div class="form-group">
               <label>Nama Lengkap</label>
-              <input type="text" id="prof-name" required>
+              <div class="input-wrapper">
+                  <i class="fas fa-user"></i>
+                  <input type="text" id="prof-name" placeholder="Masukkan nama">
+              </div>
           </div>
           <div class="form-group">
-              <label>Alamat Email</label>
-              <input type="email" id="prof-email" required>
+              <label>Email</label>
+              <div class="input-wrapper">
+                  <i class="fas fa-envelope"></i>
+                  <input type="email" id="prof-email" placeholder="email@contoh.com">
+              </div>
+          </div>
+
+          <div class="section-title">Keamanan</div>
+          <div class="form-group">
+              <label>Password Saat Ini (Lama)</label>
+              <div class="input-wrapper">
+                  <i class="fas fa-shield-alt"></i>
+                  <input type="password" id="prof-old-password" placeholder="Wajib diisi jika ganti password">
+              </div>
           </div>
           <div class="form-group">
-              <label>Password Baru (Opsional)</label>
-              <input type="password" id="prof-password" placeholder="Kosongkan jika tidak ingin mengubah password">
+              <label>Password Baru</label>
+              <div class="input-wrapper">
+                  <i class="fas fa-key"></i>
+                  <input type="password" id="prof-new-password" placeholder="Kosongkan jika tidak diubah">
+              </div>
           </div>
 
           <button id="btn-save" class="btn-save"><i class="fas fa-save"></i> Simpan Perubahan</button>
-
-          <div style="margin-top: 25px; border-top: 1px solid #e2e8f0; padding-top: 15px; text-align: center;">
-              <button onclick="logout()" style="background: none; border: none; color: #ef4444; font-weight: 600; cursor: pointer; padding: 10px;">
-                  <i class="fas fa-sign-out-alt"></i> Sign Out
-              </button>
-          </div>
       </div>
     </div>
   </div>
@@ -90,29 +137,34 @@
           setTimeout(() => el.style.display = 'none', 5000);
       }
 
-      // Ambil data profil dari database saat dimuat
       async function loadProfile() {
           try {
               const res = await fetch(`/api/users/profile?username=${encodeURIComponent(currentUsername)}`);
               const json = await res.json();
               if (json.success) {
-                  document.getElementById('prof-name').value = json.data.name;
-                  document.getElementById('prof-email').value = json.data.email;
-                  document.getElementById('prof-device').value = json.data.deviceId;
+                  const u = json.data;
+                  document.getElementById('prof-name').value = u.name;
+                  document.getElementById('prof-email').value = u.email;
+                  document.getElementById('prof-device').value = u.deviceId;
+                  document.getElementById('display-name').innerText = u.name;
+                  document.getElementById('display-role').innerText = u.role;
+                  document.getElementById('prof-avatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=1745a5&color=fff&size=128`;
               }
-          } catch (e) {
-              console.error("Gagal memuat profil:", e);
-          }
+          } catch (e) { console.error("Gagal memuat profil:", e); }
       }
 
-      // Simpan perubahan profil
       document.getElementById('btn-save').addEventListener('click', async () => {
           const btn = document.getElementById('btn-save');
-          const newName = document.getElementById('prof-name').value;
-          const newEmail = document.getElementById('prof-email').value;
-          const newPassword = document.getElementById('prof-password').value;
+          const name = document.getElementById('prof-name').value;
+          const email = document.getElementById('prof-email').value;
+          const oldPass = document.getElementById('prof-old-password').value;
+          const newPass = document.getElementById('prof-new-password').value;
 
-          btn.innerText = 'Menyimpan...';
+          if (newPass && !oldPass) {
+              return showMessage('Harap masukkan password lama untuk verifikasi perubahan password.', false);
+          }
+
+          btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Memproses...';
           btn.disabled = true;
 
           try {
@@ -121,34 +173,31 @@
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                       currentName: currentUsername,
-                      name: newName,
-                      email: newEmail,
-                      password: newPassword ? newPassword : null
+                      name: name,
+                      email: email,
+                      oldPassword: oldPass,
+                      newPassword: newPass ? newPass : null
                   })
               });
               const json = await res.json();
               
               if (json.success) {
                   showMessage('Profil berhasil diperbarui!', true);
-                  // Update username di localStorage agar session tetap valid
                   localStorage.setItem('username', json.user.name);
                   document.getElementById('topbar-username').innerText = json.user.name;
-                  document.getElementById('prof-password').value = ''; // Reset form password
+                  document.getElementById('display-name').innerText = json.user.name;
+                  document.getElementById('prof-old-password').value = '';
+                  document.getElementById('prof-new-password').value = '';
               } else {
                   showMessage(json.message || 'Gagal memperbarui profil.', false);
               }
           } catch (e) {
-              showMessage('Terjadi kesalahan koneksi.', false);
+              showMessage('Kesalahan koneksi server.', false);
           } finally {
               btn.innerHTML = '<i class="fas fa-save"></i> Simpan Perubahan';
               btn.disabled = false;
           }
       });
-
-      function logout() {
-          ['isLoggedIn','userRole','hasLoginSession','username'].forEach(k => localStorage.removeItem(k));
-          window.location.href = 'login.html';
-      }
 
       window.onload = loadProfile;
   </script>

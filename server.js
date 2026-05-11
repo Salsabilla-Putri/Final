@@ -1891,30 +1891,41 @@ app.get('/api/users/profile', async (req, res) => {
 });
 
 // Update data profil (Nama, Email, Password)
+// server.js - API Update Profil dengan Verifikasi Password
 app.put('/api/users/profile', async (req, res) => {
     try {
-        const { currentName, name, email, password } = req.body;
+        const { currentName, name, email, oldPassword, newPassword } = req.body;
         
         if (!currentName) return res.status(400).json({ success: false, message: 'Identitas saat ini diperlukan.' });
 
         const user = await User.findOne({ name: currentName });
         if (!user) return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
 
-        // Update field jika dikirimkan
+        // VERIFIKASI KEAMANAN (Jika user ingin ganti password)
+        if (newPassword) {
+            if (!oldPassword) {
+                return res.status(400).json({ success: false, message: 'Password lama wajib diisi untuk verifikasi keamanan.' });
+            }
+            // Bandingkan password lama dengan yang di DB
+            if (user.password !== oldPassword) {
+                return res.status(401).json({ success: false, message: 'Password lama salah.' });
+            }
+            user.password = newPassword;
+        }
+
+        // Update data lainnya
         if (name) user.name = name;
         if (email) user.email = email;
-        if (password) user.password = password;
 
         await user.save();
         res.json({ 
             success: true, 
-            message: 'Profil berhasil diperbarui.', 
+            message: 'Profil diperbarui.', 
             user: { name: user.name, email: user.email, role: user.role } 
         });
     } catch (error) {
-        // Handle jika email bentrok (duplicate key)
         if (error.code === 11000) {
-            return res.status(400).json({ success: false, message: 'Email sudah digunakan oleh akun lain.' });
+            return res.status(400).json({ success: false, message: 'Email sudah digunakan akun lain.' });
         }
         res.status(500).json({ success: false, error: error.message });
     }
