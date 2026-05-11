@@ -184,12 +184,11 @@ function renderAlertList(arr) {
 }
 
 // ─── FORMAT HELPERS ───────────────────────────────────────────────────────────
-/** Format menit ke "Xj Ym" atau "Ym" */
-function fmtMinutes(totalMin) {
-    const h = Math.floor(totalMin / 60);
-    const m = Math.round(totalMin % 60);
-    if (h === 0) return `${m}m`;
-    return m > 0 ? `${h}j ${m}m` : `${h}j`;
+function fmtHours(h) {
+    const hh = Math.floor(h);
+    const mm = Math.round((h - hh) * 60);
+    if (hh === 0) return `${mm}m`;
+    return mm > 0 ? `${hh}h ${mm}m` : `${hh}h`;
 }
 
 // ─── CHART — DATA DARI DATABASE (BUKAN FAKE DATA) ────────────────────────────
@@ -210,7 +209,7 @@ async function initChart() {
     const WIB_OFFSET = 7 * 60 * 60 * 1000; // UTC+7 dalam ms
     const now        = new Date();
 
-    // Bangun map { 'YYYY-MM-DD': menitAktif } untuk 7 hari terakhir (WIB)
+    // Bangun map { 'YYYY-MM-DD': jamAktif } untuk 7 hari terakhir (WIB)
     const dayMap = {};
     for (let i = 6; i >= 0; i--) {
         const d   = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
@@ -228,29 +227,30 @@ async function initChart() {
                 // Sesi masih berjalan (belum ada endedAt) → gunakan waktu sekarang
                 const end   = r.endedAt ? new Date(r.endedAt) : now;
 
-                // Pecah sesi yang melintas batas hari, akumulasi dalam MENIT
-                _splitSessionByDay(start, end, WIB_OFFSET).forEach(({ dateKey, minutes }) => {
+                // Pecah sesi yang melintas batas hari
+                _splitSessionByDay(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
                     if (dayMap.hasOwnProperty(dateKey)) {
-                        dayMap[dateKey] += minutes;
+                        dayMap[dateKey] += hours;
                     }
                 });
             });
         }
     } catch (e) {
         console.warn('Active time fetch error', e);
+        // Render chart tetap muncul, hanya semua nilai 0
     }
 
-    const todayKey    = new Date(now.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
-    const labels      = [];
-    const dataPoints  = [];
-    let   todayMinutes = 0;
+    const todayKey   = new Date(now.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
+    const labels     = [];
+    const dataPoints = [];
+    let   todayHours = 0;
 
     Object.keys(dayMap).sort().forEach(key => {
         const d   = new Date(key + 'T12:00:00+07:00');
         labels.push(days[d.getDay()]);
-        const val = parseFloat(dayMap[key].toFixed(1));
+        const val = parseFloat(dayMap[key].toFixed(2));
         dataPoints.push(val);
-        if (key === todayKey) todayMinutes = val;
+        if (key === todayKey) todayHours = val;
     });
 
     if (activeChart) activeChart.destroy();
@@ -260,7 +260,7 @@ async function initChart() {
         data: {
             labels,
             datasets: [{
-                label          : 'Menit Aktif',
+                label          : 'Jam Aktif',
                 data           : dataPoints,
                 backgroundColor: dataPoints.map((_, i) => i === 6 ? '#f97316' : 'rgba(23,69,165,0.8)'),
                 borderRadius   : 8,
@@ -277,7 +277,7 @@ async function initChart() {
             scales: {
                 y: {
                     beginAtZero : true,
-                    suggestedMax: 480, // 8 jam = 480 menit
+                    suggestedMax: 8,
                     title       : { display: true, text: 'Menit' },
                     ticks       : { callback: v => v + 'm' },
                     grid        : { color: 'rgba(0,0,0,0.05)' }
@@ -289,7 +289,7 @@ async function initChart() {
 
     // Update teks "Aktif Hari Ini"
     const tEl = document.getElementById('engToday');
-    if (tEl) tEl.innerText = fmtMinutes(todayMinutes);
+    if (tEl) tEl.innerText = fmtHours(todayHours);
 }
 
 /**
@@ -299,25 +299,26 @@ async function initChart() {
  * @param {Date}   start
  * @param {Date}   end
  * @param {number} wibOffset  - UTC offset dalam ms (7 * 3600000)
- * @returns {{ dateKey: string, minutes: number }[]}
+ * @returns {{ dateKey: string, hours: number }[]}
  */
 function _splitSessionByDay(start, end, wibOffset) {
-    const result = [];
-    let   cursor = new Date(start);
+    const result   = [];
+    let   cursor   = new Date(start);
 
     while (cursor < end) {
+        // Tentukan akhir hari ini (WIB) = tengah malam berikutnya
         const cursorWib = new Date(cursor.getTime() + wibOffset);
         const nextMidnightWib = new Date(
             Date.UTC(cursorWib.getUTCFullYear(), cursorWib.getUTCMonth(), cursorWib.getUTCDate() + 1)
         );
         const nextMidnightUtc = new Date(nextMidnightWib.getTime() - wibOffset);
 
-        const sliceEnd  = nextMidnightUtc < end ? nextMidnightUtc : end;
-        const durMs     = sliceEnd - cursor;
-        const minutes   = durMs / 60000; // ← ms → menit (bukan jam)
+        const sliceEnd   = nextMidnightUtc < end ? nextMidnightUtc : end;
+        const durMs      = sliceEnd - cursor;
+        const durHours   = durMs / 3600000;
 
         const dateKey = new Date(cursor.getTime() + wibOffset).toISOString().slice(0, 10);
-        result.push({ dateKey, minutes });
+        result.push({ dateKey, hours: durHours });
 
         cursor = sliceEnd;
     }
