@@ -1872,6 +1872,53 @@ app.get('/api/alerts/count', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+// --- API UNTUK PROFIL USER ---
+
+// Ambil data profil berdasarkan nama/username (karena session menyimpan username)
+app.get('/api/users/profile', async (req, res) => {
+    try {
+        const { username } = req.query;
+        const user = await User.findOne({ name: username }).lean();
+        if (!user) return res.status(404).json({ success: false, message: 'User tidak ditemukan' });
+        
+        // Asumsi Device ID default jika tidak diikat spesifik ke user
+        const deviceId = process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        
+        res.json({ success: true, data: { name: user.name, email: user.email, role: user.role, deviceId } });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Update data profil (Nama, Email, Password)
+app.put('/api/users/profile', async (req, res) => {
+    try {
+        const { currentName, name, email, password } = req.body;
+        
+        if (!currentName) return res.status(400).json({ success: false, message: 'Identitas saat ini diperlukan.' });
+
+        const user = await User.findOne({ name: currentName });
+        if (!user) return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
+
+        // Update field jika dikirimkan
+        if (name) user.name = name;
+        if (email) user.email = email;
+        if (password) user.password = password;
+
+        await user.save();
+        res.json({ 
+            success: true, 
+            message: 'Profil berhasil diperbarui.', 
+            user: { name: user.name, email: user.email, role: user.role } 
+        });
+    } catch (error) {
+        // Handle jika email bentrok (duplicate key)
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: 'Email sudah digunakan oleh akun lain.' });
+        }
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // ── CRITICAL: Semua /api/* yang tidak cocok harus return JSON, BUKAN HTML.
 // Tanpa ini, catch-all di bawah mengembalikan login.html → error "Unexpected token '<'"

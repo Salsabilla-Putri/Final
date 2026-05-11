@@ -588,10 +588,21 @@ function buildSpecList(rows) {
 // ════════════════════════════════════════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', async () => {
     updateUserInfo();
     updateClock();
     setInterval(updateClock, 1000);
+
+    // [MODIFIKASI] Navigasi klik profil user ke Halaman public-user.html
+    const userBtn = document.getElementById('user-btn');
+    if (userBtn) {
+        userBtn.addEventListener('click', () => {
+            window.location.href = 'public-user.html';
+        });
+    }
 
     await fetchDashboardData();
     setInterval(fetchDashboardData, 10_000);  // refresh every 10s
