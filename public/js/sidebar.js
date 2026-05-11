@@ -254,10 +254,23 @@ document.addEventListener('DOMContentLoaded', function () {
       syncTopbarUserLabel();
 
       // Event untuk tombol user di topbar (jika ada)
+      // Event untuk tombol user di topbar (jika ada)
       document.addEventListener('click', function (e) {
         const userBtn = e.target.closest('#user-btn');
         if (userBtn && !window.location.pathname.includes('login.html')) {
-          window.location.href = 'user.html';
+          
+          // Cek role user saat ini
+          const currentUser = getUserData();
+          const role = currentUser?.role?.toLowerCase() || '';
+          const isMasyarakat = ['masyarakat', 'warga', 'user', 'viewer'].includes(role);
+
+          // Redirect sesuai role
+          if (isMasyarakat) {
+            window.location.href = 'public-user.html';
+          } else {
+            window.location.href = 'user.html';
+          }
+          
         }
       });
     })
