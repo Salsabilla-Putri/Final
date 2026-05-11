@@ -54,6 +54,20 @@
         }
         .user-info i { margin: 0 !important; font-size: 12px !important; }
     }
+    /* ==============================================================
+       PAKSA TOPBAR MENJADI RAMPING (MENGATASI CACHE CSS YANG NYANGKUT) 
+       ============================================================== */
+    .topbar { min-height: 56px !important; padding: 8px 20px !important; border-radius: 16px !important; }
+    @media (max-width: 768px) {
+        .topbar { min-height: 52px !important; padding: 8px 14px 8px 56px !important; flex-wrap: nowrap !important; }
+        .topbar-title { font-size: 1rem !important; }
+        .user-info { font-size: 0.8rem !important; padding: 5px 12px !important; }
+    }
+    @media (max-width: 520px) {
+        .user-info span { display: none !important; }
+        .user-info { border-radius: 50% !important; padding: 8px !important; justify-content: center !important; width: 35px !important; height: 35px !important; }
+        .user-info i { margin: 0 !important; }
+    }
 
     /* ==============================================================
        STYLING SENADA DENGAN user.html (Avatar, Badge, Info List)
