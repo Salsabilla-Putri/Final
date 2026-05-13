@@ -90,8 +90,8 @@ ensureDbReady().catch(() => undefined);
 const generatorDataSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     deviceId: { type: String, required: true },
-    rpm: Number, volt: Number, amp: Number, power: Number,
-    freq: Number, temp: Number, coolant: Number, fuel: Number,
+    rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
+    freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, status: String, oil: Number, iat: Number,
     map: Number, batt: Number, afr: Number, tps: Number
 });
@@ -395,7 +395,7 @@ const mqttClient = mqtt
 
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
-    rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
+    rpm: 0, volt: 0, volt_grid: 0, amp: 0, power: 0, freq: 0, freq_grid: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let activeSessions = new Map();
@@ -430,9 +430,9 @@ async function syncActiveTimeHistory(data) {
 
 mqttClient.on('connect', () => {
     console.log('✅ Connected to MQTT Broker (shiftr.io)');
-    mqttClient.subscribe('gen/#', (err) => {
+    mqttClient.subscribe('gen/data', (err) => {
         if (err) console.error('❌ Subscribe error:', err.message);
-        else console.log('📡 Subscribed to gen/#');
+        else console.log('📡 Subscribed to gen/data');
     });
 });
 
@@ -443,11 +443,10 @@ mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
 
-// [FIX 2] Auto-save ke DB setiap 10 detik dari data terbaru yang sudah terkumpul
-//          Sebelumnya hanya trigger saat gen/status masuk — topik yang tidak pernah
-//          dikirim ESP32, sehingga data tidak pernah tersimpan.
+// Auto-save ke DB setiap 1 detik dari snapshot gen/data.
+// ESP32 mengirim semua variabel sebagai satu JSON ke topik gen/data.
 let lastSaveAt = 0;
-const SAVE_INTERVAL_MS = 10_000; // simpan tiap 10 detik
+const SAVE_INTERVAL_MS = 1_000; // simpan tiap 1 detik
 
 async function autoSaveLatestData() {
     if (!isDbReady()) return;
@@ -571,43 +570,71 @@ app.delete('/api/alerts/:id', async (req, res) => {
     }
 });
 
+function toNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeGeneratorPayload(rawPayload) {
+    const now = new Date();
+    const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
+
+    const snapshot = {
+        ...latestData,
+        deviceId: payload.deviceId || latestData.deviceId || 'ESP32_GENERATOR_01',
+        timestamp: now,
+        rpm: toNumber(payload.rpm, latestData.rpm),
+        volt: toNumber(payload.volt, latestData.volt),
+        volt_grid: toNumber(payload.volt_grid, latestData.volt_grid),
+        amp: toNumber(payload.amp, latestData.amp),
+        power: toNumber(payload.power, latestData.power),
+        freq: toNumber(payload.freq, latestData.freq),
+        freq_grid: toNumber(payload.freq_grid, latestData.freq_grid),
+        temp: toNumber(payload.temp ?? payload.coolant, latestData.temp),
+        coolant: toNumber(payload.coolant ?? payload.temp, latestData.coolant),
+        fuel: toNumber(payload.fuel, latestData.fuel),
+        sync: String(payload.sync || latestData.sync || 'OFF-GRID'),
+        status: String(payload.status || latestData.status || 'STOPPED'),
+        oil: toNumber(payload.oil, latestData.oil),
+        iat: toNumber(payload.iat, latestData.iat),
+        map: toNumber(payload.map, latestData.map),
+        batt: toNumber(payload.batt ?? payload.battery ?? payload.battVolt, latestData.batt),
+        afr: toNumber(payload.afr, latestData.afr),
+        tps: toNumber(payload.tps, latestData.tps),
+        _realtime: true
+    };
+
+    if (!payload.power && snapshot.volt && snapshot.amp) {
+        snapshot.power = snapshot.volt * snapshot.amp;
+    }
+
+    if (!payload.status) {
+        snapshot.status = snapshot.rpm > 0
+            ? (snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING')
+            : 'STOPPED';
+    }
+
+    return snapshot;
+}
+
 mqttClient.on('message', async (topic, message) => {
     try {
-        const value = message.toString();
-        switch(topic) {
-            case 'gen/rpm':       latestData.rpm      = parseInt(value)   || 0; break;
-            case 'gen/volt':      latestData.volt      = parseFloat(value) || 0; break;
-            case 'gen/volt_grid': latestData.volt_grid = parseFloat(value) || 0; break;
-            case 'gen/amp':       latestData.amp       = parseFloat(value) || 0; break;
-            case 'gen/power':     latestData.power     = parseFloat(value) || 0; break;
-            case 'gen/freq':      latestData.freq      = parseFloat(value) || 0; break;
-            case 'gen/freq_grid': latestData.freq_grid = parseFloat(value) || 0; break;
-            // [FIX 3] gen/coolant — topik yang dikirim ESP32 tapi tidak ada handler-nya
-            case 'gen/coolant':   latestData.coolant   = parseFloat(value) || 0;
-                                  latestData.temp      = latestData.coolant; break;
-            case 'gen/temp':      latestData.temp      = parseFloat(value) || 0;
-                                  latestData.coolant   = latestData.temp; break;
-            case 'gen/fuel':      latestData.fuel      = parseFloat(value) || 0; break;
-            case 'gen/sync':      latestData.sync      = value; break;
-            case 'gen/oil':       latestData.oil       = parseFloat(value) || 0; break;
-            case 'gen/iat':       latestData.iat       = parseFloat(value) || 0; break;
-            case 'gen/map':       latestData.map       = parseFloat(value) || 0; break;
-            case 'gen/batt':      latestData.batt      = parseFloat(value) || 0; break;
-            case 'gen/afr':       latestData.afr       = parseFloat(value) || 0; break;
-            case 'gen/tps':       latestData.tps       = parseFloat(value) || 0; break;
+        if (topic !== 'gen/data') return;
 
-            // gen/status tetap dipertahankan jika ada publisher lain yang mengirimnya
-            case 'gen/status':
-                latestData.status    = value;
-                latestData.timestamp = new Date();
-                lastSaveAt = 0; // paksa save segera
-                break;
+        const raw = message.toString();
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (parseError) {
+            console.warn('⚠️ Invalid JSON on gen/data:', raw);
+            return;
         }
 
-        // [FIX 2] Trigger auto-save setiap kali ada pesan masuk (throttle 10 detik)
+        latestData = normalizeGeneratorPayload(parsed);
         await autoSaveLatestData();
-
-    } catch (error) { console.error('❌ MQTT Message Error:', error); }
+    } catch (error) {
+        console.error('❌ MQTT Message Error:', error);
+    }
 });
 
 // --- API ENDPOINTS ---

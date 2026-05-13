@@ -605,5 +605,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     await fetchDashboardData();
-    setInterval(fetchDashboardData, 10_000);  // refresh every 10s
+    setInterval(fetchDashboardData, 1000);  // refresh realtime every 1s
 });

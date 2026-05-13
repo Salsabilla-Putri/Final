@@ -338,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateDashboard();
     initChart();
-    setInterval(updateDashboard, 3000);
+    setInterval(updateDashboard, 1000);
 
     // Refresh chart setiap 5 menit
     setInterval(initChart, 5 * 60 * 1000);

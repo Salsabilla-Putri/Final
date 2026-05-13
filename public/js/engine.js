@@ -226,6 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadThresholds();
     fetchData();
     fetchAlerts();
-    setInterval(fetchData, 800); 
+    setInterval(fetchData, 1000); 
     setInterval(fetchAlerts, 1000); 
 });
