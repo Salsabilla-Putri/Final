@@ -191,6 +191,7 @@ let latestData = {
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
+let lastPersistAt = 0;
 
 let activeSessions = new Map();
 
@@ -240,35 +241,61 @@ function initMQTT() {
             connectTimeout: 5000,
             reconnectPeriod: 0
         });
+        const persistLatestSnapshot = async (eventTimestamp = new Date()) => {
+            latestData.timestamp = eventTimestamp;
+            const nowMs = eventTimestamp.getTime();
+            if (nowMs - lastPersistAt < 1000) return;
+            lastPersistAt = nowMs;
+            try {
+                await new GeneratorData(latestData).save();
+                await syncActiveTimeHistory(latestData);
+                await checkAndSaveAlerts(latestData);
+            } catch (e) {
+                console.error('DB Save Error:', e.message);
+            }
+        };
+
+        const applySnapshot = (snapshot) => {
+            if (!snapshot || typeof snapshot !== 'object') return;
+            const numericKeys = ['rpm', 'volt', 'amp', 'power', 'freq', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
+            const nextData = { ...latestData };
+
+            nextData.deviceId = snapshot.deviceId || nextData.deviceId;
+            nextData.sync = snapshot.sync || nextData.sync;
+            nextData.status = snapshot.status || nextData.status;
+
+            for (const key of numericKeys) {
+                if (snapshot[key] !== undefined && snapshot[key] !== null && snapshot[key] !== '') {
+                    const parsed = Number(snapshot[key]);
+                    if (Number.isFinite(parsed)) nextData[key] = parsed;
+                }
+            }
+
+            if (snapshot.coolant === undefined && snapshot.temp !== undefined) {
+                nextData.coolant = Number(snapshot.temp) || nextData.coolant;
+            }
+            if (snapshot.temp === undefined && snapshot.coolant !== undefined) {
+                nextData.temp = Number(snapshot.coolant) || nextData.temp;
+            }
+
+            latestData = nextData;
+        };
+
         mqttClient.on('connect', () => {
             console.log('✅ MQTT Connected');
-            mqttClient.subscribe('gen/#');
+            mqttClient.subscribe('gen/data');
         });
         mqttClient.on('message', async (topic, message) => {
             const value = message.toString();
             switch (topic) {
-                case 'gen/rpm': latestData.rpm = parseInt(value) || 0; break;
-                case 'gen/volt': latestData.volt = parseFloat(value) || 0; break;
-                case 'gen/amp': latestData.amp = parseFloat(value) || 0; break;
-                case 'gen/power': latestData.power = parseFloat(value) || 0; break;
-                case 'gen/freq': latestData.freq = parseFloat(value) || 0; break;
-                case 'gen/temp': latestData.temp = parseFloat(value) || 0; latestData.coolant = latestData.temp; break;
-                case 'gen/fuel': latestData.fuel = parseFloat(value) || 0; break;
-                case 'gen/sync': latestData.sync = value; break;
-                case 'gen/oil': latestData.oil = parseFloat(value) || 0; break;
-                case 'gen/iat': latestData.iat = parseFloat(value) || 0; break;
-                case 'gen/map': latestData.map = parseFloat(value) || 0; break;
-            case 'gen/batt': latestData.batt = parseFloat(value) || 0; break;
-                case 'gen/afr': latestData.afr = parseFloat(value) || 0; break;
-                case 'gen/tps': latestData.tps = parseFloat(value) || 0; break;
-                case 'gen/status':
-                    latestData.status = value;
-                    latestData.timestamp = new Date();
+                case 'gen/data':
                     try {
-                        await new GeneratorData(latestData).save();
-                        await syncActiveTimeHistory(latestData);
-                        await checkAndSaveAlerts(latestData);
-                    } catch (e) { console.error('DB Save Error:', e.message); }
+                        const snapshot = JSON.parse(value);
+                        applySnapshot(snapshot);
+                        await persistLatestSnapshot(new Date());
+                    } catch (err) {
+                        console.warn('Invalid gen/data payload:', err.message);
+                    }
                     break;
             }
         });
