@@ -56,8 +56,8 @@ async function connectDB() {
 const generatorDataSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     deviceId: { type: String, required: true },
-    rpm: Number, volt: Number, amp: Number, power: Number,
-    freq: Number, temp: Number, coolant: Number, fuel: Number,
+    rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
+    freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, status: String, oil: Number, iat: Number,
     map: Number, batt: Number, afr: Number, tps: Number
 });
@@ -188,7 +188,7 @@ async function loadThresholdsFromDB() {
 // ─── MQTT (best-effort, non-blocking) ────────────────────────────────────────
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
-    rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
+    rpm: 0, volt: 0, volt_grid: 0, amp: 0, power: 0, freq: 0, freq_grid: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let lastPersistAt = 0;
@@ -257,7 +257,7 @@ function initMQTT() {
 
         const applySnapshot = (snapshot) => {
             if (!snapshot || typeof snapshot !== 'object') return;
-            const numericKeys = ['rpm', 'volt', 'amp', 'power', 'freq', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
+            const numericKeys = ['rpm', 'volt', 'volt_grid', 'amp', 'power', 'freq', 'freq_grid', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
             const nextData = { ...latestData };
 
             nextData.deviceId = snapshot.deviceId || nextData.deviceId;
@@ -286,17 +286,15 @@ function initMQTT() {
             mqttClient.subscribe('gen/data');
         });
         mqttClient.on('message', async (topic, message) => {
-            const value = message.toString();
-            switch (topic) {
-                case 'gen/data':
-                    try {
-                        const snapshot = JSON.parse(value);
-                        applySnapshot(snapshot);
-                        await persistLatestSnapshot(new Date());
-                    } catch (err) {
-                        console.warn('Invalid gen/data payload:', err.message);
-                    }
-                    break;
+            if (topic !== 'gen/data') return;
+
+            const raw = message.toString();
+            try {
+                const snapshot = JSON.parse(raw);
+                applySnapshot(snapshot);
+                await persistLatestSnapshot(new Date());
+            } catch (err) {
+                console.warn('Invalid JSON on gen/data:', raw);
             }
         });
         mqttClient.on('error', (err) => console.warn('MQTT Error (non-fatal):', err.message));
