@@ -117,7 +117,11 @@ function mapSeverityToStatus(severity, isResolved) {
 function getSeverityUnit(parameter) {
   const unitMap = {
     rpm: 'RPM',
-    volt: 'V',
+    volt: 'Volt',
+    batt: 'Volt',
+    battery: 'Volt',
+    batteryvoltage: 'Volt',
+    battery_voltage: 'Volt',
     amp: 'A',
     power: 'kW',
     freq: 'Hz',
