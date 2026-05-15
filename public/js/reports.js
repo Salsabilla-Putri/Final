@@ -884,56 +884,52 @@ function calculateFftLocally(rows, sensorKey) {
 function extractEspFftFromRows(rows, sensorKey) {
     if (!Array.isArray(rows) || rows.length === 0) return null;
 
-    for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i] || {};
-        let fft = row.fft;
+    const latestRow = rows[rows.length - 1] || {};
+    let fft = latestRow.fft;
 
-        if (!fft && typeof row.fft_json === 'string') {
-            try { fft = JSON.parse(row.fft_json); } catch (_) { fft = null; }
-        }
-        if (!fft || fft.valid !== true) continue;
-
-        const source = String(fft.source || '').toLowerCase();
-        if (sensorKey && source && source !== sensorKey) continue;
-
-        const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins : [];
-        const magBins = Array.isArray(fft.magBins) ? fft.magBins : [];
-        const len = Math.min(freqBins.length, magBins.length);
-        if (!len) continue;
-
-        const spectrum = [];
-        for (let j = 0; j < len; j++) {
-            const freq = Number(freqBins[j]);
-            const amp = Number(magBins[j]);
-            if (!Number.isFinite(freq) || !Number.isFinite(amp)) continue;
-            if (freq <= 0) continue;
-            spectrum.push({ freq, amp });
-        }
-        if (!spectrum.length) continue;
-
-        const peaks = detectFftPeaks(spectrum, 3);
-        const peakText = peaks.length
-            ? peaks.map((p) => `${p.freq.toFixed(3)} Hz`).join(', ')
-            : 'tidak ada frekuensi dominan';
-
-        return {
-            summary: `FFT ESP32 (${fft.source || sensorKey}) | Samples: ${Number(fft.samples) || spectrum.length} | Fs: ${Number(fft.sampleRateHz || 0).toFixed(3)} Hz | Dominan: ${peakText}`,
-            stats: {
-                count: Number(fft.samples) || spectrum.length,
-                mean: Number(fft.rms) || 0,
-                trend: 'edge-computed'
-            },
-            spectrum,
-            peaks,
-            meta: {
-                resolutionHz: Number(fft.resolutionHz) || 0,
-                peakHz: Number(fft.peakHz) || 0,
-                peakMagnitude: Number(fft.peakMagnitude) || 0
-            }
-        };
+    if (!fft && typeof latestRow.fft_json === 'string') {
+        try { fft = JSON.parse(latestRow.fft_json); } catch (_) { fft = null; }
     }
+    if (!fft || fft.valid !== true) return null;
 
-    return null;
+    const source = String(fft.source || '').toLowerCase();
+    if (sensorKey && source && source !== sensorKey) return null;
+
+    const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins : [];
+    const magBins = Array.isArray(fft.magBins) ? fft.magBins : [];
+    const len = Math.min(freqBins.length, magBins.length);
+    if (!len) return null;
+
+    const spectrum = [];
+    for (let j = 0; j < len; j++) {
+        const freq = Number(freqBins[j]);
+        const amp = Number(magBins[j]);
+        if (!Number.isFinite(freq) || !Number.isFinite(amp)) continue;
+        if (freq <= 0) continue;
+        spectrum.push({ freq, amp });
+    }
+    if (!spectrum.length) return null;
+
+    const peaks = detectFftPeaks(spectrum, 3);
+    const peakText = peaks.length
+        ? peaks.map((p) => `${p.freq.toFixed(3)} Hz`).join(', ')
+        : 'tidak ada frekuensi dominan';
+
+    return {
+        summary: `FFT ESP32 (${fft.source || sensorKey}) | Samples: ${Number(fft.samples) || spectrum.length} | Fs: ${Number(fft.sampleRateHz || 0).toFixed(3)} Hz | Dominan: ${peakText}`,
+        stats: {
+            count: Number(fft.samples) || spectrum.length,
+            mean: Number(fft.rms) || 0,
+            trend: 'edge-computed'
+        },
+        spectrum,
+        peaks,
+        meta: {
+            resolutionHz: Number(fft.resolutionHz) || 0,
+            peakHz: Number(fft.peakHz) || 0,
+            peakMagnitude: Number(fft.peakMagnitude) || 0
+        }
+    };
 }
 
 function drawFftResult(result, sensorKey) {
@@ -1012,26 +1008,7 @@ async function renderFftAnalysis(data) {
         return;
     }
 
-    try {
-        const response = await fetch('/api/reports/analysis', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ rows: analysisRows, sensor: sensorKey, maxPoints: 300 })
-        });
-
-        if (response.status === 404) { drawFftResult(calculateFftLocally(analysisRows, sensorKey), sensorKey); return; }
-        if (!response.ok) throw new Error(`FFT API error: ${response.status}`);
-
-        const result = await response.json();
-        if (!result?.data?.spectrum?.length) {
-            drawFftResult(calculateFftLocally(analysisRows, sensorKey), sensorKey);
-            return;
-        }
-        drawFftResult(result, sensorKey);
-    } catch (error) {
-        console.error('FFT analysis error:', error);
-        drawFftResult(calculateFftLocally(data || [], sensorKey), sensorKey);
-    }
+    drawFftResult(calculateFftLocally(analysisRows, sensorKey), sensorKey);
 }
 
 function formatTimestampLabel(timestamp, timeRange) {
