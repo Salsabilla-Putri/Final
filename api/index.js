@@ -194,6 +194,7 @@ let latestData = {
 let lastPersistAt = 0;
 
 let activeSessions = new Map();
+const ACTIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function syncActiveTimeHistory(data) {
     const status = String(data?.status || '').toUpperCase();
@@ -203,10 +204,10 @@ async function syncActiveTimeHistory(data) {
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const eventTime = data?.timestamp ? new Date(data.timestamp) : new Date();
     const activeKey = `${deviceId}`;
-    const existingStartedAt = activeSessions.get(activeKey);
+    const session = activeSessions.get(activeKey);
 
-    if (isRunning && !existingStartedAt) {
-        activeSessions.set(activeKey, eventTime);
+    if (isRunning && !session) {
+        activeSessions.set(activeKey, { startedAt: eventTime, lastSeenAt: eventTime });
         await ActiveTimeHistory.create({
             deviceId,
             startedAt: eventTime,
@@ -216,11 +217,42 @@ async function syncActiveTimeHistory(data) {
         return;
     }
 
-    if (!isRunning && existingStartedAt) {
-        const durationMs = Math.max(0, eventTime.getTime() - existingStartedAt.getTime());
+    if (isRunning && session) {
+        const gapMs = eventTime.getTime() - session.lastSeenAt.getTime();
+        if (gapMs > ACTIVE_SESSION_TIMEOUT_MS) {
+            const endedAt = new Date(session.lastSeenAt.getTime() + ACTIVE_SESSION_TIMEOUT_MS);
+            const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
+            await ActiveTimeHistory.findOneAndUpdate(
+                { deviceId, startedAt: session.startedAt, endedAt: null },
+                { endedAt, durationMs, calc: { rpmThreshold, sampledAt: session.lastSeenAt } },
+                { sort: { createdAt: -1 } }
+            );
+
+            activeSessions.set(activeKey, { startedAt: eventTime, lastSeenAt: eventTime });
+            await ActiveTimeHistory.create({
+                deviceId,
+                startedAt: eventTime,
+                source: 'mqtt',
+                calc: { rpmThreshold, sampledAt: eventTime }
+            });
+            return;
+        }
+
+        session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
-            { deviceId, startedAt: existingStartedAt, endedAt: null },
-            { endedAt: eventTime, durationMs },
+            { deviceId, startedAt: session.startedAt, endedAt: null },
+            { calc: { rpmThreshold, sampledAt: eventTime } },
+            { sort: { createdAt: -1 } }
+        );
+        return;
+    }
+
+    if (!isRunning && session) {
+        const endedAt = eventTime;
+        const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
+        await ActiveTimeHistory.findOneAndUpdate(
+            { deviceId, startedAt: session.startedAt, endedAt: null },
+            { endedAt, durationMs, calc: { rpmThreshold, sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         activeSessions.delete(activeKey);
@@ -552,7 +584,9 @@ app.get('/api/generator-active-time/stats', async (req, res) => {
         const now = Date.now();
         const totalDurationMs = rows.reduce((sum, row) => {
             const started = new Date(row.startedAt).getTime();
-            const ended = row.endedAt ? new Date(row.endedAt).getTime() : now;
+            const sampledAt = row?.calc?.sampledAt ? new Date(row.calc.sampledAt).getTime() : started;
+            const impliedEnded = Math.min(now, sampledAt + ACTIVE_SESSION_TIMEOUT_MS);
+            const ended = row.endedAt ? new Date(row.endedAt).getTime() : impliedEnded;
             return sum + Math.max(0, ended - started);
         }, 0);
 
