@@ -476,38 +476,59 @@ function updatePerformanceSection(data) {
     if (!data.parameters) return;
     const p = data.parameters;
 
-    const statusOf = (val, lo, hi) => {
-        if (val == null) return { text: 'N/A',    cls: 'muted'  };
-        if (val < lo)   return { text: 'Rendah',  cls: 'warn'   };
-        if (val > hi)   return { text: 'Tinggi',  cls: 'danger' };
-        return               { text: 'Normal',   cls: 'ok'     };
+    const pickValue = (...vals) => {
+        for (const v of vals) {
+            const n = Number(v);
+            if (Number.isFinite(n)) return n;
+        }
+        return null;
     };
 
-    const list = document.getElementById('perfStatusList');
-    if (list) {
-        const rows = [
-            ['Voltage',     statusOf(p.voltage?.value,     200, 240)],
-            ['Current',     statusOf(p.current?.value,     0,   100)],
-            ['Frequency',   statusOf(p.frequency?.value,   48,  52) ],
-            ['Fuel Level',  statusOf(p.fuel?.percent,      20,  100)],
-            ['Temperature', statusOf(p.temperature?.value, 40,  90) ],
-        ];
-        list.innerHTML = rows.map(([name, st]) =>
-            `<div class="list-row"><span>${name}:</span>
-             <span class="status-pill ${st.cls}">${st.text}</span></div>`
-        ).join('');
-    }
+    const metricText = (val, unit, digits = 1) => {
+        if (val == null) return `N/A`;
+        return `${Number(val).toFixed(digits)} ${unit}`;
+    };
 
-    renderSystemRadar({
-        volt:  p.voltage?.value     || 0,
-        freq:  p.frequency?.value   || 0,
-        fuel:  p.fuel?.percent      || 0,
-        temp:  p.temperature?.value || 0,
-        power: parseFloat(p.power?.kw) || 0
-    });
+    const statusOf = (val, lo, hi) => {
+        if (val == null) return { text: 'Data belum masuk', cls: 'muted' };
+        if (val < lo) return { text: 'Di bawah normal', cls: 'warn' };
+        if (val > hi) return { text: 'Di atas normal', cls: 'danger' };
+        return { text: 'Normal', cls: 'ok' };
+    };
+
+    // dukung berbagai bentuk payload agar tidak lagi N/A saat data sebenarnya ada
+    const currentVal = pickValue(p.current?.value, p.amp?.value, p.current, p.amp, data.current, data.amp);
+    const freqVal = pickValue(p.frequency?.value, p.freq?.value, p.frequency, p.freq, data.frequency, data.freq);
+    const voltVal = pickValue(p.voltage?.value, p.volt?.value, p.voltage, p.volt, data.voltage, data.volt);
+    const fuelVal = pickValue(p.fuel?.percent, p.fuel?.value, p.fuel, data.fuel);
+    const tempVal = pickValue(p.temperature?.value, p.coolant?.value, p.temp?.value, p.temperature, p.coolant, p.temp, data.temperature, data.coolant, data.temp);
+
+    const cards = [
+        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
+        { name: 'Arus Listrik', icon: 'fa-wave-square', value: metricText(currentVal, 'A'), status: statusOf(currentVal, 0, 100) },
+        { name: 'Frekuensi', icon: 'fa-sliders-h', value: metricText(freqVal, 'Hz'), status: statusOf(freqVal, 48, 52) },
+        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) },
+        { name: 'Suhu Mesin', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) }
+    ];
+
+    const wrap = document.getElementById('perfSimpleCards');
+    if (wrap) {
+        wrap.innerHTML = cards.map((c) => `
+            <div class="perf-item-card">
+                <div class="perf-item-head">
+                    <i class="fas ${c.icon}"></i>
+                    <span>${c.name}</span>
+                </div>
+                <div class="perf-item-value">${c.value}</div>
+                <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
+            </div>
+        `).join('');
+    }
 }
 
 function renderSystemRadar({ volt, freq, fuel, temp, power }) {
+    // Performance chart disederhanakan ke kartu indikator untuk pengguna awam.
+    return;
     const ctx = document.getElementById('chartSystem')?.getContext('2d');
     if (!ctx) return;
     if (systemChart) systemChart.destroy();
