@@ -47,8 +47,14 @@ async function updateSensorData() {
             setVal('val-volt', (data.volt || 0).toFixed(1) + ' V');
 
             // Engine Status
-            const isRun  = data.status === 'RUNNING';
-            const isSync = data.sync === 'ON-GRID' || data.sync === 'SYNCHRONIZED';
+            const statusText = String(data.status || '').toUpperCase();
+            const syncText = String(data.sync || '').toUpperCase();
+            const rpmValue = Number(data.rpm || 0);
+
+            // Beberapa device tidak selalu kirim status persis "RUNNING".
+            // Fallback: jika RPM > 0 maka mesin dianggap berjalan.
+            const isRun  = ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
+            const isSync = ['ON-GRID', 'SYNCHRONIZED', 'SYNC'].includes(syncText);
 
             updateStatus('engSync', isSync, 'Synchronized', 'Not Sync');
             updateStatus('engStat', isRun,  'Running', 'Stopped');
