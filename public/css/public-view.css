@@ -539,3 +539,36 @@ body {
     .badge-active, .badge-resolved { font-size: 9px; }
     .quick-tech-call { bottom: 16px; right: 16px; width: 46px; height: 46px; }
 }
+
+.perf-simple-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.perf-item-card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #f8fbff;
+}
+
+.perf-item-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #334155;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.perf-item-value {
+    margin-top: 8px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: #0f172a;
+}
+
+.perf-item-status {
+    margin-top: 8px;
+}
