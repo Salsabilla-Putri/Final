@@ -880,6 +880,62 @@ function calculateFftLocally(rows, sensorKey) {
     };
 }
 
+
+function extractEspFftFromRows(rows, sensorKey) {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i] || {};
+        let fft = row.fft;
+
+        if (!fft && typeof row.fft_json === 'string') {
+            try { fft = JSON.parse(row.fft_json); } catch (_) { fft = null; }
+        }
+        if (!fft || fft.valid !== true) continue;
+
+        const source = String(fft.source || '').toLowerCase();
+        if (sensorKey && source && source !== sensorKey) continue;
+
+        const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins : [];
+        const magBins = Array.isArray(fft.magBins) ? fft.magBins : [];
+        const len = Math.min(freqBins.length, magBins.length);
+        if (!len) continue;
+
+        const spectrum = [];
+        for (let j = 0; j < len; j++) {
+            const freq = Number(freqBins[j]);
+            const amp = Number(magBins[j]);
+            if (!Number.isFinite(freq) || !Number.isFinite(amp)) continue;
+            if (freq <= 0) continue;
+            spectrum.push({ freq, amp });
+        }
+        if (!spectrum.length) continue;
+
+        const peaks = detectFftPeaks(spectrum, 3);
+        const peakText = peaks.length
+            ? peaks.map((p) => `${p.freq.toFixed(3)} Hz`).join(', ')
+            : 'tidak ada frekuensi dominan';
+
+        return {
+            summary: `FFT ESP32 (${fft.source || sensorKey}) | Samples: ${Number(fft.samples) || spectrum.length} | Fs: ${Number(fft.sampleRateHz || 0).toFixed(3)} Hz | Dominan: ${peakText}`,
+            stats: {
+                count: Number(fft.samples) || spectrum.length,
+                mean: Number(fft.rms) || 0,
+                trend: 'edge-computed'
+            },
+            spectrum,
+            peaks,
+            meta: {
+                resolutionHz: Number(fft.resolutionHz) || 0,
+                peakHz: Number(fft.peakHz) || 0,
+                peakMagnitude: Number(fft.peakMagnitude) || 0
+            }
+        };
+    }
+
+    return null;
+}
+
 function drawFftResult(result, sensorKey) {
     const summaryEl = document.getElementById('fftSummary');
     const insightsEl = document.getElementById('fftInsights');
@@ -949,6 +1005,12 @@ async function renderFftAnalysis(data) {
 
     const sensorKey    = selectedSensors[0] || 'rpm';
     const analysisRows = buildAnalysisRows(data || [], sensorKey);
+
+    const espFftResult = extractEspFftFromRows(data || [], sensorKey);
+    if (espFftResult) {
+        drawFftResult(espFftResult, sensorKey);
+        return;
+    }
 
     try {
         const response = await fetch('/api/reports/analysis', {

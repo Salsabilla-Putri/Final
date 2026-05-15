@@ -108,15 +108,15 @@ async function fetchDashboardData() {
 //  OVERVIEW CARDS
 // ════════════════════════════════════════════════════════════════════════════
 function updateOverviewCards(data) {
-    const rpm  = data.rpm   || 0;
+    const power = Number(data.power ?? data.kw ?? 0) || 0;
     const temp = data.coolant || data.temp || 0;
     const volt = data.volt  || 0;
 
-    const rpmEl  = document.getElementById('val-rpm');
+    const powerEl  = document.getElementById('val-power');
     const tmpEl  = document.getElementById('val-temp');
     const vltEl  = document.getElementById('val-volt');
 
-    if (rpmEl) rpmEl.innerText  = rpm + ' RPM';
+    if (powerEl) powerEl.innerText  = power.toFixed(1) + ' kW';
     if (tmpEl) tmpEl.innerText  = temp + ' °C';
     if (vltEl) vltEl.innerText  = volt + ' V';
 }
@@ -343,8 +343,8 @@ function updateMaintenanceSection(data) {
 
     const upcoming = data
         .filter(m => (m.status || '').toLowerCase() === 'scheduled' || (m.status || '').toLowerCase() === 'pending')
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .slice(0, 4);
+        .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
+        .slice(0, 6);
 
     if (!upcoming.length) {
         container.innerHTML = `
@@ -357,21 +357,33 @@ function updateMaintenanceSection(data) {
 
     const priorityMap = { High: '#ef4444', Medium: '#f97316', Low: '#10b981' };
 
-    container.innerHTML = upcoming.map(m => {
-        const due = new Date(m.dueDate || m.createdAt).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+    container.innerHTML = `<div class="maintenance-calendar-grid">${upcoming.map((m) => {
+        const dueDateObj = new Date(m.dueDate || m.createdAt);
+        const day = dueDateObj.toLocaleDateString('id-ID', { day: '2-digit' });
+        const month = dueDateObj.toLocaleDateString('id-ID', { month: 'short' });
+        const dueFull = dueDateObj.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
         const prioColor = priorityMap[m.priority] || '#64748b';
 
         return `
-        <div class="maintenance-item">
-            <div class="maint-header">
-                <span class="maint-task">${m.task || 'Tugas Maintenance'}</span>
+        <details class="maint-cal-card">
+            <summary>
+                <div class="cal-date">
+                    <span class="cal-month">${month}</span>
+                    <span class="cal-day">${day}</span>
+                </div>
+                <div class="cal-main">
+                    <div class="maint-task">${m.task || 'Tugas Maintenance'}</div>
+                    <div class="maint-due">Jadwal: ${dueFull}</div>
+                </div>
                 ${m.priority ? `<span class="maint-badge" style="background:${prioColor}20;color:${prioColor}">${m.priority}</span>` : ''}
+            </summary>
+            <div class="maint-detail">
+                <div><strong>Status:</strong> ${(m.status || '-').toUpperCase()}</div>
+                <div><strong>PIC:</strong> ${m.assignedTo || 'Belum ditentukan'}</div>
+                <div><strong>Catatan:</strong> ${m.notes || m.description || 'Tidak ada catatan tambahan'}</div>
             </div>
-            <div class="maint-meta">
-                <span><i class="fas fa-calendar-alt"></i> Dijadwalkan: ${due}</span>
-            </div>
-        </div>`;
-    }).join('');
+        </details>`;
+    }).join('')}</div>`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -476,38 +488,62 @@ function updatePerformanceSection(data) {
     if (!data.parameters) return;
     const p = data.parameters;
 
-    const statusOf = (val, lo, hi) => {
-        if (val == null) return { text: 'N/A',    cls: 'muted'  };
-        if (val < lo)   return { text: 'Rendah',  cls: 'warn'   };
-        if (val > hi)   return { text: 'Tinggi',  cls: 'danger' };
-        return               { text: 'Normal',   cls: 'ok'     };
+    const pickValue = (...vals) => {
+        for (const v of vals) {
+            const n = Number(v);
+            if (Number.isFinite(n)) return n;
+        }
+        return null;
     };
 
-    const list = document.getElementById('perfStatusList');
-    if (list) {
-        const rows = [
-            ['Voltage',     statusOf(p.voltage?.value,     200, 240)],
-            ['Current',     statusOf(p.current?.value,     0,   100)],
-            ['Frequency',   statusOf(p.frequency?.value,   48,  52) ],
-            ['Fuel Level',  statusOf(p.fuel?.percent,      20,  100)],
-            ['Temperature', statusOf(p.temperature?.value, 40,  90) ],
-        ];
-        list.innerHTML = rows.map(([name, st]) =>
-            `<div class="list-row"><span>${name}:</span>
-             <span class="status-pill ${st.cls}">${st.text}</span></div>`
-        ).join('');
-    }
+    const metricText = (val, unit, digits = 1) => {
+        if (val == null) return `N/A`;
+        return `${Number(val).toFixed(digits)} ${unit}`;
+    };
 
-    renderSystemRadar({
-        volt:  p.voltage?.value     || 0,
-        freq:  p.frequency?.value   || 0,
-        fuel:  p.fuel?.percent      || 0,
-        temp:  p.temperature?.value || 0,
-        power: parseFloat(p.power?.kw) || 0
-    });
+    const statusOf = (val, lo, hi) => {
+        if (val == null) return { text: 'Data belum masuk', cls: 'muted' };
+        if (val < lo) return { text: 'Di bawah normal', cls: 'warn' };
+        if (val > hi) return { text: 'Di atas normal', cls: 'danger' };
+        return { text: 'Normal', cls: 'ok' };
+    };
+
+    // dukung berbagai bentuk payload agar tidak lagi N/A saat data sebenarnya ada
+    const currentVal = pickValue(p.current?.value, p.amp?.value, p.current, p.amp, data.current, data.amp);
+    const freqVal = pickValue(p.frequency?.value, p.freq?.value, p.frequency, p.freq, data.frequency, data.freq);
+    const voltVal = pickValue(p.voltage?.value, p.volt?.value, p.voltage, p.volt, data.voltage, data.volt);
+    const fuelVal = pickValue(p.fuel?.percent, p.fuel?.value, p.fuel, data.fuel);
+    const tempVal = pickValue(p.temperature?.value, p.coolant?.value, p.temp?.value, p.temperature, p.coolant, p.temp, data.temperature, data.coolant, data.temp);
+
+    const powerVal = pickValue(p.power?.kw, p.power?.value, p.kw?.value, p.power, p.kw, data.power, data.kw);
+
+    const cards = [
+        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
+        { name: 'Arus Listrik', icon: 'fa-wave-square', value: metricText(currentVal, 'A'), status: statusOf(currentVal, 0, 100) },
+        { name: 'Frekuensi', icon: 'fa-sliders-h', value: metricText(freqVal, 'Hz'), status: statusOf(freqVal, 48, 52) },
+        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) },
+        { name: 'Suhu Mesin', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
+        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 250) }
+    ];
+
+    const wrap = document.getElementById('perfSimpleCards');
+    if (wrap) {
+        wrap.innerHTML = cards.map((c) => `
+            <div class="perf-item-card">
+                <div class="perf-item-head">
+                    <i class="fas ${c.icon}"></i>
+                    <span>${c.name}</span>
+                </div>
+                <div class="perf-item-value">${c.value}</div>
+                <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
+            </div>
+        `).join('');
+    }
 }
 
 function renderSystemRadar({ volt, freq, fuel, temp, power }) {
+    // Performance chart disederhanakan ke kartu indikator untuk pengguna awam.
+    return;
     const ctx = document.getElementById('chartSystem')?.getContext('2d');
     if (!ctx) return;
     if (systemChart) systemChart.destroy();

@@ -539,3 +539,48 @@ body {
     .badge-active, .badge-resolved { font-size: 9px; }
     .quick-tech-call { bottom: 16px; right: 16px; width: 46px; height: 46px; }
 }
+
+.perf-simple-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.perf-item-card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #f8fbff;
+}
+
+.perf-item-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #334155;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.perf-item-value {
+    margin-top: 8px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: #0f172a;
+}
+
+.perf-item-status {
+    margin-top: 8px;
+}
+
+
+.maintenance-calendar-grid { display:flex; flex-direction:column; gap:10px; }
+.maint-cal-card { border:1px solid var(--border); border-radius:12px; background:#fff; }
+.maint-cal-card summary { list-style:none; display:flex; align-items:center; gap:10px; padding:10px; cursor:pointer; }
+.maint-cal-card summary::-webkit-details-marker { display:none; }
+.cal-date { width:56px; border:1px solid #dbeafe; border-radius:10px; overflow:hidden; text-align:center; flex-shrink:0; }
+.cal-month { display:block; background:#1745a5; color:#fff; font-size:10px; padding:2px 0; text-transform:uppercase; }
+.cal-day { display:block; font-size:20px; font-weight:800; color:#1745a5; padding:4px 0; }
+.cal-main { flex:1; min-width:0; }
+.maint-due { font-size:11px; color:#64748b; margin-top:2px; }
+.maint-detail { border-top:1px dashed #e2e8f0; padding:10px 12px; font-size:12px; color:#334155; display:grid; gap:6px; }
