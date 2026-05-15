@@ -1,2 +1,4 @@
 node_modules/
 .env
+database/*.json
+database/monitoring.generatordatas.json
