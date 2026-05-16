@@ -649,6 +649,9 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
     const fuelCtx = document.getElementById('chartFuelWeekly')?.getContext('2d');
     const costCtx = document.getElementById('chartMaintCostMonthly')?.getContext('2d');
     if (!fuelCtx || !costCtx) return;
+    const signature = `${historyRows.length}|${maintenanceRows.length}|${JSON.stringify(historyRows[0] || {})}|${JSON.stringify(maintenanceRows[0] || {})}`;
+    if (signature === lastFuelCostSignature) return;
+    lastFuelCostSignature = signature;
 
     const weeklyLabels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
     const weeklyFuel = [0, 0, 0, 0, 0, 0, 0];
@@ -828,6 +831,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     await fetchDashboardData();
     setInterval(fetchDashboardData, 1000);  // refresh realtime every 1s
 });
-    const signature = `${historyRows.length}|${maintenanceRows.length}|${JSON.stringify(historyRows[0] || {})}|${JSON.stringify(maintenanceRows[0] || {})}`;
-    if (signature === lastFuelCostSignature) return;
-    lastFuelCostSignature = signature;
