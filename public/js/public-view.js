@@ -12,6 +12,10 @@ let calendarViewYear = new Date().getFullYear();
 let selectedMaintenanceDateKey = null;
 let selectedCostMonthIndex = null;
 let lastFuelCostSignature = '';
+let isDashboardFetching = false;
+let lastHeavyFetchAt = 0;
+const DASHBOARD_REFRESH_MS = 10000;
+const HEAVY_ENDPOINT_REFRESH_MS = 30000;
 
 // ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
@@ -58,7 +62,11 @@ function setLastUpdated() {
 //  MAIN FETCH ORCHESTRATOR
 // ════════════════════════════════════════════════════════════════════════════
 async function fetchDashboardData() {
+    if (isDashboardFetching) return;
+    isDashboardFetching = true;
     try {
+        const nowTs = Date.now();
+        const allowHeavyFetch = (nowTs - lastHeavyFetchAt) >= HEAVY_ENDPOINT_REFRESH_MS;
         // Fetch semua data, limit history ditambah ke 100 agar cukup untuk kalkulasi 7 hari
         const [engineRes, alertsRes, specsRes, historyRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
             fetch('/api/engine-data/latest'),
@@ -66,9 +74,10 @@ async function fetchDashboardData() {
             fetch('/api/generator-specs'),
             fetch('/api/generator-active-time/history?limit=100'), 
             fetch('/api/maintenance'),
-            fetch('/api/public/dashboard'),
-            fetch('/api/cbm/analysis?hours=24') // Fetch data CBM untuk Health Score
+            allowHeavyFetch ? fetch('/api/public/dashboard') : Promise.resolve(new Response('{"success":false}', { status: 200 })),
+            allowHeavyFetch ? fetch('/api/cbm/analysis?hours=24') : Promise.resolve(new Response('{"success":false}', { status: 200 })) // Fetch data CBM untuk Health Score
         ]);
+        if (allowHeavyFetch) lastHeavyFetchAt = nowTs;
 
         const engineData = engineRes.status === 'fulfilled' ? await engineRes.value.json().catch(() => null) : null;
         const cbmData = cbmRes.status === 'fulfilled' ? await cbmRes.value.json().catch(() => null) : null;
@@ -122,6 +131,8 @@ async function fetchDashboardData() {
     } catch (err) {
         console.error('fetchDashboardData error:', err);
         setConnectionStatus(false);
+    } finally {
+        isDashboardFetching = false;
     }
 }
 
@@ -819,5 +830,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     await fetchDashboardData();
-    setInterval(fetchDashboardData, 1000);  // refresh realtime every 1s
+    setInterval(fetchDashboardData, DASHBOARD_REFRESH_MS);  // refresh periodik agar tidak membebani resource browser/server
 });
