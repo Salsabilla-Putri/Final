@@ -78,7 +78,7 @@
   <div id="cbmContent" style="display:none;">
 
     <!-- Row 1: Health Score + Component Health -->
-    <div style="display:grid;grid-template-columns:200px 1fr;gap:14px;margin-bottom:14px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
 
       <div style="background:#fff;border-radius:12px;padding:18px 16px;
                   border:1px solid #f1f5f9;text-align:center;box-shadow:0 1px 5px rgba(0,0,0,.05);">
@@ -234,11 +234,11 @@
                 </div>
                 <div style="display:flex;gap:6px;align-items:flex-start;">
                     <button class="cbm-approve-btn" data-idx="${idx}"
-                            style="padding:7px 12px;background:#16a34a;color:#fff;border:none;
+                            style="padding:7px 12px;background:#2563eb;color:#fff;border:none;
                                    border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
                                    white-space:nowrap;">✅ Setujui</button>
                     <button class="cbm-reject-btn" data-idx="${idx}"
-                            style="padding:7px 12px;background:#ef4444;color:#fff;border:none;
+                            style="padding:7px 12px;background:#94a3b8;color:#fff;border:none;
                                    border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
                                    white-space:nowrap;">❌ Tolak</button>
                 </div>
@@ -323,7 +323,7 @@
                   </td>
                   <td style="padding:9px 10px;">
                     <button class="cbm-prev-approve-btn" data-prev-idx="${idx}"
-                            style="padding:4px 9px;background:#16a34a;color:#fff;
+                            style="padding:4px 9px;background:#2563eb;color:#fff;
                                    border:none;border-radius:5px;
                                    cursor:pointer;font-size:11px;font-weight:600;">
                         ✅ Setujui
@@ -485,7 +485,7 @@
             try {
                 const deviceId = typeof getReportDeviceId === 'function'
                     ? getReportDeviceId() : '';
-                const url  = `${CBM_API}?hours=168${deviceId ? '&deviceId=' + deviceId : ''}`;
+                const url  = `${CBM_API}?hours=720${deviceId ? '&deviceId=' + deviceId : ''}`;
                 const res  = await fetch(url);
                 const json = await res.json();
                 if (!json.success) throw new Error(json.error);
