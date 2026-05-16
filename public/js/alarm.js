@@ -2,6 +2,8 @@
 const API_URL = '/api/alerts';
 let currentFilter = 'all';
 let allAlarms = [];
+let currentPage = 1;
+const PAGE_SIZE = 20;
 const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
   day: '2-digit',
   month: 'short',
@@ -96,6 +98,7 @@ window.filterAlarms = function(filterType, btnEl) {
   if (btnEl) btnEl.classList.add('active');
 
   currentFilter = filterType;
+  currentPage = 1;
   renderTable();
 }
 
@@ -138,6 +141,11 @@ function getSeverityUnit(parameter) {
 function renderTable() {
   const tbody = document.getElementById('alarmTableBody');
   const filteredAlarms = getFilteredAlarms();
+  const totalPages = Math.max(1, Math.ceil(filteredAlarms.length / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  const startIdx = (currentPage - 1) * PAGE_SIZE;
+  const pageRows = filteredAlarms.slice(startIdx, startIdx + PAGE_SIZE);
 
   tbody.innerHTML = '';
 
@@ -152,7 +160,7 @@ function renderTable() {
     return;
   }
 
-  filteredAlarms.forEach(alarm => {
+  pageRows.forEach(alarm => {
     const ts = formatReadableTimestamp(alarm.timestamp);
     const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
     const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
@@ -183,7 +191,35 @@ function renderTable() {
     `;
     tbody.innerHTML += row;
   });
+
+  renderPagination(filteredAlarms.length, totalPages);
 }
+
+function renderPagination(totalItems, totalPages) {
+  const info = document.getElementById('alarmPageInfo');
+  const prevBtn = document.getElementById('alarmPrevPage');
+  const nextBtn = document.getElementById('alarmNextPage');
+  if (!info || !prevBtn || !nextBtn) return;
+
+  info.textContent = `Page ${currentPage} / ${totalPages} • ${totalItems} data`;
+  prevBtn.disabled = currentPage <= 1;
+  nextBtn.disabled = currentPage >= totalPages;
+}
+
+window.prevAlarmPage = function() {
+  if (currentPage > 1) {
+    currentPage -= 1;
+    renderTable();
+  }
+};
+
+window.nextAlarmPage = function() {
+  const totalPages = Math.max(1, Math.ceil(getFilteredAlarms().length / PAGE_SIZE));
+  if (currentPage < totalPages) {
+    currentPage += 1;
+    renderTable();
+  }
+};
 
 function formatReadableTimestamp(input) {
   const dateObj = input instanceof Date ? input : new Date(input);

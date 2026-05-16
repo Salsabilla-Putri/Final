@@ -32,12 +32,27 @@ function getUserData() {
 }
 
 // Sinkron label user di topbar
-function syncTopbarUserLabel() {
+async function syncTopbarUserLabel() {
   const user = getUserData();
-  const name = user?.username || 'Pengguna';
-  document.querySelectorAll('.user-info span').forEach(el => {
-    el.innerText = name;
-  });
+  let name = user?.username || 'Pengguna';
+  const usernameKey = localStorage.getItem('username') || name;
+  if (usernameKey) {
+    try {
+      const res = await fetch(`/api/users/profile?username=${encodeURIComponent(usernameKey)}`);
+      const json = await res.json();
+      if (json?.success && json?.user?.name) {
+        name = json.user.name;
+        localStorage.setItem('username', name);
+        const u = JSON.parse(localStorage.getItem('user') || '{}');
+        u.name = name;
+        if (json.user.email) u.email = json.user.email;
+        localStorage.setItem('user', JSON.stringify(u));
+      }
+    } catch (e) {
+      console.warn('Gagal sinkron profil topbar:', e);
+    }
+  }
+  document.querySelectorAll('.user-info span').forEach(el => { el.innerText = name; });
 }
 
 // Set active link berdasarkan halaman
@@ -259,15 +274,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const userBtn = e.target.closest('#user-btn, .topbar .user-info');
         if (userBtn && !window.location.pathname.includes('login.html')) {
           
-          // Cek role user saat ini
-          const currentUser = getUserData();
-          const role = currentUser?.role?.toLowerCase() || '';
-          const isMasyarakat = ['masyarakat', 'warga', 'user', 'viewer'].includes(role);
-
-          // Redirect sesuai role
-          if (isMasyarakat) {
-            window.location.href = 'public-user.html';
-          } else {
+          const page = window.location.pathname.split('/').pop() || '';
+          if (page !== 'public.html') {
             window.location.href = 'user.html';
           }
           

@@ -75,7 +75,7 @@ async function fetchDashboardData() {
             fetch('/api/generator-active-time/history?limit=100'), 
             fetch('/api/maintenance'),
             allowHeavyFetch ? fetch('/api/public/dashboard') : Promise.resolve(new Response('{"success":false}', { status: 200 })),
-            allowHeavyFetch ? fetch('/api/cbm/analysis?hours=24') : Promise.resolve(new Response('{"success":false}', { status: 200 })) // Fetch data CBM untuk Health Score
+            allowHeavyFetch ? fetch('/api/cbm/analysis?hours=720') : Promise.resolve(new Response('{"success":false}', { status: 200 })) // Fetch data CBM untuk Health Score
         ]);
         if (allowHeavyFetch) lastHeavyFetchAt = nowTs;
 
@@ -231,10 +231,11 @@ function renderHealthScore(engineData, cbmData) {
     const warnings = [];
 
     // Prioritaskan skor dari sistem analitik CBM
-    if (cbmData && typeof cbmData.overallHealth !== 'undefined') {
-        health = Math.round(cbmData.overallHealth);
-        if (cbmData.components) {
-            Object.values(cbmData.components).forEach(comp => {
+    if (cbmData && (typeof cbmData.healthScore !== 'undefined' || typeof cbmData.overallHealth !== 'undefined')) {
+        health = Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 100));
+        const components = cbmData.components || cbmData.componentHealth || {};
+        if (components) {
+            Object.values(components).forEach(comp => {
                 if (comp.status === 'critical') warnings.push({ label: `Kritis: ${comp.name || 'Sistem'}`, cls: 'danger' });
                 else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${comp.name || 'Sistem'}`, cls: 'warn' });
             });
@@ -825,7 +826,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const userBtn = document.getElementById('user-btn');
     if (userBtn) {
         userBtn.addEventListener('click', () => {
-            window.location.href = 'public-user.html';
+            // public.html dikecualikan: tidak redirect ke halaman profil
         });
     }
 
