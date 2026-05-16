@@ -506,6 +506,17 @@ body {
     transform: scale(1.1);
     box-shadow: 0 6px 24px rgba(16, 185, 129, 0.5);
 }
+.dealer-locator {
+    background: linear-gradient(135deg, var(--warning), #fdba74);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.8rem;
+    padding: 8px 14px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(249, 115, 22, 0.4);
+    text-decoration: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
 
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 1200px) {
