@@ -39,7 +39,7 @@
         <div class="topbar">
             <div class="topbar-title">Dashboard Monitoring</div>
             <div class="user-info" id="user-btn" style="cursor:pointer;">
-                <i class="fas fa-user"></i> <span>Pengguna</span>
+                <i class="fas fa-building"></i> <span>GENSYS</span>
             </div>
         </div>
 
@@ -53,7 +53,7 @@
                 <div class="hero-center">
                     <div id="liveClock" class="hero-time">--:--</div>
                     <div class="hero-greeting">
-                        Welcome, <span id="welcome-user">Pengguna</span>!
+                        Welcome, <span id="welcome-user">GENSYS</span>!
                     </div>
                     <div class="hero-subtitle">
                         <em>"Live Monitoring for Generator Health &amp; Efficiency"</em>
@@ -184,6 +184,16 @@
                         </div>
                     </div>
 
+                    <!-- Fuel Consumption -->
+                    <div class="card">
+                        <h3><i class="fas fa-gas-pump"></i>Fuel Consumption</h3>
+                        <div class="chart-box">
+                            <canvas id="chartFuelWeekly"></canvas>
+                        </div>
+                    </div>
+
+                </div>
+                <div class="grid-2" style="margin-top:16px;">
                     <!-- System Health -->
                     <div class="card">
                         <h3><i class="fas fa-heartbeat"></i> System Health</h3>
@@ -196,15 +206,6 @@
                         <div class="list-row"><span>Operation State:</span><span id="st-age">--</span></div>
                         <div class="list-row"><span>Operation Time:</span><span id="st-runtime">--</span></div>
                         <div class="list-row"><span>Maintenance Terakhir:</span><span id="st-last-maint">--</span></div>
-                    </div>
-
-                </div>
-                <div class="grid-2" style="margin-top:16px;">
-                    <div class="card">
-                        <h3><i class="fas fa-gas-pump"></i>Fuel Consumption</h3>
-                        <div class="chart-box">
-                            <canvas id="chartFuelWeekly"></canvas>
-                        </div>
                     </div>
                     <div class="card">
                         <h3><i class="fas fa-wallet"></i>Maintenance Cost</h3>
@@ -231,7 +232,7 @@
                         <div id="perfSimpleCards" class="perf-simple-cards perf-vertical">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Loading performance data…</p>
+                                <p>Loading data performa…</p>
                             </div>
                         </div>
                     </div>
@@ -307,14 +308,14 @@
                                    class="user-info"
                                    style="text-decoration:none; background:#10b981; font-size:0.8rem; padding:8px 14px;">
                                     <i class="fas fa-phone"></i>
-                                    <span>Quick Call</span>
+                                    <span>GENSYS Quick Call</span>
                                 </a>
                                 <a href="https://www.google.com/maps/search/dealer+genset+terdekat/"
                                    target="_blank" rel="noopener"
                                    class="user-info"
                                    style="text-decoration:none; background:#f59e0b; font-size:0.8rem; padding:8px 14px;">
                                     <i class="fas fa-map-marker-alt"></i>
-                                    <span>Dealer Terdekat</span>
+                                    <span>Dealer GENSYS</span>
                                 </a>
                             </div>
 
