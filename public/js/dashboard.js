@@ -233,6 +233,8 @@ async function initChart() {
                 // Sesi masih berjalan (belum ada endedAt) → gunakan waktu sekarang
                 const end   = r.endedAt ? new Date(r.endedAt) : now;
 
+                if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
+
                 // Pecah sesi yang melintas batas hari
                 _splitSessionByDay(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
                     if (dayMap.hasOwnProperty(dateKey)) {
@@ -254,7 +256,7 @@ async function initChart() {
     Object.keys(dayMap).sort().forEach(key => {
         const d   = new Date(key + 'T12:00:00+07:00');
         labels.push(days[d.getDay()]);
-        const val = parseFloat(dayMap[key].toFixed(2));
+        const val = parseFloat(Math.min(24, dayMap[key]).toFixed(2));
         dataPoints.push(val);
         if (key === todayKey) todayHours = val;
     });
@@ -278,14 +280,14 @@ async function initChart() {
             maintainAspectRatio  : false,
             plugins: {
                 legend : { display: false },
-                tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} menit aktif` } }
+                tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} jam aktif` } }
             },
             scales: {
                 y: {
                     beginAtZero : true,
                     suggestedMax: 8,
-                    title       : { display: true, text: 'Menit' },
-                    ticks       : { callback: v => v + 'm' },
+                    title       : { display: true, text: 'Jam' },
+                    ticks       : { callback: v => v + 'h' },
                     grid        : { color: 'rgba(0,0,0,0.05)' }
                 },
                 x: { grid: { display: false } }
