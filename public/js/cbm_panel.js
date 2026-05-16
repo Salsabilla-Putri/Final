@@ -90,33 +90,12 @@
   <div style="display:flex;align-items:center;justify-content:space-between;
               margin-bottom:18px;flex-wrap:wrap;gap:10px;">
     <div style="display:flex;align-items:center;gap:12px;">
-      <div style="width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#1e40af,#1d4ed8);
-                  display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">⚙️</div>
-      <div>
+        <i class="fas fa-cogs" style="font-size:18px;color:#1d4ed8;"></i>
         <h2 style="margin:0;font-size:16px;font-weight:700;color:#0f172a;line-height:1.3;">
           Condition-Based Maintenance
         </h2>
-        <p style="margin:1px 0 0;font-size:11.5px;color:#64748b;">
-          Analisis degradasi komponen berbasis tren histori sensor &amp; FFT
-        </p>
       </div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button id="cbmRefreshBtn"
-              style="display:inline-flex;align-items:center;gap:6px;padding:8px 15px;
-                     background:#1d4ed8;color:#fff;border:none;border-radius:8px;
-                     cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.02em;">
-        <i class="fas fa-sync-alt" id="cbmRefreshIcon"></i> Analisis Sekarang
-      </button>
-      <button id="cbmSendFftBtn"
-              title="Kirim FFT peaks dari chart aktif ke analisis server"
-              style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
-                     background:#0ea5e9;color:#fff;border:none;border-radius:8px;
-                     cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.02em;">
-        <i class="fas fa-wave-square"></i> + FFT Peaks
-      </button>
-    </div>
-  </div>
 
   <!-- ── LOADING ── -->
   <div id="cbmLoading"
@@ -149,8 +128,6 @@
                 style="display:inline-block;padding:4px 16px;border-radius:99px;
                        font-size:12px;font-weight:700;letter-spacing:.04em;
                        background:#e2e8f0;color:#475569;">---</span>
-          <div id="cbmAnalyzedAt"
-               style="margin-top:10px;font-size:10px;color:#94a3b8;line-height:1.5;"></div>
         </div>
 
         <!-- Component Health Card -->
@@ -164,7 +141,7 @@
       <!-- RIGHT PANEL: Findings -->
       <div class="cbm-card" style="padding:20px 18px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
-          <div class="cbm-card-label" style="margin-bottom:0;">Temuan &amp; Rekomendasi CBM</div>
+          <div class="cbm-card-label" style="margin-bottom:0;">Rekomendasi CBM</div>
           <span id="cbmFindingCount"
                 style="font-size:11px;font-weight:600;color:#64748b;background:#f1f5f9;
                        padding:2px 10px;border-radius:99px;"></span>
