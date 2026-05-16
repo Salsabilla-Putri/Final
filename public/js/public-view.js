@@ -252,12 +252,16 @@ function renderHealthScore(engineData, cbmData) {
     const componentEl = document.getElementById('st-component');
     const lastMaintEl = document.getElementById('st-last-maint');
     const runtimeHours = Math.round(engineData.engineHours || engineData.runtimeHours || cbmData?.engineHours || 0);
-    const designLifeHours = 2 * 365 * 24;
-    const estLifeRemaining = Math.max(0, designLifeHours - runtimeHours);
-    if (ageEl) ageEl.textContent = `Estimasi umur: 2 tahun (${designLifeHours.toLocaleString('id-ID')} jam), sisa ±${estLifeRemaining.toLocaleString('id-ID')} jam`;
+    const availabilityPct = Math.max(0, Math.min(100, 100 - Math.min(20, runtimeHours / 400)));
+    if (ageEl) ageEl.textContent = `${availabilityPct.toFixed(1)}% (target > 95%)`;
     if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toLocaleString('id-ID')} jam`;
-    if (componentEl) componentEl.textContent = warnings.length ? warnings.map(w => w.label.replace(/^Kritis: |^Perhatian: /, '')).join(', ') : 'Komponen utama normal';
-    if (lastMaintEl) lastMaintEl.textContent = engineData.lastMaintenanceAt ? new Date(engineData.lastMaintenanceAt).toLocaleDateString('id-ID') : '-';
+    if (componentEl) componentEl.textContent = warnings.length ? warnings.map(w => w.label.replace(/^Kritis: |^Perhatian: /, '')).join(', ') : 'Sensor & pembakaran stabil';
+    const lastCompleted = (dashboardMaintenanceCache || [])
+        .filter((m) => String(m.status || '').toLowerCase() === 'completed')
+        .sort((a, b) => new Date(b.completedAt || b.updatedAt || b.createdAt) - new Date(a.completedAt || a.updatedAt || a.createdAt))[0];
+    if (lastMaintEl) lastMaintEl.textContent = lastCompleted
+        ? new Date(lastCompleted.completedAt || lastCompleted.updatedAt || lastCompleted.createdAt).toLocaleDateString('id-ID')
+        : '-';
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -445,7 +449,7 @@ function updateMaintenanceSection(data) {
             }
             selectedMaintenanceDateKey = key;
             const list = byDate[key] || [];
-            panel.innerHTML = `<h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4>${list.map(renderMaintenanceDetailCard).join('')}`;
+            panel.innerHTML = `<h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4><div class="maint-detail-grid">${list.map(renderMaintenanceDetailCard).join('')}</div>`;
         });
     });
 }
@@ -598,7 +602,6 @@ function updatePerformanceSection(data) {
     };
 
     // dukung berbagai bentuk payload agar tidak lagi N/A saat data sebenarnya ada
-    const freqVal = pickValue(p.frequency?.value, p.freq?.value, p.frequency, p.freq, data.frequency, data.freq);
     const voltVal = pickValue(p.voltage?.value, p.volt?.value, p.voltage, p.volt, data.voltage, data.volt);
     const fuelVal = pickValue(p.fuel?.percent, p.fuel?.value, p.fuel, data.fuel);
     const tempVal = pickValue(p.temperature?.value, p.coolant?.value, p.temp?.value, p.temperature, p.coolant, p.temp, data.temperature, data.coolant, data.temp);
@@ -616,8 +619,7 @@ function updatePerformanceSection(data) {
         { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 250) },
         { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
         { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) },
-        { name: 'Aki', icon: 'fa-car-battery', value: metricText(voltVal != null ? voltVal / 20 : null, 'V'), status: statusOf(voltVal != null ? voltVal / 20 : null, 11.8, 14.4) },
-        { name: 'Frekuensi', icon: 'fa-sliders-h', value: metricText(freqVal, 'Hz'), status: statusOf(freqVal, 48, 52) }
+        { name: 'Aki', icon: 'fa-car-battery', value: metricText(voltVal != null ? voltVal / 20 : null, 'V'), status: statusOf(voltVal != null ? voltVal / 20 : null, 11.8, 14.4) }
     ];
 
     const wrap = document.getElementById('perfSimpleCards');
@@ -634,10 +636,9 @@ function updatePerformanceSection(data) {
                     c.name === 'Daya' ? powerVal :
                     c.name === 'Temperatur' ? tempVal :
                     c.name === 'Bahan Bakar' ? fuelVal :
-                    c.name === 'Aki' ? (voltVal != null ? voltVal / 20 : null) :
-                    freqVal,
-                    c.name === 'Tegangan' ? 180 : c.name === 'Daya' ? 0 : c.name === 'Temperatur' ? 0 : c.name === 'Bahan Bakar' ? 0 : c.name === 'Aki' ? 10 : 45,
-                    c.name === 'Tegangan' ? 250 : c.name === 'Daya' ? 250 : c.name === 'Temperatur' ? 120 : c.name === 'Bahan Bakar' ? 100 : c.name === 'Aki' ? 15 : 55
+                    c.name === 'Aki' ? (voltVal != null ? voltVal / 20 : null) : null,
+                    c.name === 'Tegangan' ? 180 : c.name === 'Daya' ? 0 : c.name === 'Temperatur' ? 0 : c.name === 'Bahan Bakar' ? 0 : 10,
+                    c.name === 'Tegangan' ? 250 : c.name === 'Daya' ? 250 : c.name === 'Temperatur' ? 120 : c.name === 'Bahan Bakar' ? 100 : 15
                 )}%"></span></div>
                 <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
             </div>
@@ -660,16 +661,16 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
         const start = new Date(r.startedAt || r.createdAt);
         const end = r.endedAt ? new Date(r.endedAt) : new Date();
         const runtimeHours = Math.max(0, end - start) / 3600000;
-        const used = runtimeHours * (30 / 24);
+        const used = runtimeHours * 1.25;
         weeklyFuel[day] += used;
     });
-    for (let i = 0; i < weeklyFuel.length; i++) weeklyFuel[i] = Math.min(30, Number(weeklyFuel[i].toFixed(2)));
+    for (let i = 0; i < weeklyFuel.length; i++) weeklyFuel[i] = Number(weeklyFuel[i].toFixed(2));
 
     if (fuelWeeklyChart) fuelWeeklyChart.destroy();
     fuelWeeklyChart = new Chart(fuelCtx, {
         type: 'line',
         data: { labels: weeklyLabels, datasets: [{ label: 'BBM (L)', data: weeklyFuel, borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.2)', tension: 0.35, fill: true }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => ` ${ctx.parsed.y.toFixed(2)} L (1,25 L/jam)` } } } }
     });
 
     const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
@@ -704,7 +705,7 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
             const details = monthlyDetails[idx];
             if (!details.length) { target.innerHTML = `<div class="cost-detail-title">${monthNames[idx]}</div><div class="cost-empty">Tidak ada biaya maintenance.</div>`; return; }
             const total = details.reduce((s, d) => s + (Number(d.cost || d.estimatedCost || 0) || 0), 0);
-            target.innerHTML = `<div class="cost-detail-title">${monthNames[idx]} • Total Rp ${total.toLocaleString('id-ID')}</div>${details.map(d => `<div class="cost-row"><span>${d.task || d.type || 'Maintenance'}</span><strong>Rp ${(Number(d.cost || d.estimatedCost || 0) || 0).toLocaleString('id-ID')}</strong></div>`).join('')}`;
+            target.innerHTML = `<div class="cost-detail-title">${monthNames[idx]} • Total Rp ${total.toLocaleString('id-ID')}</div><div class="cost-detail-scroll">${details.map(d => `<div class="cost-row"><span>${d.task || d.type || 'Maintenance'}</span><strong>Rp ${(Number(d.cost || d.estimatedCost || 0) || 0).toLocaleString('id-ID')}</strong></div>`).join('')}</div>`;
         } }
     });
 }
@@ -759,26 +760,24 @@ function updateSpecificationsSection(specs) {
     const genEl = document.getElementById('generatorSpecContainer');
     if (genEl && specs) {
         genEl.innerHTML = buildSpecList([
-            ['AVR Module', specs.avrType || 'Digital AVR'],
-            ['Bearing Alternator', specs.bearingType || '6205/6206'],
-            ['Rectifier', specs.rectifierType || 'Bridge Rectifier'],
-            ['MCB Output', specs.mcbType || '3P 63A'],
-            ['Sensor TPS', specs.tpsType || '0-5V TPS'],
-            ['Sensor Coolant', specs.coolantSensorType || 'NTC 10K'],
-            ['Fuel Pump', specs.fuelPumpType || '12V Electric Pump'],
-            ['Sistem Start',     specs.sistemStart  || '--'],
+            ['Pengatur Tegangan Otomatis', specs.avrType || 'AVR digital'],
+            ['Pelindung Arus Listrik', specs.mcbType || 'MCB 3P 63A'],
+            ['Penyearah Arus', specs.rectifierType || 'Bridge rectifier'],
+            ['Bantalan Poros', specs.bearingType || 'Bearing standar industri'],
+            ['Sistem Starter', specs.sistemStart || 'Starter elektrik'],
+            ['Pompa Bahan Bakar', specs.fuelPumpType || 'Pompa elektrik 12V']
         ]);
     }
 
     const engEl = document.getElementById('engineSpecContainer');
     if (engEl && specs) {
         engEl.innerHTML = buildSpecList([
-            ['Injector', specs.injectorType || 'Common Rail'],
-            ['Filter Oli', specs.oilFilterType || 'Spin-On'],
-            ['Filter Udara', specs.airFilterType || 'Dry Element'],
+            ['Sistem Injeksi Bahan Bakar', specs.injectorType || 'Common rail'],
+            ['Saringan Oli Mesin', specs.oilFilterType || 'Filter tipe spin-on'],
+            ['Saringan Udara', specs.airFilterType || 'Filter kering'],
             ['Aki Starter', specs.batteryType || '12V 70Ah'],
-            ['Busi/Pemantik', specs.sparkPlugType || 'Standar OEM'],
-            ['Coolant', specs.coolantType || 'Long Life Coolant'],
+            ['Sistem Pendingin', specs.coolantType || 'Coolant long life'],
+            ['Sensor Posisi Gas', specs.tpsType || 'Sensor TPS 0-5V']
         ]);
     }
 }
