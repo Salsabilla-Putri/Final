@@ -611,8 +611,10 @@ body {
 .calendar-day.has-event{background:#eff6ff;border-color:#93c5fd;}
 .calendar-day .dot{position:absolute;right:6px;top:6px;width:7px;height:7px;background:#ef4444;border-radius:999px;}
 .maintenance-detail-panel{margin-top:8px;border:1px solid #dbeafe;background:#f8fbff;border-radius:12px;padding:10px;font-size:12px;color:#334155;}
+.maint-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;}
 .maint-detail-item{padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;margin-top:8px;display:grid;gap:3px;}
 .cost-detail-box{margin-top:10px;border:1px dashed #bfdbfe;background:#f8fbff;border-radius:10px;padding:10px;font-size:12px;color:#334155;}
+.cost-detail-scroll{max-height:180px;overflow:auto;padding-right:4px;}
 .cost-detail-box ul{padding-left:16px;margin-top:6px;}
 .cost-detail-title{font-weight:800;color:#1745a5;margin-bottom:8px;}
 .cost-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #e2e8f0;}
