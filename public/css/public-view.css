@@ -545,6 +545,7 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
+.perf-vertical { grid-template-columns: 1fr; }
 
 .perf-item-card {
     border: 1px solid var(--border);
@@ -596,3 +597,18 @@ body {
 .day-mark { width:8px; height:8px; border-radius:999px; background:#ef4444; }
 .maint-day-detail { border-top:1px dashed #bfdbfe; padding:8px; display:grid; gap:6px; font-size:11px; color:#334155; }
 .maint-day-item { padding:6px; background:#fff; border:1px solid #dbeafe; border-radius:8px; }
+
+
+.maintenance-calendar-wrap{display:flex;flex-direction:column;gap:10px;}
+.calendar-header{font-weight:800;color:#1745a5;font-size:0.95rem;}
+.calendar-weekdays,.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;}
+.calendar-weekdays span{font-size:11px;color:#64748b;text-align:center;font-weight:700;}
+.calendar-day{border:1px solid #dbe3ef;background:#fff;border-radius:10px;min-height:42px;position:relative;font-weight:700;color:#1e293b;cursor:pointer;}
+.calendar-day.muted{background:#f8fafc;border-style:dashed;cursor:default;}
+.calendar-day.red-day{color:#dc2626;}
+.calendar-day.has-event{background:#eff6ff;border-color:#93c5fd;}
+.calendar-day .dot{position:absolute;right:6px;top:6px;width:7px;height:7px;background:#ef4444;border-radius:999px;}
+.maintenance-detail-panel{margin-top:8px;border:1px solid #dbeafe;background:#f8fbff;border-radius:12px;padding:10px;font-size:12px;color:#334155;}
+.maint-detail-item{padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;margin-top:8px;display:grid;gap:3px;}
+.cost-detail-box{margin-top:10px;border:1px dashed #bfdbfe;background:#f8fbff;border-radius:10px;padding:10px;font-size:12px;color:#334155;}
+.cost-detail-box ul{padding-left:16px;margin-top:6px;}

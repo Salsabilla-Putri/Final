@@ -66,16 +66,14 @@ async function fetchDashboardData() {
         const engineData = engineRes.status === 'fulfilled' ? await engineRes.value.json().catch(() => null) : null;
         const cbmData = cbmRes.status === 'fulfilled' ? await cbmRes.value.json().catch(() => null) : null;
 
-        if (engineData?.success && engineData.data) {
-            updateOverviewCards(engineData.data);
-            updateOperationsSection(engineData.data, cbmData?.data);
-        }
+
 
         const alertsData = alertsRes.status === 'fulfilled' ? await alertsRes.value.json().catch(() => null) : null;
+        let activeAlerts = 0;
         if (alertsData?.success) {
-            const active = alertsData.data.filter(a => !a.resolved).length;
+            activeAlerts = alertsData.data.filter(a => !a.resolved).length;
             const badge  = document.getElementById('val-alerts');
-            if (badge) badge.innerText = active;
+            if (badge) badge.innerText = activeAlerts;
             renderAlertList(alertsData.data);
         }
 
@@ -92,8 +90,19 @@ async function fetchDashboardData() {
             updateActiveTimeChart(historyData.data);
         }
 
-        if (maintenanceData?.success) updateMaintenanceSection(maintenanceData.data);
-        updateFuelAndCostCharts(historyData?.success ? historyData.data : [], maintenanceData?.success ? maintenanceData.data : []);
+        if (maintenanceData?.success) {
+            updateMaintenanceSection(maintenanceData.data);
+            const schedCount = maintenanceData.data.filter(m => ['scheduled','pending'].includes(String(m.status || '').toLowerCase())).length;
+            const ms = document.getElementById('val-maint-scheduled');
+            if (ms) ms.innerText = String(schedCount);
+        }
+        const historyRows = historyData?.success ? historyData.data : [];
+        updateFuelAndCostCharts(historyRows, maintenanceData?.success ? maintenanceData.data : []);
+
+        if (engineData?.success && engineData.data) {
+            updateOverviewCards(engineData.data, historyRows);
+            updateOperationsSection(engineData.data, cbmData?.data);
+        }
 
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
         if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
@@ -110,19 +119,17 @@ async function fetchDashboardData() {
 // ════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW CARDS
 // ════════════════════════════════════════════════════════════════════════════
-function updateOverviewCards(data) {
+function updateOverviewCards(data, historyRows = []) {
     const power = Number(data.power ?? data.kw ?? 0) || 0;
-    const temp = data.coolant || data.temp || 0;
-    const volt = data.volt  || 0;
+    const avg7h = calculateAverageRuntime7Days(historyRows);
 
+    const avgEl = document.getElementById('val-avg-runtime');
     const powerEl  = document.getElementById('val-power');
-    const tmpEl  = document.getElementById('val-temp');
-    const vltEl  = document.getElementById('val-volt');
 
+    if (avgEl) avgEl.innerText = formatHourMinute(avg7h);
     if (powerEl) powerEl.innerText  = power.toFixed(1) + ' kW';
-    if (tmpEl) tmpEl.innerText  = temp + ' °C';
-    if (vltEl) vltEl.innerText  = volt + ' V';
 }
+
 
 // ════════════════════════════════════════════════════════════════════════════
 //  OPERATIONS SECTION (Engine Status + Health)
@@ -152,18 +159,13 @@ function updateOperationsSection(data, cbmData) {
         fuelEl.className  = f > 30 ? 'st-ok' : f > 15 ? 'st-warn' : 'st-err';
     }
 
-    const applyHealth = (id, value, min, max) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        const state = healthStatus(value, min, max);
-        el.innerText = state.text;
-        el.className = state.cls;
-    };
-    applyHealth('st-volt', data.volt, 200, 240);
-    applyHealth('st-amp',  data.amp, 0,   100);
-    applyHealth('st-freq', data.freq,48,  52);
-    applyHealth('st-fuel', data.fuel,20,  100);
-    applyHealth('st-afr',  data.afr, 10,  18);
+    const fuelEstimateEl = document.getElementById('fuelRuntimeEstimate');
+    if (fuelEstimateEl) {
+        const fuelPct = Number(data.fuel || 0);
+        const estHours = Math.max(0, (fuelPct / 100) * 8);
+        fuelEstimateEl.innerText = formatHourMinute(estHours);
+        fuelEstimateEl.className = estHours >= 2 ? 'st-ok' : estHours >= 1 ? 'st-warn' : 'st-err';
+    }
 
     renderHealthScore(data, cbmData);
 }
@@ -235,6 +237,15 @@ function renderHealthScore(engineData, cbmData) {
         </div>
         <div class="health-warning-wrap">${pillsHTML}</div>
     `;
+
+    const ageEl = document.getElementById('st-age');
+    const runtimeEl = document.getElementById('st-runtime');
+    const componentEl = document.getElementById('st-component');
+    const lastMaintEl = document.getElementById('st-last-maint');
+    if (ageEl) ageEl.textContent = `${engineData.generatorAgeMonth || cbmData?.generatorAgeMonth || 0} bulan`;
+    if (runtimeEl) runtimeEl.textContent = `${Math.round(engineData.engineHours || engineData.runtimeHours || cbmData?.engineHours || 0)} jam`;
+    if (componentEl) componentEl.textContent = warnings.length ? `${warnings.length} item perlu perhatian` : 'Komponen utama normal';
+    if (lastMaintEl) lastMaintEl.textContent = engineData.lastMaintenanceAt ? new Date(engineData.lastMaintenanceAt).toLocaleDateString('id-ID') : '-';
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -345,67 +356,52 @@ function updateMaintenanceSection(data) {
     const container = document.getElementById('maintenanceContainer');
     if (!container) return;
 
-    if (!Array.isArray(data) || !data.length) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-tools" style="font-size:1.8rem; color:#94a3b8;"></i>
-                <p>Tidak ada jadwal maintenance</p>
-            </div>`;
-        return;
-    }
-
-    const upcoming = data
-        .filter(m => (m.status || '').toLowerCase() === 'scheduled' || (m.status || '').toLowerCase() === 'pending')
-        .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
-        .slice(0, 20);
+    const upcoming = Array.isArray(data)
+        ? data.filter(m => ['scheduled', 'pending'].includes(String(m.status || '').toLowerCase()))
+        : [];
 
     if (!upcoming.length) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-check-circle" style="color:#10b981; font-size:1.8rem;"></i>
-                <p>Semua maintenance telah selesai</p>
-            </div>`;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle" style="color:#10b981; font-size:1.8rem;"></i><p>Tidak ada upcoming maintenance</p></div>`;
         return;
     }
 
-    const maintenanceByDay = {};
-    upcoming.forEach((m) => {
-        const dateKey = new Date(m.dueDate || m.createdAt).toISOString().slice(0, 10);
-        if (!maintenanceByDay[dateKey]) maintenanceByDay[dateKey] = [];
-        maintenanceByDay[dateKey].push(m);
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const firstWeekday = (monthStart.getDay() + 6) % 7;
+    const totalDays = monthEnd.getDate();
+
+    const byDate = {};
+    upcoming.forEach(m => {
+        const dt = new Date(m.dueDate || m.createdAt);
+        const key = dt.toISOString().slice(0,10);
+        (byDate[key] ||= []).push(m);
     });
 
-    const today = new Date();
-    const days = [];
-    for (let i = 29; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(today.getDate() - i);
-        days.push(d);
+    const cells = [];
+    for (let i=0;i<firstWeekday;i++) cells.push('<div class="calendar-day muted"></div>');
+    for (let day=1;day<=totalDays;day++) {
+        const d = new Date(now.getFullYear(), now.getMonth(), day);
+        const key = d.toISOString().slice(0,10);
+        const weekend = [0,6].includes(d.getDay());
+        cells.push(`<button class="calendar-day ${weekend ? 'red-day' : ''} ${byDate[key] ? 'has-event' : ''}" data-date="${key}">${day}${byDate[key] ? '<span class="dot"></span>' : ''}</button>`);
     }
 
-    container.innerHTML = `
-        <div class="maint-month-grid">
-            ${days.map((d) => {
-                const key = d.toISOString().slice(0, 10);
-                const hasEvent = !!maintenanceByDay[key];
-                return `
-                    <details class="maint-day-cell ${hasEvent ? 'has-event' : ''}">
-                        <summary>
-                            <span class="day-label">${d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}</span>
-                            ${hasEvent ? '<span class="day-mark"></span>' : ''}
-                        </summary>
-                        ${hasEvent ? `<div class="maint-day-detail">${maintenanceByDay[key].map((m) => `
-                            <div class="maint-day-item">
-                                <strong>${m.task || 'Tugas Maintenance'}</strong>
-                                <div>Status: ${(m.status || '-').toUpperCase()}</div>
-                                <div>PIC: ${m.assignedTo || 'Belum ditentukan'}</div>
-                            </div>
-                        `).join('')}</div>` : ''}
-                    </details>
-                `;
-            }).join('')}
-        </div>
-    `;
+    container.innerHTML = `<div class="maintenance-calendar-wrap">
+        <div class="calendar-header">${now.toLocaleDateString('id-ID', { month:'long', year:'numeric' })}</div>
+        <div class="calendar-weekdays"><span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span></div>
+        <div class="calendar-grid">${cells.join('')}</div>
+        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">Klik tanggal yang bertanda untuk melihat detail maintenance.</div>
+    </div>`;
+
+    container.querySelectorAll('.calendar-day.has-event').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const key = btn.dataset.date;
+            const panel = document.getElementById('maintenanceDetailPanel');
+            const list = byDate[key] || [];
+            panel.innerHTML = `<h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4>${list.map((m) => `<div class="maint-detail-item"><div><strong>Tugas:</strong> ${m.task || '-'}</div><div><strong>Type:</strong> ${m.type || m.category || '-'}</div><div><strong>Status:</strong> ${(m.status || '-').toUpperCase()}</div><div><strong>PIC:</strong> ${m.assignedTo || '-'}</div><div><strong>Cost:</strong> Rp ${(Number(m.cost || m.estimatedCost || 0) || 0).toLocaleString('id-ID')}</div><div><strong>Catatan:</strong> ${m.notes || m.description || '-'}</div></div>`).join('')}`;
+        });
+    });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -553,7 +549,6 @@ function updatePerformanceSection(data) {
     };
 
     // dukung berbagai bentuk payload agar tidak lagi N/A saat data sebenarnya ada
-    const currentVal = pickValue(p.current?.value, p.amp?.value, p.current, p.amp, data.current, data.amp);
     const freqVal = pickValue(p.frequency?.value, p.freq?.value, p.frequency, p.freq, data.frequency, data.freq);
     const voltVal = pickValue(p.voltage?.value, p.volt?.value, p.voltage, p.volt, data.voltage, data.volt);
     const fuelVal = pickValue(p.fuel?.percent, p.fuel?.value, p.fuel, data.fuel);
@@ -610,7 +605,10 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
     const weeklyFuel = [0, 0, 0, 0, 0, 0, 0];
     (historyRows || []).forEach((r) => {
         const day = new Date(r.startedAt || r.createdAt).getDay();
-        const used = Number(r.fuelUsed || r.fuelConsumption || 0) || 0;
+        const start = new Date(r.startedAt || r.createdAt);
+        const end = r.endedAt ? new Date(r.endedAt) : new Date();
+        const runtimeHours = Math.max(0, end - start) / 3600000;
+        const used = runtimeHours * 2.2;
         weeklyFuel[day] += used;
     });
 
@@ -630,10 +628,25 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
     });
 
     if (maintenanceCostChart) maintenanceCostChart.destroy();
+    const monthlyDetails = new Array(12).fill(0).map(() => []);
+    (maintenanceRows || []).forEach((m) => {
+        const dt = new Date(m.completedAt || m.updatedAt || m.createdAt);
+        const idx = dt.getMonth();
+        monthlyDetails[idx].push(m);
+    });
+
     maintenanceCostChart = new Chart(costCtx, {
         type: 'bar',
         data: { labels: monthNames, datasets: [{ label: 'Biaya (Rp)', data: monthlyCost, backgroundColor: 'rgba(23,69,165,0.82)', borderRadius: 8 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, onClick: (_, elements) => {
+            if (!elements.length) return;
+            const idx = elements[0].index;
+            const target = document.getElementById('maintenanceCostDetail');
+            if (!target) return;
+            const details = monthlyDetails[idx];
+            if (!details.length) { target.innerHTML = `<strong>${monthNames[idx]}:</strong> Tidak ada biaya maintenance.`; return; }
+            target.innerHTML = `<strong>${monthNames[idx]}:</strong><ul>${details.map(d => `<li>${d.task || d.type || 'Maintenance'} - Rp ${(Number(d.cost || d.estimatedCost || 0) || 0).toLocaleString('id-ID')}</li>`).join('')}</ul>`;
+        } }
     });
 }
 
@@ -687,13 +700,13 @@ function updateSpecificationsSection(specs) {
     const genEl = document.getElementById('generatorSpecContainer');
     if (genEl && specs) {
         genEl.innerHTML = buildSpecList([
-            ['Merk',             specs.merk         || '--'],
-            ['Tipe',             specs.tipe         || '--'],
-            ['Daya Maksimum',    (specs.dayaMaks    || '--') + ' kW'],
-            ['Tegangan Output',  (specs.tegangan    || '--') + ' V'],
-            ['Frekuensi',        (specs.frekuensi   || '--') + ' Hz'],
-            ['Kapasitas Tangki', (specs.kapasitasTangki || '--') + ' L'],
-            ['Konsumsi BBM',     (specs.konsumsiBbm || '--') + ' L/jam'],
+            ['AVR Module', specs.avrType || 'Digital AVR'],
+            ['Bearing Alternator', specs.bearingType || '6205/6206'],
+            ['Rectifier', specs.rectifierType || 'Bridge Rectifier'],
+            ['MCB Output', specs.mcbType || '3P 63A'],
+            ['Sensor TPS', specs.tpsType || '0-5V TPS'],
+            ['Sensor Coolant', specs.coolantSensorType || 'NTC 10K'],
+            ['Fuel Pump', specs.fuelPumpType || '12V Electric Pump'],
             ['Sistem Start',     specs.sistemStart  || '--'],
         ]);
     }
@@ -701,12 +714,12 @@ function updateSpecificationsSection(specs) {
     const engEl = document.getElementById('engineSpecContainer');
     if (engEl && specs) {
         engEl.innerHTML = buildSpecList([
-            ['Jenis Mesin',   specs.tipeMesin     || 'Diesel 4-tak, OHV'],
-            ['Kapasitas',     specs.kapasitasMesin || '389 cc'],
-            ['Max RPM',       '3000 RPM'],
-            ['Bahan Bakar',   'Solar'],
-            ['Oli Mesin',     specs.oliMesin      || 'SAE 10W-30'],
-            ['Pendingin',     'Udara (Air-Cooled)'],
+            ['Injector', specs.injectorType || 'Common Rail'],
+            ['Filter Oli', specs.oilFilterType || 'Spin-On'],
+            ['Filter Udara', specs.airFilterType || 'Dry Element'],
+            ['Aki Starter', specs.batteryType || '12V 70Ah'],
+            ['Busi/Pemantik', specs.sparkPlugType || 'Standar OEM'],
+            ['Coolant', specs.coolantType || 'Long Life Coolant'],
         ]);
     }
 }
@@ -715,6 +728,26 @@ function buildSpecList(rows) {
     return `<ul class="spec-list">${rows.map(([label, val]) =>
         `<li><span class="spec-label">${label}</span><span class="spec-val">${val}</span></li>`
     ).join('')}</ul>`;
+}
+
+
+function calculateAverageRuntime7Days(historyRows = []) {
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() - 6);
+    let total = 0;
+    historyRows.forEach((r) => {
+        const s = new Date(r.startedAt);
+        const e = r.endedAt ? new Date(r.endedAt) : now;
+        if (e > start && e > s) total += Math.max(0, e - s) / 3600000;
+    });
+    return total / 7;
+}
+
+function formatHourMinute(hours = 0) {
+    const h = Math.floor(hours);
+    const m = Math.round((hours - h) * 60);
+    return `${h}j ${m}m`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -74,8 +74,8 @@
                             <i class="fas fa-bolt-lightning"></i>
                         </div>
                         <div class="overview-content">
-                            <div class="overview-value" id="val-power">--</div>
-                            <div class="overview-label">Output Power</div>
+                            <div class="overview-value" id="val-avg-runtime">--</div>
+                            <div class="overview-label">Rata-rata Waktu Hidup (7 Hari)</div>
                         </div>
                     </div>
                     <div class="overview-card">
@@ -83,8 +83,8 @@
                             <i class="fas fa-thermometer-half"></i>
                         </div>
                         <div class="overview-content">
-                            <div class="overview-value" id="val-temp">--</div>
-                            <div class="overview-label">Coolant Temp</div>
+                            <div class="overview-value" id="val-maint-scheduled">0</div>
+                            <div class="overview-label">Maintenance Scheduled</div>
                         </div>
                     </div>
                     <div class="overview-card">
@@ -101,8 +101,8 @@
                             <i class="fas fa-bolt"></i>
                         </div>
                         <div class="overview-content">
-                            <div class="overview-value" id="val-volt">--</div>
-                            <div class="overview-label">System Voltage</div>
+                            <div class="overview-value" id="val-power">--</div>
+                            <div class="overview-label">Daya Saat Ini</div>
                         </div>
                     </div>
                 </div>
@@ -135,6 +135,10 @@
                         <div class="list-row">
                             <span>Fuel Level:</span>
                             <span id="fuelLevel" class="st-ok">--%</span>
+                        </div>
+                        <div class="list-row">
+                            <span>Estimasi Waktu Hidup:</span>
+                            <span id="fuelRuntimeEstimate" class="st-ok">--</span>
                         </div>
                     </div>
 
@@ -189,11 +193,10 @@
                                 <p>Menghitung skor…</p>
                             </div>
                         </div>
-                        <div class="list-row"><span>Voltage:</span>  <span id="st-volt">--</span></div>
-                        <div class="list-row"><span>Current:</span>  <span id="st-amp">--</span></div>
-                        <div class="list-row"><span>Frequency:</span><span id="st-freq">--</span></div>
-                        <div class="list-row"><span>Fuel Level:</span><span id="st-fuel">--</span></div>
-                        <div class="list-row"><span>AFR:</span>      <span id="st-afr">--</span></div>
+                        <div class="list-row"><span>Umur Generator:</span><span id="st-age">--</span></div>
+                        <div class="list-row"><span>Jam Operasi:</span><span id="st-runtime">--</span></div>
+                        <div class="list-row"><span>Kondisi Komponen:</span><span id="st-component">--</span></div>
+                        <div class="list-row"><span>Maintenance Terakhir:</span><span id="st-last-maint">--</span></div>
                     </div>
 
                 </div>
@@ -209,6 +212,7 @@
                         <div class="chart-box">
                             <canvas id="chartMaintCostMonthly"></canvas>
                         </div>
+                        <div id="maintenanceCostDetail" class="cost-detail-box">Klik batang bulan untuk lihat detail biaya.</div>
                     </div>
                 </div>
             </section>
@@ -225,7 +229,7 @@
                     <!-- Radar Chart + Status -->
                     <div class="card">
                         <h3><i class="fas fa-chart-bar"></i> Performance (Mudah Dipahami)</h3>
-                        <div id="perfSimpleCards" class="perf-simple-cards">
+                        <div id="perfSimpleCards" class="perf-simple-cards perf-vertical">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
                                 <p>Memuat performa…</p>
