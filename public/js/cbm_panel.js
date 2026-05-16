@@ -44,91 +44,142 @@
     // ── HTML TEMPLATE ─────────────────────────────────────────────────────────
     function buildHTML() {
         return `
-<section id="cbmPanel" style="margin-top:24px; font-family:inherit;">
-  <div style="display:flex;align-items:flex-start;justify-content:space-between;
-              margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-    <div>
-      <h2 style="margin:0;font-size:17px;font-weight:700;color:#1e293b;">
-        ⚙️ Condition-Based Maintenance (CBM)
-      </h2>
-      <p style="margin:3px 0 0;font-size:12px;color:#64748b;">
-        Analisis degradasi komponen berbasis tren histori sensor &amp; FFT
-      </p>
+<style>
+  #cbmPanel * { box-sizing: border-box; }
+  #cbmPanel .cbm-card {
+    background: #fff;
+    border-radius: 14px;
+    border: 1px solid #e8edf3;
+    box-shadow: 0 2px 8px rgba(15,23,42,.07), 0 0 1px rgba(15,23,42,.04);
+  }
+  #cbmPanel .cbm-card-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    color: #94a3b8;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #cbmPanel .cbm-card-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #f1f5f9;
+  }
+  #cbmRefreshBtn:hover  { background: #1238a0 !important; }
+  #cbmSendFftBtn:hover  { background: #0284c7 !important; }
+  #cbmRefreshBtn, #cbmSendFftBtn { transition: background .18s; }
+  .cbm-finding-card { transition: box-shadow .18s; }
+  .cbm-finding-card:hover { box-shadow: 0 4px 14px rgba(15,23,42,.1) !important; }
+  .cbm-approve-btn:hover { background: #15803d !important; }
+  .cbm-reject-btn:hover  { background: #dc2626 !important; }
+  @media (max-width: 800px) {
+    #cbmMainGrid { grid-template-columns: 1fr !important; }
+    #cbmLeftPanel { flex-direction: row !important; gap: 10px !important; }
+    #cbmHealthCard { min-width: 0 !important; flex: 1 !important; }
+    #cbmComponentCard { flex: 2 !important; }
+  }
+</style>
+
+<section id="cbmPanel" style="margin-top:24px;font-family:inherit;">
+
+  <!-- ── HEADER ── -->
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#1e40af,#1d4ed8);
+                  display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">⚙️</div>
+      <div>
+        <h2 style="margin:0;font-size:16px;font-weight:700;color:#0f172a;line-height:1.3;">
+          Condition-Based Maintenance
+        </h2>
+        <p style="margin:1px 0 0;font-size:11.5px;color:#64748b;">
+          Analisis degradasi komponen berbasis tren histori sensor &amp; FFT
+        </p>
+      </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button id="cbmRefreshBtn"
-              style="padding:7px 14px;background:#1745a5;color:#fff;border:none;
-                     border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;">
+              style="display:inline-flex;align-items:center;gap:6px;padding:8px 15px;
+                     background:#1d4ed8;color:#fff;border:none;border-radius:8px;
+                     cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.02em;">
         <i class="fas fa-sync-alt" id="cbmRefreshIcon"></i> Analisis Sekarang
       </button>
       <button id="cbmSendFftBtn"
               title="Kirim FFT peaks dari chart aktif ke analisis server"
-              style="padding:7px 12px;background:#0ea5e9;color:#fff;border:none;
-                     border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;">
+              style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+                     background:#0ea5e9;color:#fff;border:none;border-radius:8px;
+                     cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.02em;">
         <i class="fas fa-wave-square"></i> + FFT Peaks
       </button>
     </div>
   </div>
 
+  <!-- ── LOADING ── -->
   <div id="cbmLoading"
-       style="display:none;padding:18px;text-align:center;color:#64748b;font-size:13px;">
-    <i class="fas fa-spinner fa-spin"></i>&nbsp; Menganalisis data sensor...
+       style="display:none;padding:32px;text-align:center;color:#64748b;font-size:13px;">
+    <i class="fas fa-spinner fa-spin" style="font-size:20px;color:#1d4ed8;margin-bottom:8px;display:block;"></i>
+    Menganalisis data sensor...
   </div>
 
+  <!-- ── CONTENT ── -->
   <div id="cbmContent" style="display:none;">
 
-    <!-- Row 1: Health Score + Component Health -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+    <!-- MAIN GRID: Left (health + komponen) | Right (findings) -->
+    <div id="cbmMainGrid" style="display:grid;grid-template-columns:260px 1fr;gap:14px;margin-bottom:14px;align-items:start;">
 
-      <div style="background:#fff;border-radius:12px;padding:18px 16px;
-                  border:1px solid #f1f5f9;text-align:center;box-shadow:0 1px 5px rgba(0,0,0,.05);">
-        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-                    text-transform:uppercase;margin-bottom:10px;">Health Score</div>
-        <div style="position:relative;width:120px;height:120px;margin:0 auto 12px;">
-          <canvas id="cbmHealthCanvas" width="120" height="120"></canvas>
-          <div style="position:absolute;top:50%;left:50%;
-                      transform:translate(-50%,-50%);text-align:center;line-height:1.2;">
-            <div id="cbmScoreNum"
-                 style="font-size:28px;font-weight:700;color:#1e293b;">--</div>
-            <div style="font-size:11px;color:#94a3b8;">/100</div>
+      <!-- LEFT PANEL -->
+      <div id="cbmLeftPanel" style="display:flex;flex-direction:column;gap:14px;">
+
+        <!-- Health Score Card -->
+        <div id="cbmHealthCard" class="cbm-card" style="padding:20px 16px;text-align:center;">
+          <div class="cbm-card-label">Health Score</div>
+          <div style="position:relative;width:130px;height:130px;margin:0 auto 14px;">
+            <canvas id="cbmHealthCanvas" width="130" height="130"></canvas>
+            <div style="position:absolute;inset:0;display:flex;flex-direction:column;
+                        align-items:center;justify-content:center;line-height:1.1;">
+              <div id="cbmScoreNum" style="font-size:32px;font-weight:800;color:#0f172a;">--</div>
+              <div style="font-size:11px;color:#94a3b8;font-weight:500;">/100</div>
+            </div>
           </div>
+          <span id="cbmStatusBadge"
+                style="display:inline-block;padding:4px 16px;border-radius:99px;
+                       font-size:12px;font-weight:700;letter-spacing:.04em;
+                       background:#e2e8f0;color:#475569;">---</span>
+          <div id="cbmAnalyzedAt"
+               style="margin-top:10px;font-size:10px;color:#94a3b8;line-height:1.5;"></div>
         </div>
-        <span id="cbmStatusBadge"
-              style="display:inline-block;padding:3px 12px;border-radius:20px;
-                     font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;">
-          ---
-        </span>
-        <div id="cbmAnalyzedAt"
-             style="margin-top:7px;font-size:10px;color:#94a3b8;"></div>
-      </div>
 
-      <div style="background:#fff;border-radius:12px;padding:18px 16px;
-                  border:1px solid #f1f5f9;box-shadow:0 1px 5px rgba(0,0,0,.05);">
-        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-                    text-transform:uppercase;margin-bottom:12px;">Status Komponen</div>
-        <div id="cbmComponentGrid"
-             style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:7px;">
+        <!-- Component Health Card -->
+        <div id="cbmComponentCard" class="cbm-card" style="padding:18px 16px;">
+          <div class="cbm-card-label">Status Komponen</div>
+          <div id="cbmComponentGrid" style="display:flex;flex-direction:column;gap:7px;"></div>
         </div>
-      </div>
-    </div>
 
+      </div><!-- /LEFT PANEL -->
 
-    <!-- Findings -->
-    <div style="background:#fff;border-radius:12px;padding:18px 16px;
-                border:1px solid #f1f5f9;box-shadow:0 1px 5px rgba(0,0,0,.05);margin-bottom:14px;">
-      <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;
-                  text-transform:uppercase;margin-bottom:14px;">
-        Temuan &amp; Rekomendasi CBM
-      </div>
-      <div id="cbmFindingsEmpty"
-           style="display:none;padding:20px;text-align:center;color:#94a3b8;font-size:13px;">
-        ✅ Tidak ada anomali terdeteksi pada rentang waktu ini.
-      </div>
-      <div id="cbmFindingsList"></div>
-    </div>
+      <!-- RIGHT PANEL: Findings -->
+      <div class="cbm-card" style="padding:20px 18px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+          <div class="cbm-card-label" style="margin-bottom:0;">Temuan &amp; Rekomendasi CBM</div>
+          <span id="cbmFindingCount"
+                style="font-size:11px;font-weight:600;color:#64748b;background:#f1f5f9;
+                       padding:2px 10px;border-radius:99px;"></span>
+        </div>
+        <div id="cbmFindingsEmpty"
+             style="display:none;padding:30px 0;text-align:center;color:#94a3b8;font-size:13px;">
+          <div style="font-size:28px;margin-bottom:8px;">✅</div>
+          Tidak ada anomali terdeteksi pada rentang waktu ini.
+        </div>
+        <div id="cbmFindingsList" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div><!-- /RIGHT PANEL -->
 
+    </div><!-- /MAIN GRID -->
 
-  </div>
+  </div><!-- /cbmContent -->
 </section>`;
     }
 
@@ -137,14 +188,18 @@
         const canvas = document.getElementById('cbmHealthCanvas');
         if (!canvas) return;
         const ctx   = canvas.getContext('2d');
-        const cx = 60, cy = 60, r = 52, lw = 10;
+        const size  = 130;
+        const cx = size / 2, cy = size / 2, r = 54, lw = 11;
         const start = -Math.PI / 2;
         const end   = start + (score / 100) * 2 * Math.PI;
         const color = score >= 80 ? '#16a34a' : score >= 55 ? '#ea580c' : '#dc2626';
+        const trackColor = score >= 80 ? '#dcfce7' : score >= 55 ? '#fff7ed' : '#fef2f2';
 
-        ctx.clearRect(0, 0, 120, 120);
+        ctx.clearRect(0, 0, size, size);
+        // Track
         ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-        ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = lw; ctx.stroke();
+        ctx.strokeStyle = trackColor; ctx.lineWidth = lw; ctx.stroke();
+        // Arc
         ctx.beginPath(); ctx.arc(cx, cy, r, start, end);
         ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke();
 
@@ -173,13 +228,16 @@
         grid.innerHTML = Object.entries(componentHealth).map(([comp, level]) => {
             const m = LEVEL[level] || LEVEL.ok;
             return `
-            <div style="display:flex;align-items:center;gap:7px;padding:7px 9px;
-                        background:${m.bg};border-radius:8px;border:1px solid ${m.border};">
-                <span style="font-size:14px;">${m.icon}</span>
-                <div>
-                    <div style="font-size:11px;font-weight:600;color:#1e293b;">${comp}</div>
-                    <div style="font-size:10px;color:${m.color};font-weight:700;">${m.label}</div>
+            <div style="display:flex;align-items:center;gap:9px;padding:8px 11px;
+                        background:${m.bg};border-radius:9px;border:1px solid ${m.border};">
+                <span style="font-size:15px;flex-shrink:0;">${m.icon}</span>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:12px;font-weight:600;color:#1e293b;
+                                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${comp}</div>
                 </div>
+                <span style="font-size:10px;font-weight:700;color:${m.color};
+                             background:${m.color}18;padding:2px 7px;border-radius:99px;
+                             flex-shrink:0;">${m.label}</span>
             </div>`;
         }).join('');
     }
@@ -199,52 +257,84 @@
             const m        = LEVEL[f.level] || LEVEL.ok;
             const isRising = (f.trend?.slopePerHour ?? 0) >= 0;
             const slopeAbs = Math.abs(f.trend?.slopePerHour ?? 0).toFixed(3);
+            const priorityColors = {
+                high:   { bg: '#fef2f2', color: '#dc2626', label: 'HIGH' },
+                medium: { bg: '#fffbeb', color: '#d97706', label: 'MED' },
+                low:    { bg: '#f0fdf4', color: '#16a34a', label: 'LOW' },
+            };
+            const pc = priorityColors[(f.priority || 'medium').toLowerCase()] || priorityColors.medium;
 
             return `
-            <div class="cbm-finding-card" style="border:1px solid ${m.border};border-radius:10px;padding:13px 15px;
-                        margin-bottom:9px;background:${m.bg};">
-              <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-                <div style="flex:1;min-width:200px;">
-                  <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px;flex-wrap:wrap;">
-                    <span>${m.icon}</span>
-                    <span style="font-weight:700;font-size:13px;color:#1e293b;">${f.component}</span>
-                    <span style="padding:2px 8px;border-radius:20px;font-size:11px;
-                                 background:${m.color}22;color:${m.color};font-weight:700;">${m.label}</span>
-                    <span style="padding:2px 8px;border-radius:20px;font-size:11px;
-                                 background:#e0e7ff;color:#3730a3;">
-                        ${f.type || 'Corrective'} · ${(f.priority || 'MED').toUpperCase()}
-                    </span>
-                  </div>
-                  <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:3px;">
-                    ${f.action}
-                  </div>
-                  <div style="font-size:12px;color:#64748b;margin-bottom:8px;">${f.details}</div>
-                  ${f.sensor !== 'rpm_fft' ? `
-                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                    <span style="font-size:11px;color:#94a3b8;">Sensor: <b style="color:#475569;">${f.sensor?.toUpperCase()}</b></span>
-                    <span style="font-size:11px;color:#94a3b8;">Terkini: <b style="color:#475569;">${f.trend?.latest ?? '--'}</b></span>
-                    <span style="font-size:11px;color:${isRising ? '#dc2626' : '#16a34a'};">
-                        ${isRising ? '▲' : '▼'} ${slopeAbs}/jam
-                    </span>
-                    <span style="font-size:11px;color:#94a3b8;">R²: <b style="color:#475569;">${f.trend?.r2 ?? '--'}</b></span>
-                    <span style="font-size:11px;color:#94a3b8;">CV: <b style="color:#475569;">${f.trend?.cv ?? '--'}%</b></span>
-                    <span style="font-size:11px;color:#94a3b8;">Keyakinan: <b style="color:#475569;">${f.confidence ?? '--'}%</b></span>
-                  </div>` : `
-                  <span style="font-size:11px;color:#64748b;">Sumber: FFT Spectrum Analysis</span>`}
+            <div class="cbm-finding-card" data-idx="${idx}"
+                 style="border:1px solid ${m.border};border-left:4px solid ${m.color};
+                        border-radius:10px;padding:14px 15px;background:#fff;
+                        box-shadow:0 1px 4px rgba(15,23,42,.06);">
+
+              <!-- Top row: title + badges + actions -->
+              <div style="display:flex;align-items:flex-start;gap:10px;justify-content:space-between;
+                          flex-wrap:wrap;margin-bottom:9px;">
+                <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:1;min-width:0;">
+                  <span style="font-size:15px;">${m.icon}</span>
+                  <span style="font-weight:700;font-size:13px;color:#0f172a;">${f.component}</span>
+                  <span style="padding:2px 9px;border-radius:99px;font-size:10.5px;font-weight:700;
+                               background:${m.color}18;color:${m.color};">${m.label}</span>
+                  <span style="padding:2px 9px;border-radius:99px;font-size:10.5px;font-weight:700;
+                               background:#e0e7ff;color:#3730a3;">
+                      ${f.type || 'Corrective'}
+                  </span>
+                  <span style="padding:2px 9px;border-radius:99px;font-size:10.5px;font-weight:700;
+                               background:${pc.bg};color:${pc.color};">
+                      ${pc.label}
+                  </span>
                 </div>
-                <div style="display:flex;gap:6px;align-items:flex-start;">
+                <div style="display:flex;gap:6px;flex-shrink:0;">
                     <button class="cbm-approve-btn" data-idx="${idx}"
-                            style="padding:7px 12px;background:#2563eb;color:#fff;border:none;
-                                   border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
-                                   white-space:nowrap;">✅ Setujui</button>
+                            style="padding:6px 12px;background:#16a34a;color:#fff;border:none;
+                                   border-radius:7px;cursor:pointer;font-size:11.5px;font-weight:600;
+                                   white-space:nowrap;transition:background .18s;">✅ Setujui</button>
                     <button class="cbm-reject-btn" data-idx="${idx}"
-                            style="padding:7px 12px;background:#94a3b8;color:#fff;border:none;
-                                   border-radius:7px;cursor:pointer;font-size:12px;font-weight:700;
-                                   white-space:nowrap;">❌ Tolak</button>
+                            style="padding:6px 12px;background:#f1f5f9;color:#ef4444;border:1px solid #fca5a5;
+                                   border-radius:7px;cursor:pointer;font-size:11.5px;font-weight:600;
+                                   white-space:nowrap;transition:background .18s;">✕ Tolak</button>
                 </div>
               </div>
+
+              <!-- Action text -->
+              <div style="font-size:13px;font-weight:600;color:#1e293b;margin-bottom:4px;">
+                ${f.action}
+              </div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:10px;line-height:1.5;">
+                ${f.details}
+              </div>
+
+              <!-- Metrics row -->
+              ${f.sensor !== 'rpm_fft' ? `
+              <div style="display:flex;gap:0;flex-wrap:wrap;background:#f8fafc;
+                          border-radius:8px;overflow:hidden;border:1px solid #f1f5f9;">
+                ${[
+                  ['Sensor', `<b>${(f.sensor||'').toUpperCase()}</b>`],
+                  ['Terkini', `<b>${f.trend?.latest ?? '--'}</b>`],
+                  ['Tren', `<span style="color:${isRising?'#dc2626':'#16a34a'};font-weight:700;">${isRising?'▲':'▼'} ${slopeAbs}/jam</span>`],
+                  ['R²', `<b>${f.trend?.r2 ?? '--'}</b>`],
+                  ['CV', `<b>${f.trend?.cv ?? '--'}%</b>`],
+                  ['Keyakinan', `<b>${f.confidence ?? '--'}%</b>`],
+                ].map(([k,v]) => `
+                  <div style="padding:6px 12px;border-right:1px solid #f1f5f9;white-space:nowrap;">
+                    <div style="font-size:10px;color:#94a3b8;margin-bottom:1px;">${k}</div>
+                    <div style="font-size:12px;color:#374151;">${v}</div>
+                  </div>`).join('')}
+              </div>` : `
+              <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+                          background:#f0f9ff;border-radius:6px;border:1px solid #bae6fd;">
+                <i class="fas fa-wave-square" style="color:#0ea5e9;font-size:11px;"></i>
+                <span style="font-size:11px;color:#0369a1;font-weight:500;">Sumber: FFT Spectrum Analysis</span>
+              </div>`}
             </div>`;
         }).join('');
+
+        // Update count badge
+        const countEl = document.getElementById('cbmFindingCount');
+        if (countEl) countEl.textContent = findings.length ? `${findings.length} temuan` : '';
 
         list.querySelectorAll('.cbm-approve-btn').forEach(btn => {
             btn.addEventListener('click', async function () {
@@ -261,6 +351,9 @@
                     const empty = document.getElementById('cbmFindingsEmpty');
                     if (empty) empty.style.display = 'block';
                 }
+                const remaining = list.querySelectorAll('.cbm-finding-card').length;
+                const countEl = document.getElementById('cbmFindingCount');
+                if (countEl) countEl.textContent = remaining ? `${remaining} temuan` : '';
             });
         });
     }
@@ -281,18 +374,18 @@
 
         list.innerHTML = `
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead><tr style="background:#f8fafc;">
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:left;border-bottom:1px solid #f1f5f9;">Komponen</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:left;border-bottom:1px solid #f1f5f9;">Tugas</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:center;border-bottom:1px solid #f1f5f9;">Interval</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:center;border-bottom:1px solid #f1f5f9;">Sisa Jam</th>
-            <th style="padding:7px 10px;color:#64748b;font-size:11px;font-weight:600;
-                       text-align:center;border-bottom:1px solid #f1f5f9;">Status</th>
-            <th style="padding:7px 10px;border-bottom:1px solid #f1f5f9;"></th>
+          <thead><tr style="background:#f8fafc;border-bottom:2px solid #e8edf3;">
+            <th style="padding:9px 12px;color:#64748b;font-size:10.5px;font-weight:700;
+                       text-align:left;letter-spacing:.06em;text-transform:uppercase;">Komponen</th>
+            <th style="padding:9px 12px;color:#64748b;font-size:10.5px;font-weight:700;
+                       text-align:left;letter-spacing:.06em;text-transform:uppercase;">Tugas</th>
+            <th style="padding:9px 12px;color:#64748b;font-size:10.5px;font-weight:700;
+                       text-align:center;letter-spacing:.06em;text-transform:uppercase;">Interval</th>
+            <th style="padding:9px 12px;color:#64748b;font-size:10.5px;font-weight:700;
+                       text-align:center;letter-spacing:.06em;text-transform:uppercase;">Sisa Jam</th>
+            <th style="padding:9px 12px;color:#64748b;font-size:10.5px;font-weight:700;
+                       text-align:center;letter-spacing:.06em;text-transform:uppercase;">Status</th>
+            <th style="padding:9px 12px;"></th>
           </tr></thead>
           <tbody>
             ${schedule.map((s, idx) => {
@@ -302,30 +395,32 @@
                                : s.urgency === 'due-soon'  ? '#ca8a04' : '#16a34a';
                 const pct      = Math.min(100, s.percentDue ?? 0);
                 return `
-                <tr style="border-top:1px solid #f1f5f9;">
-                  <td style="padding:9px 10px;font-weight:600;color:#374151;">${s.component}</td>
-                  <td style="padding:9px 10px;color:#475569;">${s.task}</td>
-                  <td style="padding:9px 10px;text-align:center;color:#64748b;">${s.intervalHours} jam</td>
-                  <td style="padding:9px 10px;text-align:center;">
-                    <div style="font-size:12px;${s.hoursRemaining <= 0 ? 'font-weight:700;color:#dc2626;' : 'color:#374151;'}">
-                        ${s.hoursRemaining <= 0 ? 'OVERDUE' : s.hoursRemaining + ' jam'}
+                <tr style="border-bottom:1px solid #f1f5f9;transition:background .15s;"
+                    onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+                  <td style="padding:10px 12px;font-weight:600;color:#0f172a;">${s.component}</td>
+                  <td style="padding:10px 12px;color:#475569;">${s.task}</td>
+                  <td style="padding:10px 12px;text-align:center;color:#64748b;">${s.intervalHours} jam</td>
+                  <td style="padding:10px 12px;text-align:center;">
+                    <div style="font-size:12px;font-weight:600;${s.hoursRemaining <= 0 ? 'color:#dc2626;' : 'color:#374151;'}">
+                        ${s.hoursRemaining <= 0 ? '⚠ OVERDUE' : s.hoursRemaining + ' jam'}
                     </div>
-                    <div style="background:#e2e8f0;border-radius:4px;height:4px;
-                                margin-top:3px;width:70px;margin-left:auto;margin-right:auto;">
-                        <div style="background:${barColor};height:4px;border-radius:4px;width:${pct}%;"></div>
+                    <div style="background:#e2e8f0;border-radius:4px;height:5px;
+                                margin-top:4px;width:72px;margin-left:auto;margin-right:auto;overflow:hidden;">
+                        <div style="background:${barColor};height:5px;border-radius:4px;width:${pct}%;transition:width .4s;"></div>
                     </div>
                   </td>
-                  <td style="padding:9px 10px;text-align:center;">
-                    <span style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;
-                                 background:${um.color}22;color:${um.color};">
+                  <td style="padding:10px 12px;text-align:center;">
+                    <span style="padding:3px 10px;border-radius:99px;font-size:10.5px;font-weight:700;
+                                 background:${um.color}18;color:${um.color};">
                         ${um.label}
                     </span>
                   </td>
-                  <td style="padding:9px 10px;">
+                  <td style="padding:10px 12px;">
                     <button class="cbm-prev-approve-btn" data-prev-idx="${idx}"
-                            style="padding:4px 9px;background:#2563eb;color:#fff;
-                                   border:none;border-radius:5px;
-                                   cursor:pointer;font-size:11px;font-weight:600;">
+                            style="padding:5px 10px;background:#1d4ed8;color:#fff;
+                                   border:none;border-radius:6px;
+                                   cursor:pointer;font-size:11px;font-weight:600;
+                                   white-space:nowrap;transition:background .18s;">
                         ✅ Setujui
                     </button>
                   </td>
@@ -485,7 +580,7 @@
             try {
                 const deviceId = typeof getReportDeviceId === 'function'
                     ? getReportDeviceId() : '';
-                const url  = `${CBM_API}?hours=720${deviceId ? '&deviceId=' + deviceId : ''}`;
+                const url  = `${CBM_API}?hours=168${deviceId ? '&deviceId=' + deviceId : ''}`;
                 const res  = await fetch(url);
                 const json = await res.json();
                 if (!json.success) throw new Error(json.error);
