@@ -3,6 +3,8 @@
 // ── Chart instances ──────────────────────────────────────────────────────────
 let activeChart  = null;
 let systemChart  = null;
+let fuelWeeklyChart = null;
+let maintenanceCostChart = null;
 
 // ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
@@ -91,6 +93,7 @@ async function fetchDashboardData() {
         }
 
         if (maintenanceData?.success) updateMaintenanceSection(maintenanceData.data);
+        updateFuelAndCostCharts(historyData?.success ? historyData.data : [], maintenanceData?.success ? maintenanceData.data : []);
 
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
         if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
@@ -172,16 +175,30 @@ function healthStatus(value, min, max) {
     return { text: v < min ? 'Low' : 'High', cls: 'st-err' };
 }
 
-function calculateHealth(data) {
-    let health = 100;
-    const temp = data.coolant || data.temp || 0;
-    const fuel = data.fuel  || 0;
-    const volt = data.volt  || 0;
-    if (temp > 95)                          health -= 30;
-    else if (temp > 85)                     health -= 15;
-    if (fuel < 20)                          health -= 20;
-    if (volt > 0 && (volt < 190 || volt > 250)) health -= 15;
-    return Math.max(0, Math.min(100, health));
+function calculateHealthByComponentAge(engineData = {}, cbmData = {}) {
+    const hourAge = Number(engineData.engineHours || engineData.runtimeHours || cbmData.engineHours || 0) || 0;
+    const ageMonth = Number(engineData.generatorAgeMonth || cbmData.generatorAgeMonth || 0) || 0;
+    const comp = cbmData.components || {};
+
+    const scoreFromState = (status) => {
+        const s = String(status || '').toLowerCase();
+        if (s === 'critical' || s === 'bad') return 35;
+        if (s === 'warning' || s === 'degraded') return 65;
+        if (s === 'good' || s === 'normal') return 90;
+        return 75;
+    };
+
+    const healthFactors = [
+        scoreFromState(comp.tps?.status),
+        scoreFromState(comp.coolant?.status),
+        scoreFromState(comp.battery?.status),
+        scoreFromState(comp.fuelSystem?.status),
+        scoreFromState(comp.oil?.status),
+        Math.max(40, 100 - (hourAge / 250) * 8),
+        Math.max(45, 100 - ageMonth * 0.8)
+    ];
+
+    return Math.round(healthFactors.reduce((a, b) => a + b, 0) / healthFactors.length);
 }
 
 function renderHealthScore(engineData, cbmData) {
@@ -202,12 +219,8 @@ function renderHealthScore(engineData, cbmData) {
         }
     } else {
         // Fallback
-        health = calculateHealth(engineData);
-        const temp = engineData.coolant || engineData.temp || 0;
-        if (temp > 95) warnings.push({ label: 'Suhu Kritis', cls: 'danger' });
-        else if (temp > 85) warnings.push({ label: 'Suhu Tinggi', cls: 'warn' });
-        if ((engineData.fuel || 0) < 20) warnings.push({ label: 'BBM Hampir Habis', cls: 'warn' });
-        if (engineData.volt > 0 && (engineData.volt < 190 || engineData.volt > 250)) warnings.push({ label: 'Tegangan Tidak Normal', cls: 'danger' });
+        health = calculateHealthByComponentAge(engineData, cbmData);
+        warnings.push({ label: 'Skor berdasar usia/kondisi komponen', cls: 'ok' });
     }
 
     const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
@@ -344,7 +357,7 @@ function updateMaintenanceSection(data) {
     const upcoming = data
         .filter(m => (m.status || '').toLowerCase() === 'scheduled' || (m.status || '').toLowerCase() === 'pending')
         .sort((a, b) => new Date(a.dueDate || a.createdAt) - new Date(b.dueDate || b.createdAt))
-        .slice(0, 6);
+        .slice(0, 20);
 
     if (!upcoming.length) {
         container.innerHTML = `
@@ -355,35 +368,44 @@ function updateMaintenanceSection(data) {
         return;
     }
 
-    const priorityMap = { High: '#ef4444', Medium: '#f97316', Low: '#10b981' };
+    const maintenanceByDay = {};
+    upcoming.forEach((m) => {
+        const dateKey = new Date(m.dueDate || m.createdAt).toISOString().slice(0, 10);
+        if (!maintenanceByDay[dateKey]) maintenanceByDay[dateKey] = [];
+        maintenanceByDay[dateKey].push(m);
+    });
 
-    container.innerHTML = `<div class="maintenance-calendar-grid">${upcoming.map((m) => {
-        const dueDateObj = new Date(m.dueDate || m.createdAt);
-        const day = dueDateObj.toLocaleDateString('id-ID', { day: '2-digit' });
-        const month = dueDateObj.toLocaleDateString('id-ID', { month: 'short' });
-        const dueFull = dueDateObj.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
-        const prioColor = priorityMap[m.priority] || '#64748b';
+    const today = new Date();
+    const days = [];
+    for (let i = 29; i >= 0; i--) {
+        const d = new Date(today);
+        d.setDate(today.getDate() - i);
+        days.push(d);
+    }
 
-        return `
-        <details class="maint-cal-card">
-            <summary>
-                <div class="cal-date">
-                    <span class="cal-month">${month}</span>
-                    <span class="cal-day">${day}</span>
-                </div>
-                <div class="cal-main">
-                    <div class="maint-task">${m.task || 'Tugas Maintenance'}</div>
-                    <div class="maint-due">Jadwal: ${dueFull}</div>
-                </div>
-                ${m.priority ? `<span class="maint-badge" style="background:${prioColor}20;color:${prioColor}">${m.priority}</span>` : ''}
-            </summary>
-            <div class="maint-detail">
-                <div><strong>Status:</strong> ${(m.status || '-').toUpperCase()}</div>
-                <div><strong>PIC:</strong> ${m.assignedTo || 'Belum ditentukan'}</div>
-                <div><strong>Catatan:</strong> ${m.notes || m.description || 'Tidak ada catatan tambahan'}</div>
-            </div>
-        </details>`;
-    }).join('')}</div>`;
+    container.innerHTML = `
+        <div class="maint-month-grid">
+            ${days.map((d) => {
+                const key = d.toISOString().slice(0, 10);
+                const hasEvent = !!maintenanceByDay[key];
+                return `
+                    <details class="maint-day-cell ${hasEvent ? 'has-event' : ''}">
+                        <summary>
+                            <span class="day-label">${d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}</span>
+                            ${hasEvent ? '<span class="day-mark"></span>' : ''}
+                        </summary>
+                        ${hasEvent ? `<div class="maint-day-detail">${maintenanceByDay[key].map((m) => `
+                            <div class="maint-day-item">
+                                <strong>${m.task || 'Tugas Maintenance'}</strong>
+                                <div>Status: ${(m.status || '-').toUpperCase()}</div>
+                                <div>PIC: ${m.assignedTo || 'Belum ditentukan'}</div>
+                            </div>
+                        `).join('')}</div>` : ''}
+                    </details>
+                `;
+            }).join('')}
+        </div>
+    `;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -539,13 +561,19 @@ function updatePerformanceSection(data) {
 
     const powerVal = pickValue(p.power?.kw, p.power?.value, p.kw?.value, p.power, p.kw, data.power, data.kw);
 
+    const toPct = (val, min, max) => {
+        if (val == null) return 0;
+        const pct = ((val - min) / (max - min)) * 100;
+        return Math.max(0, Math.min(100, pct));
+    };
+
     const cards = [
         { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
-        { name: 'Arus Listrik', icon: 'fa-wave-square', value: metricText(currentVal, 'A'), status: statusOf(currentVal, 0, 100) },
-        { name: 'Frekuensi', icon: 'fa-sliders-h', value: metricText(freqVal, 'Hz'), status: statusOf(freqVal, 48, 52) },
+        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 250) },
+        { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
         { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) },
-        { name: 'Suhu Mesin', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
-        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 250) }
+        { name: 'Aki', icon: 'fa-car-battery', value: metricText(voltVal != null ? voltVal / 20 : null, 'V'), status: statusOf(voltVal != null ? voltVal / 20 : null, 11.8, 14.4) },
+        { name: 'Frekuensi', icon: 'fa-sliders-h', value: metricText(freqVal, 'Hz'), status: statusOf(freqVal, 48, 52) }
     ];
 
     const wrap = document.getElementById('perfSimpleCards');
@@ -557,10 +585,56 @@ function updatePerformanceSection(data) {
                     <span>${c.name}</span>
                 </div>
                 <div class="perf-item-value">${c.value}</div>
+                <div class="perf-bar"><span style="width:${toPct(
+                    c.name === 'Tegangan' ? voltVal :
+                    c.name === 'Daya' ? powerVal :
+                    c.name === 'Temperatur' ? tempVal :
+                    c.name === 'Bahan Bakar' ? fuelVal :
+                    c.name === 'Aki' ? (voltVal != null ? voltVal / 20 : null) :
+                    freqVal,
+                    c.name === 'Tegangan' ? 180 : c.name === 'Daya' ? 0 : c.name === 'Temperatur' ? 0 : c.name === 'Bahan Bakar' ? 0 : c.name === 'Aki' ? 10 : 45,
+                    c.name === 'Tegangan' ? 250 : c.name === 'Daya' ? 250 : c.name === 'Temperatur' ? 120 : c.name === 'Bahan Bakar' ? 100 : c.name === 'Aki' ? 15 : 55
+                )}%"></span></div>
                 <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
             </div>
         `).join('');
     }
+}
+
+function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
+    const fuelCtx = document.getElementById('chartFuelWeekly')?.getContext('2d');
+    const costCtx = document.getElementById('chartMaintCostMonthly')?.getContext('2d');
+    if (!fuelCtx || !costCtx) return;
+
+    const weeklyLabels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const weeklyFuel = [0, 0, 0, 0, 0, 0, 0];
+    (historyRows || []).forEach((r) => {
+        const day = new Date(r.startedAt || r.createdAt).getDay();
+        const used = Number(r.fuelUsed || r.fuelConsumption || 0) || 0;
+        weeklyFuel[day] += used;
+    });
+
+    if (fuelWeeklyChart) fuelWeeklyChart.destroy();
+    fuelWeeklyChart = new Chart(fuelCtx, {
+        type: 'line',
+        data: { labels: weeklyLabels, datasets: [{ label: 'BBM (L)', data: weeklyFuel, borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.2)', tension: 0.35, fill: true }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+    });
+
+    const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+    const monthlyCost = new Array(12).fill(0);
+    (maintenanceRows || []).forEach((m) => {
+        const dt = new Date(m.completedAt || m.updatedAt || m.createdAt);
+        const idx = dt.getMonth();
+        monthlyCost[idx] += Number(m.cost || m.estimatedCost || 0) || 0;
+    });
+
+    if (maintenanceCostChart) maintenanceCostChart.destroy();
+    maintenanceCostChart = new Chart(costCtx, {
+        type: 'bar',
+        data: { labels: monthNames, datasets: [{ label: 'Biaya (Rp)', data: monthlyCost, backgroundColor: 'rgba(23,69,165,0.82)', borderRadius: 8 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+    });
 }
 
 function renderSystemRadar({ volt, freq, fuel, temp, power }) {
