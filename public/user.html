@@ -73,7 +73,7 @@
       
       <div class="topbar">
         <div class="topbar-title">User Profile</div>
-        <div class="user-info" style="cursor: default;">
+        <div class="user-info" id="user-btn" style="cursor: pointer;">
            <i class="fas fa-user"></i> <span>Pengguna</span>
         </div>
       </div>
@@ -83,28 +83,28 @@
             
             <div class="profile-header">
                 <div class="profile-img-container">
-                    <img src="https://ui-avatars.com/api/?name=Operator+Admin&background=1745a5&color=fff&size=128" alt="Profile" class="profile-img">
+                    <img id="prof-avatar" src="https://ui-avatars.com/api/?name=Pengguna&background=1745a5&color=fff&size=128" alt="Profile" class="profile-img">
                 </div>
-                <h2 style="margin: 0; color: #1e293b;">Operator Name</h2>
-                <div class="role-badge">Operator</div>
+                <h2 id="prof-name" style="margin: 0; color: #1e293b;">Pengguna</h2>
+                <div id="prof-role" class="role-badge">-</div>
             </div>
 
             <div class="info-list">
                 <div class="info-item">
                     <span class="info-label"><i class="fas fa-envelope margin-right-5"></i> Email</span>
-                    <span class="info-val">admin@monitoring.com</span>
+                    <span id="prof-email" class="info-val">-</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label"><i class="fas fa-id-badge"></i> Employee ID</span>
-                    <span class="info-val">EMP-2025-001</span>
+                    <span id="prof-device" class="info-val">-</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label"><i class="fas fa-clock"></i> Current Shift</span>
-                    <span class="info-val">Morning (07:00 - 15:00)</span>
+                    <span id="prof-shift" class="info-val">-</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label"><i class="fas fa-map-marker-alt"></i> Location</span>
-                    <span class="info-val">Control Room A</span>
+                    <span id="prof-location" class="info-val">-</span>
                 </div>
             </div>
 
@@ -122,9 +122,42 @@
 
   <script src="js/sidebar.js"></script>
   <script>
-      // Opsional: Untuk memastikan sidebar tahu kita ada di halaman user (jika ikon user di sidebar mau di-highlight)
-      document.addEventListener("DOMContentLoaded", () => {
-          // Tidak ada navigasi sidebar khusus untuk 'User', jadi biarkan default atau highlight dashboard
+      document.addEventListener("DOMContentLoaded", async () => {
+          const currentUsername = localStorage.getItem('username') || 'Pengguna';
+          const topbarName = document.querySelector('#user-btn span');
+          if (topbarName) topbarName.innerText = currentUsername;
+
+          const byId = (id) => document.getElementById(id);
+
+          try {
+              const res = await fetch(`/api/users/profile?username=${encodeURIComponent(currentUsername)}`);
+              const json = await res.json();
+              if (!json.success || !json.data) throw new Error(json.message || 'Data profil tidak ditemukan');
+
+              const u = json.data;
+              byId('prof-name').innerText = u.name || '-';
+              byId('prof-role').innerText = u.role || '-';
+              byId('prof-email').innerText = u.email || '-';
+              byId('prof-device').innerText = u.deviceId || '-';
+              byId('prof-shift').innerText = u.role ? `Role: ${u.role}` : '-';
+              byId('prof-location').innerText = u.deviceId ? `Device ${u.deviceId}` : '-';
+              byId('prof-avatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'Pengguna')}&background=1745a5&color=fff&size=128`;
+              if (topbarName && u.name) topbarName.innerText = u.name;
+
+              localStorage.setItem('username', u.name || currentUsername);
+              const existingUser = localStorage.getItem('user');
+              if (existingUser) {
+                  try {
+                      const parsed = JSON.parse(existingUser);
+                      parsed.name = u.name || parsed.name;
+                      parsed.email = u.email || parsed.email;
+                      parsed.role = u.role || parsed.role;
+                      localStorage.setItem('user', JSON.stringify(parsed));
+                  } catch (_) {}
+              }
+          } catch (err) {
+              console.error('Gagal memuat profil user:', err);
+          }
       });
   </script>
 </body>
