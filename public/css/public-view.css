@@ -545,6 +545,7 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
+.perf-vertical { grid-template-columns: 1fr; }
 
 .perf-item-card {
     border: 1px solid var(--border);
@@ -572,6 +573,8 @@ body {
 .perf-item-status {
     margin-top: 8px;
 }
+.perf-bar { margin-top: 8px; height: 7px; border-radius: 6px; background: #e2e8f0; overflow: hidden; }
+.perf-bar span { display: block; height: 100%; background: linear-gradient(90deg, #1745a5, #3b82f6); }
 
 
 .maintenance-calendar-grid { display:flex; flex-direction:column; gap:10px; }
@@ -584,3 +587,35 @@ body {
 .cal-main { flex:1; min-width:0; }
 .maint-due { font-size:11px; color:#64748b; margin-top:2px; }
 .maint-detail { border-top:1px dashed #e2e8f0; padding:10px 12px; font-size:12px; color:#334155; display:grid; gap:6px; }
+
+.maint-month-grid { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:8px; }
+.maint-day-cell { border:1px solid #dbe3ef; border-radius:10px; background:#fff; }
+.maint-day-cell summary { list-style:none; cursor:pointer; padding:8px; display:flex; justify-content:space-between; align-items:center; }
+.maint-day-cell summary::-webkit-details-marker { display:none; }
+.maint-day-cell.has-event { border-color:#93c5fd; background:#eff6ff; }
+.day-label { font-size:11px; font-weight:700; color:#334155; }
+.day-mark { width:8px; height:8px; border-radius:999px; background:#ef4444; }
+.maint-day-detail { border-top:1px dashed #bfdbfe; padding:8px; display:grid; gap:6px; font-size:11px; color:#334155; }
+.maint-day-item { padding:6px; background:#fff; border:1px solid #dbeafe; border-radius:8px; }
+
+
+.maintenance-calendar-wrap{display:flex;flex-direction:column;gap:10px;}
+.calendar-header{font-weight:800;color:#1745a5;font-size:0.95rem;}
+.calendar-header{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.cal-nav{border:1px solid #bfdbfe;background:#eff6ff;color:#1745a5;border-radius:8px;width:28px;height:28px;cursor:pointer;}
+.calendar-weekdays,.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;}
+.calendar-weekdays span{font-size:11px;color:#64748b;text-align:center;font-weight:700;}
+.calendar-day{border:1px solid #dbe3ef;background:#fff;border-radius:10px;min-height:42px;position:relative;font-weight:700;color:#1e293b;cursor:pointer;}
+.calendar-day.muted{background:#f8fafc;border-style:dashed;cursor:default;}
+.calendar-day.red-day{color:#dc2626;}
+.calendar-day.has-event{background:#eff6ff;border-color:#93c5fd;}
+.calendar-day .dot{position:absolute;right:6px;top:6px;width:7px;height:7px;background:#ef4444;border-radius:999px;}
+.maintenance-detail-panel{margin-top:8px;border:1px solid #dbeafe;background:#f8fbff;border-radius:12px;padding:10px;font-size:12px;color:#334155;}
+.maint-detail-item{padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;margin-top:8px;display:grid;gap:3px;}
+.cost-detail-box{margin-top:10px;border:1px dashed #bfdbfe;background:#f8fbff;border-radius:10px;padding:10px;font-size:12px;color:#334155;}
+.cost-detail-box ul{padding-left:16px;margin-top:6px;}
+.cost-detail-title{font-weight:800;color:#1745a5;margin-bottom:8px;}
+.cost-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #e2e8f0;}
+.cost-row:last-child{border-bottom:none;}
+.cost-empty{color:#64748b;}
+.maint-visual-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
