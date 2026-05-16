@@ -86,7 +86,7 @@
                     <img id="prof-avatar" src="https://ui-avatars.com/api/?name=Pengguna&background=1745a5&color=fff&size=128" alt="Profile" class="profile-img">
                 </div>
                 <h2 id="prof-name" style="margin: 0; color: #1e293b;">Pengguna</h2>
-                <div id="prof-role" class="role-badge">-</div>
+                <div id="prof-role" class="role-badge">Employee Profile</div>
             </div>
 
             <div class="info-list">
@@ -96,10 +96,10 @@
                 </div>
                 <div class="info-item">
                     <span class="info-label"><i class="fas fa-id-badge"></i> Employee ID</span>
-                    <span id="prof-device" class="info-val">-</span>
+                    <span id="prof-employee-id" class="info-val">-</span>
                 </div>
                 <div class="info-item">
-                    <span class="info-label"><i class="fas fa-clock"></i> Current Shift</span>
+                    <span class="info-label"><i class="fas fa-clock"></i> Shift</span>
                     <span id="prof-shift" class="info-val">-</span>
                 </div>
                 <div class="info-item">
@@ -136,11 +136,10 @@
 
               const u = json.data;
               byId('prof-name').innerText = u.name || '-';
-              byId('prof-role').innerText = u.role || '-';
               byId('prof-email').innerText = u.email || '-';
-              byId('prof-device').innerText = u.deviceId || '-';
-              byId('prof-shift').innerText = u.role ? `Role: ${u.role}` : '-';
-              byId('prof-location').innerText = u.deviceId ? `Device ${u.deviceId}` : '-';
+              byId('prof-employee-id').innerText = u.employeeID || u.employeeId || u.idEmployee || u.deviceId || '-';
+              byId('prof-location').innerText = u.location || '-';
+              byId('prof-shift').innerText = u.shift || '-';
               byId('prof-avatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'Pengguna')}&background=1745a5&color=fff&size=128`;
               if (topbarName && u.name) topbarName.innerText = u.name;
 
@@ -151,7 +150,9 @@
                       const parsed = JSON.parse(existingUser);
                       parsed.name = u.name || parsed.name;
                       parsed.email = u.email || parsed.email;
-                      parsed.role = u.role || parsed.role;
+                      parsed.employeeID = u.employeeID || u.employeeId || u.idEmployee || parsed.employeeID;
+                      parsed.location = u.location || parsed.location;
+                      parsed.shift = u.shift || parsed.shift;
                       localStorage.setItem('user', JSON.stringify(parsed));
                   } catch (_) {}
               }
