@@ -28,7 +28,7 @@ function updateClock() {
 
 // ── Username from localStorage ───────────────────────────────────────────────
 function updateUserInfo() {
-    const username = localStorage.getItem('username') || 'Pengguna';
+    const username = 'GENSYS';
     const topbarSpan = document.querySelector('#user-btn span');
     const heroSpan   = document.getElementById('welcome-user');
     if (topbarSpan) topbarSpan.innerText = username;
@@ -236,8 +236,10 @@ function renderHealthScore(engineData, cbmData) {
         const components = cbmData.components || cbmData.componentHealth || {};
         if (components) {
             Object.values(components).forEach(comp => {
-                if (comp.status === 'critical') warnings.push({ label: `Kritis: ${comp.name || 'Sistem'}`, cls: 'danger' });
-                else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${comp.name || 'Sistem'}`, cls: 'warn' });
+                const name = comp.name || comp.parameter || 'Sistem';
+                const value = (typeof comp.value !== 'undefined' && comp.value !== null) ? ` (${comp.value}${comp.unit || ''})` : '';
+                if (comp.status === 'critical') warnings.push({ label: `Kritis: ${name}${value}`, cls: 'danger' });
+                else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${name}${value}`, cls: 'warn' });
             });
         }
     } else {
@@ -762,23 +764,24 @@ function updateSpecificationsSection(specs) {
     const genEl = document.getElementById('generatorSpecContainer');
     if (genEl && specs) {
         genEl.innerHTML = buildSpecList([
-            ['Pengatur Tegangan Otomatis', specs.avrType || 'AVR digital'],
-            ['Pelindung Arus Listrik', specs.mcbType || 'MCB 3P 63A'],
-            ['Penyearah Arus', specs.rectifierType || 'Bridge rectifier'],
-            ['Bantalan Poros', specs.bearingType || 'Bearing standar industri'],
-            ['Sistem Starter', specs.sistemStart || 'Starter elektrik'],
-            ['Pompa Bahan Bakar', specs.fuelPumpType || 'Pompa elektrik 12V']
+            ['Tipe Generator', specs.generatorType || 'Silent Diesel Genset'],
+            ['Kapasitas Daya', specs.powerCapacity || specs.ratedPower || '100 kVA / 80 kW'],
+            ['Frekuensi & Tegangan', specs.frequencyVoltage || '50 Hz • 400/230V'],
+            ['Pengatur Tegangan (AVR)', specs.avrType || 'AVR digital'],
+            ['Pelindung Arus (MCB)', specs.mcbType || 'MCB 3P 63A'],
+            ['Sistem Starter', specs.sistemStart || 'Starter elektrik']
         ]);
     }
 
     const engEl = document.getElementById('engineSpecContainer');
     if (engEl && specs) {
         engEl.innerHTML = buildSpecList([
+            ['Tipe Mesin', specs.engineType || 'Diesel 4-stroke, turbocharged'],
+            ['Jumlah Silinder', specs.cylinderCount || '4 Silinder'],
             ['Sistem Injeksi Bahan Bakar', specs.injectorType || 'Common rail'],
-            ['Saringan Oli Mesin', specs.oilFilterType || 'Filter tipe spin-on'],
-            ['Saringan Udara', specs.airFilterType || 'Filter kering'],
             ['Sistem Pendingin', specs.coolantType || 'Coolant long life'],
-            ['Sensor Posisi Gas', specs.tpsType || 'Sensor TPS 0-5V']
+            ['Saringan Oli Mesin', specs.oilFilterType || 'Filter tipe spin-on'],
+            ['Saringan Udara', specs.airFilterType || 'Filter kering']
         ]);
     }
 }
