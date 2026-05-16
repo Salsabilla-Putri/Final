@@ -405,20 +405,20 @@ function updateActiveTimeChart(historyRows) {
         dayMap[key] = 0;
     }
 
-    // Akumulasi durasi mesin aktif berdasarkan data aktual dari DB
+    // Akumulasi durasi mesin aktif berdasarkan data aktual dari DB.
+    // Tiap sesi dipecah per-hari (WIB), agar sesi lintas tengah malam tidak salah hitung.
     if (historyRows && Array.isArray(historyRows)) {
         historyRows.forEach(r => {
             const start = new Date(r.startedAt);
             const end   = r.endedAt ? new Date(r.endedAt) : now;
-            
-            // Konversi waktu mulai ke WIB untuk kunci (key) hari
-            const key = new Date(start.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
 
-            if (dayMap.hasOwnProperty(key)) {
-                // Hitung durasi jam
-                const durHours = Math.max(0, end - start) / 3600000;
-                dayMap[key] += durHours;
-            }
+            if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
+
+            splitSessionByDayWIB(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
+                if (dayMap.hasOwnProperty(dateKey)) {
+                    dayMap[dateKey] += hours;
+                }
+            });
         });
     }
 
@@ -433,7 +433,7 @@ function updateActiveTimeChart(historyRows) {
         const d = new Date(key + 'T12:00:00+07:00'); 
         labels.push(days[d.getDay()]);
         
-        const val = parseFloat(dayMap[key].toFixed(2));
+        const val = parseFloat(Math.min(24, dayMap[key]).toFixed(2));
         dataPoints.push(val);
         
         if (key === todayKey) todayHours = val;
@@ -479,6 +479,28 @@ function updateActiveTimeChart(historyRows) {
         const m = Math.round((todayHours - h) * 60);
         tEl.innerText = m > 0 ? `${h}j ${m}m` : `${h}j 0m`;
     }
+}
+
+
+function splitSessionByDayWIB(start, end, wibOffset) {
+    const result = [];
+    let cursor = new Date(start);
+
+    while (cursor < end) {
+        const cursorWib = new Date(cursor.getTime() + wibOffset);
+        const nextMidnightWib = new Date(
+            Date.UTC(cursorWib.getUTCFullYear(), cursorWib.getUTCMonth(), cursorWib.getUTCDate() + 1)
+        );
+        const nextMidnightUtc = new Date(nextMidnightWib.getTime() - wibOffset);
+        const sliceEnd = nextMidnightUtc < end ? nextMidnightUtc : end;
+
+        const durHours = Math.max(0, sliceEnd - cursor) / 3600000;
+        const dateKey = new Date(cursor.getTime() + wibOffset).toISOString().slice(0, 10);
+        result.push({ dateKey, hours: durHours });
+        cursor = sliceEnd;
+    }
+
+    return result;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
