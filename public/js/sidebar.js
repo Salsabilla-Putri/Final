@@ -256,7 +256,7 @@ document.addEventListener('DOMContentLoaded', function () {
       // Event untuk tombol user di topbar (jika ada)
       // Event untuk tombol user di topbar (jika ada)
       document.addEventListener('click', function (e) {
-        const userBtn = e.target.closest('#user-btn');
+        const userBtn = e.target.closest('#user-btn, .topbar .user-info');
         if (userBtn && !window.location.pathname.includes('login.html')) {
           
           // Cek role user saat ini
