@@ -137,9 +137,9 @@
               const u = json.data;
               byId('prof-name').innerText = u.name || '-';
               byId('prof-email').innerText = u.email || '-';
-              byId('prof-employee-id').innerText = u.employeeID || u.employeeId || u.idEmployee || u.deviceId || '-';
-              byId('prof-location').innerText = u.location || '-';
-              byId('prof-shift').innerText = u.shift || '-';
+              byId('prof-employee-id').innerText = u.employeeID || u.employeeID || u.idEmployee || 'EMP-2025-001';
+              byId('prof-location').innerText = u.location || 'WS Bandung';
+              byId('prof-shift').innerText = u.shift || '07.00-16.00';
               byId('prof-avatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'Pengguna')}&background=1745a5&color=fff&size=128`;
               if (topbarName && u.name) topbarName.innerText = u.name;
 
