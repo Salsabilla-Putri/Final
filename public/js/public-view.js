@@ -252,10 +252,11 @@ function renderHealthScore(engineData, cbmData) {
     const componentEl = document.getElementById('st-component');
     const lastMaintEl = document.getElementById('st-last-maint');
     const runtimeHours = Math.round(engineData.engineHours || engineData.runtimeHours || cbmData?.engineHours || 0);
-    const availabilityPct = Math.max(0, Math.min(100, 100 - Math.min(20, runtimeHours / 400)));
-    if (ageEl) ageEl.textContent = `${availabilityPct.toFixed(1)}% (target > 95%)`;
+    const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
+    const sync = String(engineData.sync || '').toUpperCase();
+    if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
     if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toLocaleString('id-ID')} jam`;
-    if (componentEl) componentEl.textContent = warnings.length ? warnings.map(w => w.label.replace(/^Kritis: |^Perhatian: /, '')).join(', ') : 'Sensor & pembakaran stabil';
+    if (componentEl) componentEl.textContent = warnings.length ? `${warnings.length} indikator perlu perhatian` : 'Tidak ada alarm kritis';
     const lastCompleted = (dashboardMaintenanceCache || [])
         .filter((m) => String(m.status || '').toLowerCase() === 'completed')
         .sort((a, b) => new Date(b.completedAt || b.updatedAt || b.createdAt) - new Date(a.completedAt || a.updatedAt || a.createdAt))[0];
@@ -343,7 +344,7 @@ function renderRecentActivity(activities, maintenanceList) {
         return;
     }
 
-    container.innerHTML = combined.slice(0, 6).map(item => {
+    container.innerHTML = combined.slice(0, 5).map(item => {
         const dateStr = item.date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
         const timeStr = item.date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
         const isMaint = item.type === 'maintenance';
@@ -402,14 +403,6 @@ function updateMaintenanceSection(data) {
         cells.push(`<button class="calendar-day ${weekend ? 'red-day' : ''} ${byDate[key] ? 'has-event' : ''}" data-date="${key}">${day}${byDate[key] ? '<span class="dot"></span>' : ''}</button>`);
     }
 
-    const upcoming7 = upcoming.filter((m) => {
-        const due = new Date(m.dueDate || m.createdAt);
-        const start = new Date();
-        const end = new Date();
-        end.setDate(end.getDate() + 7);
-        return due >= start && due <= end;
-    });
-
     container.innerHTML = `<div class="maintenance-calendar-wrap">
         <div class="calendar-header">
             <button class="cal-nav" data-nav="-1"><i class="fas fa-chevron-left"></i></button>
@@ -418,11 +411,7 @@ function updateMaintenanceSection(data) {
         </div>
         <div class="calendar-weekdays"><span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span></div>
         <div class="calendar-grid">${cells.join('')}</div>
-        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">${
-            upcoming7.length
-            ? `<h4>Upcoming 7 Hari</h4>${upcoming7.map(renderMaintenanceDetailCard).join('')}`
-            : 'Tidak ada maintenance 7 hari ke depan.'
-        }</div>
+        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">Klik tanggal bertanda titik merah untuk melihat detail maintenance.</div>
     </div>`;
 
     container.querySelectorAll('.cal-nav').forEach((btn) => {
@@ -442,9 +431,7 @@ function updateMaintenanceSection(data) {
             const panel = document.getElementById('maintenanceDetailPanel');
             if (selectedMaintenanceDateKey === key) {
                 selectedMaintenanceDateKey = null;
-                panel.innerHTML = upcoming7.length
-                    ? `<h4>Upcoming 7 Hari</h4>${upcoming7.map(renderMaintenanceDetailCard).join('')}`
-                    : 'Tidak ada maintenance 7 hari ke depan.';
+                panel.innerHTML = 'Detail disembunyikan. Klik tanggal untuk melihat lagi.';
                 return;
             }
             selectedMaintenanceDateKey = key;
@@ -689,6 +676,8 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
         monthlyDetails[idx].push(m);
     });
 
+    const detailBox = document.getElementById('maintenanceCostDetail');
+    if (detailBox) detailBox.classList.remove('expanded');
     maintenanceCostChart = new Chart(costCtx, {
         type: 'bar',
         data: { labels: monthNames, datasets: [{ label: 'Biaya (Rp)', data: monthlyCost, backgroundColor: 'rgba(23,69,165,0.82)', borderRadius: 8 }] },
@@ -698,10 +687,12 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
             const idx = elements[0].index;
             if (selectedCostMonthIndex === idx) {
                 selectedCostMonthIndex = null;
+                target.classList.remove('expanded');
                 target.innerHTML = 'Klik batang bulan untuk lihat detail biaya.';
                 return;
             }
             selectedCostMonthIndex = idx;
+            target.classList.add('expanded');
             const details = monthlyDetails[idx];
             if (!details.length) { target.innerHTML = `<div class="cost-detail-title">${monthNames[idx]}</div><div class="cost-empty">Tidak ada biaya maintenance.</div>`; return; }
             const total = details.reduce((s, d) => s + (Number(d.cost || d.estimatedCost || 0) || 0), 0);
