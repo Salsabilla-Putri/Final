@@ -75,7 +75,7 @@
                         </div>
                         <div class="overview-content">
                             <div class="overview-value" id="val-avg-runtime">--</div>
-                            <div class="overview-label">Rata-rata Waktu Hidup (7 Hari)</div>
+                            <div class="overview-label">Daily Average Runtime</div>
                         </div>
                     </div>
                     <div class="overview-card">
@@ -102,7 +102,7 @@
                         </div>
                         <div class="overview-content">
                             <div class="overview-value" id="val-power">--</div>
-                            <div class="overview-label">Daya Saat Ini</div>
+                            <div class="overview-label">Power Output</div>
                         </div>
                     </div>
                 </div>
@@ -129,7 +129,7 @@
                             <span id="engStat" class="st-err">--</span>
                         </div>
                         <div class="list-row">
-                            <span>Aktif Hari Ini:</span>
+                            <span>Active Today:</span>
                             <span id="engToday" class="st-ok">0j 0m</span>
                         </div>
                         <div class="list-row">
@@ -137,7 +137,7 @@
                             <span id="fuelLevel" class="st-ok">--%</span>
                         </div>
                         <div class="list-row">
-                            <span>Estimasi Waktu Hidup:</span>
+                            <span>Estimated Runtime:</span>
                             <span id="fuelRuntimeEstimate" class="st-ok">--</span>
                         </div>
                     </div>
@@ -148,7 +148,7 @@
                         <div id="recentActivityContainer">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Memuat data…</p>
+                                <p>Loading activity…</p>
                             </div>
                         </div>
                     </div>
@@ -159,7 +159,7 @@
                         <div id="alertContainer">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Memuat alert…</p>
+                                <p>Loading alerts…</p>
                             </div>
                         </div>
                     </div>
@@ -190,29 +190,28 @@
                         <div id="systemHealthContainer" style="text-align:center; padding:10px 0;">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Menghitung skor…</p>
+                                <p>Loading health data…</p>
                             </div>
                         </div>
-                        <div class="list-row"><span>Status Operasi:</span><span id="st-age">--</span></div>
-                        <div class="list-row"><span>Jam Operasi:</span><span id="st-runtime">--</span></div>
-                        <div class="list-row"><span>Indikasi Alarm:</span><span id="st-component">--</span></div>
+                        <div class="list-row"><span>Operation State:</span><span id="st-age">--</span></div>
+                        <div class="list-row"><span>Operation Time:</span><span id="st-runtime">--</span></div>
                         <div class="list-row"><span>Maintenance Terakhir:</span><span id="st-last-maint">--</span></div>
                     </div>
 
                 </div>
                 <div class="grid-2" style="margin-top:16px;">
                     <div class="card">
-                        <h3><i class="fas fa-gas-pump"></i> Konsumsi BBM Mingguan</h3>
+                        <h3><i class="fas fa-gas-pump"></i>Fuel Consumption</h3>
                         <div class="chart-box">
                             <canvas id="chartFuelWeekly"></canvas>
                         </div>
                     </div>
                     <div class="card">
-                        <h3><i class="fas fa-wallet"></i> Biaya Maintenance Bulanan</h3>
+                        <h3><i class="fas fa-wallet"></i>Maintenance Cost</h3>
                         <div class="chart-box">
                             <canvas id="chartMaintCostMonthly"></canvas>
                         </div>
-                        <div id="maintenanceCostDetail" class="cost-detail-box">Klik batang bulan untuk lihat detail biaya.</div>
+                        <div id="maintenanceCostDetail" class="cost-detail-box">Click to view details</div>
                     </div>
                 </div>
             </section>
@@ -228,11 +227,11 @@
 
                     <!-- Radar Chart + Status -->
                     <div class="card">
-                        <h3><i class="fas fa-chart-bar"></i> Performance (Mudah Dipahami)</h3>
+                        <h3><i class="fas fa-chart-bar"></i> Performance</h3>
                         <div id="perfSimpleCards" class="perf-simple-cards perf-vertical">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Memuat performa…</p>
+                                <p>Loading performance data…</p>
                             </div>
                         </div>
                     </div>
@@ -243,7 +242,7 @@
                         <div id="maintenanceContainer">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Memuat jadwal…</p>
+                                <p>Loading maintenance…</p>
                             </div>
                         </div>
                     </div>
@@ -266,7 +265,7 @@
                         <div id="engineSpecContainer">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Memuat spesifikasi…</p>
+                                <p>Loading engine specifications…</p>
                             </div>
                         </div>
                     </div>
@@ -277,7 +276,7 @@
                         <div id="generatorSpecContainer">
                             <div class="empty-state">
                                 <i class="fas fa-circle-notch fa-spin" style="color:#1745a5;font-size:1.4rem;"></i>
-                                <p>Memuat spesifikasi…</p>
+                                <p>Loading generator specifications…</p>
                             </div>
                         </div>
                     </div>
@@ -300,7 +299,7 @@
                                 Technical Support
                             </p>
                             <p style="font-weight:700; font-size:0.95rem; color:#0f172a; margin-bottom:18px;">
-                                support@gentrack.com
+                                gensys20@gmail.com
                             </p>
 
                             <div style="display:flex; gap:8px; flex-wrap:wrap;">
