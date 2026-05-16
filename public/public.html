@@ -176,6 +176,24 @@
                 </div>
                 <div class="grid-2">
 
+                    <!-- Active Time Chart -->
+                    <div class="card">
+                        <h3><i class="fas fa-chart-line"></i> Active Time History</h3>
+                        <div class="chart-box">
+                            <canvas id="chartActive"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Fuel Consumption -->
+                    <div class="card">
+                        <h3><i class="fas fa-gas-pump"></i>Fuel Consumption</h3>
+                        <div class="chart-box">
+                            <canvas id="chartFuelWeekly"></canvas>
+                        </div>
+                    </div>
+
+                </div>
+                <div class="grid-2" style="margin-top:16px;">
                     <!-- System Health -->
                     <div class="card">
                         <h3><i class="fas fa-heartbeat"></i> System Health</h3>
@@ -188,23 +206,6 @@
                         <div class="list-row"><span>Operation State:</span><span id="st-age">--</span></div>
                         <div class="list-row"><span>Operation Time:</span><span id="st-runtime">--</span></div>
                         <div class="list-row"><span>Maintenance Terakhir:</span><span id="st-last-maint">--</span></div>
-                    </div>
-
-                    <!-- Active Time Chart -->
-                    <div class="card">
-                        <h3><i class="fas fa-chart-line"></i> Active Time History</h3>
-                        <div class="chart-box">
-                            <canvas id="chartActive"></canvas>
-                        </div>
-                    </div>
-
-                </div>
-                <div class="grid-2" style="margin-top:16px;">
-                    <div class="card">
-                        <h3><i class="fas fa-gas-pump"></i>Fuel Consumption</h3>
-                        <div class="chart-box">
-                            <canvas id="chartFuelWeekly"></canvas>
-                        </div>
                     </div>
                     <div class="card">
                         <h3><i class="fas fa-wallet"></i>Maintenance Cost</h3>

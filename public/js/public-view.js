@@ -619,8 +619,7 @@ function updatePerformanceSection(data) {
         { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
         { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5) },
         { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
-        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) },
-        { name: 'Aki', icon: 'fa-car-battery', value: metricText(voltVal != null ? voltVal / 20 : null, 'V'), status: statusOf(voltVal != null ? voltVal / 20 : null, 11.8, 14.4) }
+        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) }
     ];
 
     const wrap = document.getElementById('perfSimpleCards');
