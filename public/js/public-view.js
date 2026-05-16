@@ -5,6 +5,13 @@ let activeChart  = null;
 let systemChart  = null;
 let fuelWeeklyChart = null;
 let maintenanceCostChart = null;
+let dashboardHistoryCache = [];
+let dashboardMaintenanceCache = [];
+let calendarViewMonth = new Date().getMonth();
+let calendarViewYear = new Date().getFullYear();
+let selectedMaintenanceDateKey = null;
+let selectedCostMonthIndex = null;
+let lastFuelCostSignature = '';
 
 // ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
@@ -84,6 +91,7 @@ async function fetchDashboardData() {
         const maintenanceData = maintenanceRes.status === 'fulfilled' ? await maintenanceRes.value.json().catch(() => null) : null;
 
         if (historyData?.success) {
+            dashboardHistoryCache = historyData.data || [];
             // Gabungkan riwayat sesi DB dengan maintenance yang Completed
             renderRecentActivity(historyData.data, maintenanceData?.success ? maintenanceData.data : []);
             // Render chart berdasarkan data history aktual
@@ -91,13 +99,14 @@ async function fetchDashboardData() {
         }
 
         if (maintenanceData?.success) {
+            dashboardMaintenanceCache = maintenanceData.data || [];
             updateMaintenanceSection(maintenanceData.data);
             const schedCount = maintenanceData.data.filter(m => ['scheduled','pending'].includes(String(m.status || '').toLowerCase())).length;
             const ms = document.getElementById('val-maint-scheduled');
             if (ms) ms.innerText = String(schedCount);
         }
-        const historyRows = historyData?.success ? historyData.data : [];
-        updateFuelAndCostCharts(historyRows, maintenanceData?.success ? maintenanceData.data : []);
+        const historyRows = historyData?.success ? historyData.data : dashboardHistoryCache;
+        updateFuelAndCostCharts(historyRows, maintenanceData?.success ? maintenanceData.data : dashboardMaintenanceCache);
 
         if (engineData?.success && engineData.data) {
             updateOverviewCards(engineData.data, historyRows);
@@ -242,9 +251,12 @@ function renderHealthScore(engineData, cbmData) {
     const runtimeEl = document.getElementById('st-runtime');
     const componentEl = document.getElementById('st-component');
     const lastMaintEl = document.getElementById('st-last-maint');
-    if (ageEl) ageEl.textContent = `${engineData.generatorAgeMonth || cbmData?.generatorAgeMonth || 0} bulan`;
-    if (runtimeEl) runtimeEl.textContent = `${Math.round(engineData.engineHours || engineData.runtimeHours || cbmData?.engineHours || 0)} jam`;
-    if (componentEl) componentEl.textContent = warnings.length ? `${warnings.length} item perlu perhatian` : 'Komponen utama normal';
+    const runtimeHours = Math.round(engineData.engineHours || engineData.runtimeHours || cbmData?.engineHours || 0);
+    const designLifeHours = 2 * 365 * 24;
+    const estLifeRemaining = Math.max(0, designLifeHours - runtimeHours);
+    if (ageEl) ageEl.textContent = `Estimasi umur: 2 tahun (${designLifeHours.toLocaleString('id-ID')} jam), sisa ±${estLifeRemaining.toLocaleString('id-ID')} jam`;
+    if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toLocaleString('id-ID')} jam`;
+    if (componentEl) componentEl.textContent = warnings.length ? warnings.map(w => w.label.replace(/^Kritis: |^Perhatian: /, '')).join(', ') : 'Komponen utama normal';
     if (lastMaintEl) lastMaintEl.textContent = engineData.lastMaintenanceAt ? new Date(engineData.lastMaintenanceAt).toLocaleDateString('id-ID') : '-';
 }
 
@@ -365,9 +377,8 @@ function updateMaintenanceSection(data) {
         return;
     }
 
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const monthStart = new Date(calendarViewYear, calendarViewMonth, 1);
+    const monthEnd = new Date(calendarViewYear, calendarViewMonth + 1, 0);
     const firstWeekday = (monthStart.getDay() + 6) % 7;
     const totalDays = monthEnd.getDate();
 
@@ -381,27 +392,65 @@ function updateMaintenanceSection(data) {
     const cells = [];
     for (let i=0;i<firstWeekday;i++) cells.push('<div class="calendar-day muted"></div>');
     for (let day=1;day<=totalDays;day++) {
-        const d = new Date(now.getFullYear(), now.getMonth(), day);
+        const d = new Date(calendarViewYear, calendarViewMonth, day);
         const key = d.toISOString().slice(0,10);
         const weekend = [0,6].includes(d.getDay());
         cells.push(`<button class="calendar-day ${weekend ? 'red-day' : ''} ${byDate[key] ? 'has-event' : ''}" data-date="${key}">${day}${byDate[key] ? '<span class="dot"></span>' : ''}</button>`);
     }
 
+    const upcoming7 = upcoming.filter((m) => {
+        const due = new Date(m.dueDate || m.createdAt);
+        const start = new Date();
+        const end = new Date();
+        end.setDate(end.getDate() + 7);
+        return due >= start && due <= end;
+    });
+
     container.innerHTML = `<div class="maintenance-calendar-wrap">
-        <div class="calendar-header">${now.toLocaleDateString('id-ID', { month:'long', year:'numeric' })}</div>
+        <div class="calendar-header">
+            <button class="cal-nav" data-nav="-1"><i class="fas fa-chevron-left"></i></button>
+            <span>${monthStart.toLocaleDateString('id-ID', { month:'long', year:'numeric' })}</span>
+            <button class="cal-nav" data-nav="1"><i class="fas fa-chevron-right"></i></button>
+        </div>
         <div class="calendar-weekdays"><span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span></div>
         <div class="calendar-grid">${cells.join('')}</div>
-        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">Klik tanggal yang bertanda untuk melihat detail maintenance.</div>
+        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">${
+            upcoming7.length
+            ? `<h4>Upcoming 7 Hari</h4>${upcoming7.map(renderMaintenanceDetailCard).join('')}`
+            : 'Tidak ada maintenance 7 hari ke depan.'
+        }</div>
     </div>`;
+
+    container.querySelectorAll('.cal-nav').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const shift = Number(btn.dataset.nav || 0);
+            const ref = new Date(calendarViewYear, calendarViewMonth + shift, 1);
+            calendarViewYear = ref.getFullYear();
+            calendarViewMonth = ref.getMonth();
+            selectedMaintenanceDateKey = null;
+            updateMaintenanceSection(data);
+        });
+    });
 
     container.querySelectorAll('.calendar-day.has-event').forEach((btn) => {
         btn.addEventListener('click', () => {
             const key = btn.dataset.date;
             const panel = document.getElementById('maintenanceDetailPanel');
+            if (selectedMaintenanceDateKey === key) {
+                selectedMaintenanceDateKey = null;
+                panel.innerHTML = upcoming7.length
+                    ? `<h4>Upcoming 7 Hari</h4>${upcoming7.map(renderMaintenanceDetailCard).join('')}`
+                    : 'Tidak ada maintenance 7 hari ke depan.';
+                return;
+            }
+            selectedMaintenanceDateKey = key;
             const list = byDate[key] || [];
-            panel.innerHTML = `<h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4>${list.map((m) => `<div class="maint-detail-item"><div><strong>Tugas:</strong> ${m.task || '-'}</div><div><strong>Type:</strong> ${m.type || m.category || '-'}</div><div><strong>Status:</strong> ${(m.status || '-').toUpperCase()}</div><div><strong>PIC:</strong> ${m.assignedTo || '-'}</div><div><strong>Cost:</strong> Rp ${(Number(m.cost || m.estimatedCost || 0) || 0).toLocaleString('id-ID')}</div><div><strong>Catatan:</strong> ${m.notes || m.description || '-'}</div></div>`).join('')}`;
+            panel.innerHTML = `<h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4>${list.map(renderMaintenanceDetailCard).join('')}`;
         });
     });
+}
+function renderMaintenanceDetailCard(m) {
+    return `<div class="maint-detail-item"><div class="maint-visual-top"><span class="status-pill ${(m.priority || '').toLowerCase() === 'high' ? 'danger' : 'ok'}">${m.priority || 'Normal'}</span><strong>${m.task || '-'}</strong></div><div><strong>Type:</strong> ${m.type || m.category || '-'}</div><div><strong>Status:</strong> ${(m.status || '-').toUpperCase()}</div><div><strong>PIC:</strong> ${m.assignedTo || '-'}</div><div><strong>Cost:</strong> Rp ${(Number(m.cost || m.estimatedCost || 0) || 0).toLocaleString('id-ID')}</div><div><strong>Catatan:</strong> ${m.notes || m.description || '-'}</div></div>`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -608,9 +657,10 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
         const start = new Date(r.startedAt || r.createdAt);
         const end = r.endedAt ? new Date(r.endedAt) : new Date();
         const runtimeHours = Math.max(0, end - start) / 3600000;
-        const used = runtimeHours * 2.2;
+        const used = runtimeHours * (30 / 24);
         weeklyFuel[day] += used;
     });
+    for (let i = 0; i < weeklyFuel.length; i++) weeklyFuel[i] = Math.min(30, Number(weeklyFuel[i].toFixed(2)));
 
     if (fuelWeeklyChart) fuelWeeklyChart.destroy();
     fuelWeeklyChart = new Chart(fuelCtx, {
@@ -639,13 +689,19 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
         type: 'bar',
         data: { labels: monthNames, datasets: [{ label: 'Biaya (Rp)', data: monthlyCost, backgroundColor: 'rgba(23,69,165,0.82)', borderRadius: 8 }] },
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, onClick: (_, elements) => {
-            if (!elements.length) return;
-            const idx = elements[0].index;
             const target = document.getElementById('maintenanceCostDetail');
-            if (!target) return;
+            if (!target || !elements.length) return;
+            const idx = elements[0].index;
+            if (selectedCostMonthIndex === idx) {
+                selectedCostMonthIndex = null;
+                target.innerHTML = 'Klik batang bulan untuk lihat detail biaya.';
+                return;
+            }
+            selectedCostMonthIndex = idx;
             const details = monthlyDetails[idx];
-            if (!details.length) { target.innerHTML = `<strong>${monthNames[idx]}:</strong> Tidak ada biaya maintenance.`; return; }
-            target.innerHTML = `<strong>${monthNames[idx]}:</strong><ul>${details.map(d => `<li>${d.task || d.type || 'Maintenance'} - Rp ${(Number(d.cost || d.estimatedCost || 0) || 0).toLocaleString('id-ID')}</li>`).join('')}</ul>`;
+            if (!details.length) { target.innerHTML = `<div class="cost-detail-title">${monthNames[idx]}</div><div class="cost-empty">Tidak ada biaya maintenance.</div>`; return; }
+            const total = details.reduce((s, d) => s + (Number(d.cost || d.estimatedCost || 0) || 0), 0);
+            target.innerHTML = `<div class="cost-detail-title">${monthNames[idx]} • Total Rp ${total.toLocaleString('id-ID')}</div>${details.map(d => `<div class="cost-row"><span>${d.task || d.type || 'Maintenance'}</span><strong>Rp ${(Number(d.cost || d.estimatedCost || 0) || 0).toLocaleString('id-ID')}</strong></div>`).join('')}`;
         } }
     });
 }
@@ -772,3 +828,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     await fetchDashboardData();
     setInterval(fetchDashboardData, 1000);  // refresh realtime every 1s
 });
+    const signature = `${historyRows.length}|${maintenanceRows.length}|${JSON.stringify(historyRows[0] || {})}|${JSON.stringify(maintenanceRows[0] || {})}`;
+    if (signature === lastFuelCostSignature) return;
+    lastFuelCostSignature = signature;
