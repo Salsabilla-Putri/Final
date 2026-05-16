@@ -615,7 +615,7 @@ function updatePerformanceSection(data) {
 
     const cards = [
         { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
-        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 250) },
+        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5) },
         { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
         { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) },
         { name: 'Aki', icon: 'fa-car-battery', value: metricText(voltVal != null ? voltVal / 20 : null, 'V'), status: statusOf(voltVal != null ? voltVal / 20 : null, 11.8, 14.4) }
@@ -635,7 +635,6 @@ function updatePerformanceSection(data) {
                     c.name === 'Daya' ? powerVal :
                     c.name === 'Temperatur' ? tempVal :
                     c.name === 'Bahan Bakar' ? fuelVal :
-                    c.name === 'Aki' ? (voltVal != null ? voltVal / 20 : null) : null,
                     c.name === 'Tegangan' ? 180 : c.name === 'Daya' ? 0 : c.name === 'Temperatur' ? 0 : c.name === 'Bahan Bakar' ? 0 : 10,
                     c.name === 'Tegangan' ? 250 : c.name === 'Daya' ? 250 : c.name === 'Temperatur' ? 120 : c.name === 'Bahan Bakar' ? 100 : 15
                 )}%"></span></div>
@@ -778,7 +777,6 @@ function updateSpecificationsSection(specs) {
             ['Sistem Injeksi Bahan Bakar', specs.injectorType || 'Common rail'],
             ['Saringan Oli Mesin', specs.oilFilterType || 'Filter tipe spin-on'],
             ['Saringan Udara', specs.airFilterType || 'Filter kering'],
-            ['Aki Starter', specs.batteryType || '12V 70Ah'],
             ['Sistem Pendingin', specs.coolantType || 'Coolant long life'],
             ['Sensor Posisi Gas', specs.tpsType || 'Sensor TPS 0-5V']
         ]);
