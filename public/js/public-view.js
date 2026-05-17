@@ -197,6 +197,13 @@ function healthStatus(value, min, max) {
     return { text: v < min ? 'Low' : 'High', cls: 'st-err' };
 }
 
+function formatDateKeyForDisplay(dateKey) {
+    if (!dateKey) return '-';
+    const safeDate = new Date(`${dateKey}T00:00:00+07:00`);
+    if (!Number.isFinite(safeDate.getTime())) return dateKey;
+    return safeDate.toLocaleDateString('id-ID');
+}
+
 function calculateHealthByComponentAge(engineData = {}, cbmData = {}) {
     const hourAge = Number(engineData.engineHours || engineData.runtimeHours || cbmData.engineHours || 0) || 0;
     const ageMonth = Number(engineData.generatorAgeMonth || cbmData.generatorAgeMonth || 0) || 0;
@@ -227,26 +234,27 @@ function renderHealthScore(engineData, cbmData) {
     const container = document.getElementById('systemHealthContainer');
     if (!container) return;
 
-    let health = 100;
-    const warnings = [];
-
-    // Prioritaskan skor dari sistem analitik CBM
-    if (cbmData && (typeof cbmData.healthScore !== 'undefined' || typeof cbmData.overallHealth !== 'undefined')) {
-        health = Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 100));
-        const components = cbmData.components || cbmData.componentHealth || {};
-        if (components) {
-            Object.values(components).forEach(comp => {
-                const name = comp.name || comp.parameter || 'Sistem';
-                const value = (typeof comp.value !== 'undefined' && comp.value !== null) ? ` (${comp.value}${comp.unit || ''})` : '';
-                if (comp.status === 'critical') warnings.push({ label: `Kritis: ${name}${value}`, cls: 'danger' });
-                else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${name}${value}`, cls: 'warn' });
-            });
-        }
-    } else {
-        // Fallback
-        health = calculateHealthByComponentAge(engineData, cbmData);
-        warnings.push({ label: 'Skor berdasar usia/kondisi komponen', cls: 'ok' });
+    const hasCbmScore = cbmData && (typeof cbmData.healthScore !== 'undefined' || typeof cbmData.overallHealth !== 'undefined');
+    if (!hasCbmScore) {
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-info-circle" style="color:#94a3b8;font-size:1.4rem;"></i><p>Health Score menunggu data CBM.</p></div>`;
+        const ageEl = document.getElementById('st-age');
+        const runtimeEl = document.getElementById('st-runtime');
+        const lastMaintEl = document.getElementById('st-last-maint');
+        if (ageEl) ageEl.textContent = 'Menunggu sinkronisasi CBM';
+        if (runtimeEl) runtimeEl.textContent = '--';
+        if (lastMaintEl) lastMaintEl.textContent = '-';
+        return;
     }
+
+    const health = Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 0));
+    const warnings = [];
+    const components = cbmData.components || cbmData.componentHealth || {};
+    Object.values(components).forEach((comp) => {
+        const name = comp.name || comp.parameter || 'Sistem';
+        const value = (typeof comp.value !== 'undefined' && comp.value !== null) ? ` (${comp.value}${comp.unit || ''})` : '';
+        if (comp.status === 'critical') warnings.push({ label: `Kritis: ${name}${value}`, cls: 'danger' });
+        else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${name}${value}`, cls: 'warn' });
+    });
 
     const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
     const pillsHTML = warnings.length
@@ -263,14 +271,12 @@ function renderHealthScore(engineData, cbmData) {
 
     const ageEl = document.getElementById('st-age');
     const runtimeEl = document.getElementById('st-runtime');
-    const componentEl = document.getElementById('st-component');
     const lastMaintEl = document.getElementById('st-last-maint');
-    const runtimeHours = Math.round(engineData.engineHours || engineData.runtimeHours || cbmData?.engineHours || 0);
+    const runtimeHours = Math.round(cbmData?.engineHours || engineData.engineHours || engineData.runtimeHours || 0);
     const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
     const sync = String(engineData.sync || '').toUpperCase();
     if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
     if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toLocaleString('id-ID')} jam`;
-    if (componentEl) componentEl.textContent = warnings.length ? `${warnings.length} indikator perlu perhatian` : 'Tidak ada alarm kritis';
     const lastCompleted = (dashboardMaintenanceCache || [])
         .filter((m) => String(m.status || '').toLowerCase() === 'completed')
         .sort((a, b) => new Date(b.completedAt || b.updatedAt || b.createdAt) - new Date(a.completedAt || a.updatedAt || a.createdAt))[0];
@@ -450,7 +456,7 @@ function updateMaintenanceSection(data) {
             }
             selectedMaintenanceDateKey = key;
             const list = byDate[key] || [];
-            panel.innerHTML = `<div class="maint-detail-head"><h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4><button type="button" class="maint-hide-btn" id="maintHideBtn">Hide</button></div><div class="maint-detail-grid">${list.map(renderMaintenanceDetailCard).join('')}</div>`;
+            panel.innerHTML = `<div class="maint-detail-head"><h4>Detail ${formatDateKeyForDisplay(key)}</h4><button type="button" class="maint-hide-btn" id="maintHideBtn">Hide</button></div><div class="maint-detail-grid">${list.map(renderMaintenanceDetailCard).join('')}</div>`;
             const hideBtn = document.getElementById('maintHideBtn');
             if (hideBtn) {
                 hideBtn.addEventListener('click', () => {
