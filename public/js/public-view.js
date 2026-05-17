@@ -450,7 +450,14 @@ function updateMaintenanceSection(data) {
             }
             selectedMaintenanceDateKey = key;
             const list = byDate[key] || [];
-            panel.innerHTML = `<h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4><div class="maint-detail-grid">${list.map(renderMaintenanceDetailCard).join('')}</div>`;
+            panel.innerHTML = `<div class="maint-detail-head"><h4>Detail ${new Date(key).toLocaleDateString('id-ID')}</h4><button type="button" class="maint-hide-btn" id="maintHideBtn">Hide</button></div><div class="maint-detail-grid">${list.map(renderMaintenanceDetailCard).join('')}</div>`;
+            const hideBtn = document.getElementById('maintHideBtn');
+            if (hideBtn) {
+                hideBtn.addEventListener('click', () => {
+                    selectedMaintenanceDateKey = null;
+                    panel.innerHTML = 'Detail disembunyikan. Klik tanggal untuk melihat lagi.';
+                });
+            }
         });
     });
 }
@@ -645,6 +652,37 @@ function updatePerformanceSection(data) {
     }
 }
 
+function calculateDailyRuntimeFromHistory(historyRows = []) {
+    const dayMap = {};
+    const WIB_OFFSET = 7 * 60 * 60 * 1000;
+    const now = new Date();
+
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
+        const key = d.toISOString().slice(0, 10);
+        dayMap[key] = 0;
+    }
+
+    (historyRows || []).forEach((r) => {
+        const start = new Date(r.startedAt);
+        const end = r.endedAt ? new Date(r.endedAt) : now;
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
+
+        splitSessionByDayWIB(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
+            if (Object.prototype.hasOwnProperty.call(dayMap, dateKey)) {
+                dayMap[dateKey] += hours;
+            }
+        });
+    });
+
+    return Object.keys(dayMap)
+        .sort()
+        .map((key) => ({
+            dayIndex: new Date(`${key}T12:00:00+07:00`).getDay(),
+            hours: Number(Math.min(24, dayMap[key]).toFixed(2))
+        }));
+}
+
 function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
     const fuelCtx = document.getElementById('chartFuelWeekly')?.getContext('2d');
     const costCtx = document.getElementById('chartMaintCostMonthly')?.getContext('2d');
@@ -655,13 +693,11 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
 
     const weeklyLabels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
     const weeklyFuel = [0, 0, 0, 0, 0, 0, 0];
-    (historyRows || []).forEach((r) => {
-        const day = new Date(r.startedAt || r.createdAt).getDay();
-        const start = new Date(r.startedAt || r.createdAt);
-        const end = r.endedAt ? new Date(r.endedAt) : new Date();
-        const runtimeHours = Math.max(0, end - start) / 3600000;
-        const used = runtimeHours * 1.25;
-        weeklyFuel[day] += used;
+    const runtimeByDay = calculateDailyRuntimeFromHistory(historyRows);
+
+    runtimeByDay.forEach(({ dayIndex, hours }) => {
+        const used = hours * 1.25;
+        weeklyFuel[dayIndex] += used;
     });
     for (let i = 0; i < weeklyFuel.length; i++) weeklyFuel[i] = Number(weeklyFuel[i].toFixed(2));
 
