@@ -485,7 +485,7 @@ function updateMaintenanceSection(data) {
         </div>
         <div class="calendar-weekdays"><span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span></div>
         <div class="calendar-grid">${cells.join('')}</div>
-        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">Klik tanggal bertanda titik merah untuk melihat detail maintenance.</div>
+        <div id="maintenanceDetailPanel" class="maintenance-detail-panel">Click to view maintenance details.</div>
     </div>`;
 
     container.querySelectorAll('.cal-nav').forEach((btn) => {
@@ -505,7 +505,6 @@ function updateMaintenanceSection(data) {
             const panel = document.getElementById('maintenanceDetailPanel');
             if (selectedMaintenanceDateKey === key) {
                 selectedMaintenanceDateKey = null;
-                panel.innerHTML = 'Detail disembunyikan. Klik tanggal untuk melihat lagi.';
                 return;
             }
             selectedMaintenanceDateKey = key;
