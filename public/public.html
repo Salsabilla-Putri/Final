@@ -183,14 +183,16 @@
                             <canvas id="chartActive"></canvas>
                         </div>
                     </div>
-                <div class="grid-2" style="margin-top:16px;">
+
                     <div class="card">
-                        <h3><i class="fas fa-gas-pump"></i>Fuel Consumption</h3>
+                        <h3><i class="fas fa-gas-pump"></i> Fuel Consumption</h3>
                         <div class="chart-box">
                             <canvas id="chartFuelWeekly"></canvas>
                         </div>
                     </div>
+                </div>
 
+                <div class="grid-2" style="margin-top:16px;">
                     <!-- System Health -->
                     <div class="card">
                         <h3><i class="fas fa-heartbeat"></i> System Health</h3>
@@ -205,11 +207,8 @@
                         <div class="list-row"><span>Maintenance Terakhir:</span><span id="st-last-maint">--</span></div>
                     </div>
 
-                </div>
-
-                <div class="grid-2" style="margin-top:16px;">
                     <div class="card">
-                        <h3><i class="fas fa-wallet"></i>Maintenance Cost</h3>
+                        <h3><i class="fas fa-wallet"></i> Maintenance Cost</h3>
                         <div class="chart-box">
                             <canvas id="chartMaintCostMonthly"></canvas>
                         </div>
@@ -304,17 +303,13 @@
                                 gensys20@gmail.com
                             </p>
 
-                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                                <a href="tel:+621234567890"
-                                    class="quick-call"
-                                   style="text-decoration:none; background:#10b981; font-size:0.8rem; padding:8px 14px;">
+                            <div class="help-actions">
+                                <a href="tel:+621234567890" class="quick-call">
                                     <i class="fas fa-phone"></i>
                                     <span>Quick Call</span>
                                 </a>
                                 <a href="https://www.google.com/maps/search/dealer+genset+terdekat/"
-                                   target="_blank" rel="noopener"
-                                   class="dealer-locator"
-                                   style="text-decoration:none; background:#f59e0b; font-size:0.8rem; padding:8px 14px;">
+                                   target="_blank" rel="noopener" class="dealer-locator">
                                     <i class="fas fa-map-marker-alt"></i>
                                     <span>Dealer Terdekat</span>
                                 </a>
