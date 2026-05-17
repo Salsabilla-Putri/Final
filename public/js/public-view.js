@@ -13,6 +13,7 @@ let selectedMaintenanceDateKey = null;
 let selectedCostMonthIndex = null;
 let lastFuelCostSignature = '';
 let isDashboardFetching = false;
+let lastHealthSnapshot = null;
 let lastHeavyFetchAt = 0;
 const DASHBOARD_REFRESH_MS = 10000;
 const HEAVY_ENDPOINT_REFRESH_MS = 30000;
@@ -204,6 +205,32 @@ function formatDateKeyForDisplay(dateKey) {
     return safeDate.toLocaleDateString('id-ID');
 }
 
+
+function toWibDateKey(inputDate) {
+    const dt = inputDate instanceof Date ? inputDate : new Date(inputDate);
+    if (!Number.isFinite(dt.getTime())) return null;
+    const wib = new Date(dt.getTime() + (7 * 60 * 60 * 1000));
+    return wib.toISOString().slice(0, 10);
+}
+
+function sumRuntimeHoursFromHistory(historyRows = []) {
+    const now = new Date();
+    let totalHours = 0;
+    (historyRows || []).forEach((r) => {
+        const start = new Date(r.startedAt);
+        const end = r.endedAt ? new Date(r.endedAt) : now;
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
+        totalHours += (end - start) / 3600000;
+    });
+    return Math.max(0, totalHours);
+}
+
+function getLatestCompletedMaintenance(rows = []) {
+    return (rows || [])
+        .filter((m) => String(m.status || '').toLowerCase() === 'completed')
+        .sort((a, b) => new Date(b.completedAt || b.updatedAt || b.createdAt) - new Date(a.completedAt || a.updatedAt || a.createdAt))[0] || null;
+}
+
 function calculateHealthByComponentAge(engineData = {}, cbmData = {}) {
     const hourAge = Number(engineData.engineHours || engineData.runtimeHours || cbmData.engineHours || 0) || 0;
     const ageMonth = Number(engineData.generatorAgeMonth || cbmData.generatorAgeMonth || 0) || 0;
@@ -235,18 +262,30 @@ function renderHealthScore(engineData, cbmData) {
     if (!container) return;
 
     const hasCbmScore = cbmData && (typeof cbmData.healthScore !== 'undefined' || typeof cbmData.overallHealth !== 'undefined');
+    const healthValue = hasCbmScore ? Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 0)) : null;
+    const runtimeHours = sumRuntimeHoursFromHistory(dashboardHistoryCache);
+    const latestMaintenance = getLatestCompletedMaintenance(dashboardMaintenanceCache);
+
     if (!hasCbmScore) {
-        container.innerHTML = `<div class="empty-state"><i class="fas fa-info-circle" style="color:#94a3b8;font-size:1.4rem;"></i><p>Health Score menunggu data CBM.</p></div>`;
+        if (lastHealthSnapshot) {
+            container.innerHTML = lastHealthSnapshot.html;
+        } else {
+            container.innerHTML = `<div class="empty-state"><i class="fas fa-info-circle" style="color:#94a3b8;font-size:1.4rem;"></i><p>Health Score menunggu data CBM.</p></div>`;
+        }
         const ageEl = document.getElementById('st-age');
         const runtimeEl = document.getElementById('st-runtime');
         const lastMaintEl = document.getElementById('st-last-maint');
-        if (ageEl) ageEl.textContent = 'Menunggu sinkronisasi CBM';
-        if (runtimeEl) runtimeEl.textContent = '--';
-        if (lastMaintEl) lastMaintEl.textContent = '-';
+        const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
+        const sync = String(engineData.sync || '').toUpperCase();
+        if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
+        if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
+        if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
+            ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')
+            : '-';
         return;
     }
 
-    const health = Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 0));
+    const health = healthValue;
     const warnings = [];
     const degradedIndicators = [];
     const components = cbmData.components || cbmData.componentHealth || {};
@@ -264,9 +303,6 @@ function renderHealthScore(engineData, cbmData) {
         }
     });
 
-    if (health < 100 && !warnings.length) {
-        warnings.push({ label: `Health belum sempurna (${health}%). Cek detail CBM di Reports.`, cls: 'warn' });
-    }
 
     if (degradedIndicators.length) {
         const uniq = [...new Set(degradedIndicators)];
@@ -278,27 +314,27 @@ function renderHealthScore(engineData, cbmData) {
         ? warnings.map(w => `<span class="status-pill ${w.cls}">${w.label}</span>`).join('')
         : `<span class="status-pill ok"><i class="fas fa-check"></i> Kondisi Mesin Ideal</span>`;
 
-    container.innerHTML = `
+    const footnoteIndicators = [...new Set(degradedIndicators)].map((label) => `<span class="health-footnote-item"><i class="fas fa-square" style="color:#facc15;font-size:10px;"></i> ${label}</span>`).join(' · ');
+    const healthHtml = `
         <div class="health-ring" style="--hc:${color};">
             <div class="health-ring-value" style="color:${color};">${health}%</div>
             <div class="health-ring-label">Health Score</div>
         </div>
         <div class="health-warning-wrap">${pillsHTML}</div>
+        ${footnoteIndicators ? `<div class="health-footnote"><small><strong>Catatan:</strong> indikator kuning mempengaruhi skor: ${footnoteIndicators}</small></div>` : ''}
     `;
+    container.innerHTML = healthHtml;
+    lastHealthSnapshot = { health, html: healthHtml, updatedAt: Date.now() };
 
     const ageEl = document.getElementById('st-age');
     const runtimeEl = document.getElementById('st-runtime');
     const lastMaintEl = document.getElementById('st-last-maint');
-    const runtimeHours = Math.round(cbmData?.engineHours || engineData.engineHours || engineData.runtimeHours || 0);
     const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
     const sync = String(engineData.sync || '').toUpperCase();
     if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
-    if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toLocaleString('id-ID')} jam`;
-    const lastCompleted = (dashboardMaintenanceCache || [])
-        .filter((m) => String(m.status || '').toLowerCase() === 'completed')
-        .sort((a, b) => new Date(b.completedAt || b.updatedAt || b.createdAt) - new Date(a.completedAt || a.updatedAt || a.createdAt))[0];
-    if (lastMaintEl) lastMaintEl.textContent = lastCompleted
-        ? new Date(lastCompleted.completedAt || lastCompleted.updatedAt || lastCompleted.createdAt).toLocaleDateString('id-ID')
+    if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
+    if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
+        ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')
         : '-';
 }
 
@@ -427,7 +463,8 @@ function updateMaintenanceSection(data) {
     const byDate = {};
     upcoming.forEach(m => {
         const dt = new Date(m.dueDate || m.createdAt);
-        const key = dt.toISOString().slice(0,10);
+        const key = toWibDateKey(dt);
+        if (!key) return;
         (byDate[key] ||= []).push(m);
     });
 
@@ -435,7 +472,7 @@ function updateMaintenanceSection(data) {
     for (let i=0;i<firstWeekday;i++) cells.push('<div class="calendar-day muted"></div>');
     for (let day=1;day<=totalDays;day++) {
         const d = new Date(calendarViewYear, calendarViewMonth, day);
-        const key = d.toISOString().slice(0,10);
+        const key = toWibDateKey(d);
         const weekend = [0,6].includes(d.getDay());
         cells.push(`<button class="calendar-day ${weekend ? 'red-day' : ''} ${byDate[key] ? 'has-event' : ''}" data-date="${key}">${day}${byDate[key] ? '<span class="dot"></span>' : ''}</button>`);
     }
@@ -503,7 +540,7 @@ function updateActiveTimeChart(historyRows) {
     // Inisialisasi map untuk 7 hari terakhir
     for (let i = 6; i >= 0; i--) {
         const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
-        const key = d.toISOString().slice(0, 10);
+        const key = toWibDateKey(d);
         dayMap[key] = 0;
     }
 
@@ -526,7 +563,7 @@ function updateActiveTimeChart(historyRows) {
 
     const labels = [];
     const dataPoints = [];
-    const todayKey = new Date(now.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
+    const todayKey = toWibDateKey(now);
     let todayHours = 0;
 
     // Masukkan data ke array untuk Chart.js
@@ -597,7 +634,7 @@ function splitSessionByDayWIB(start, end, wibOffset) {
         const sliceEnd = nextMidnightUtc < end ? nextMidnightUtc : end;
 
         const durHours = Math.max(0, sliceEnd - cursor) / 3600000;
-        const dateKey = new Date(cursor.getTime() + wibOffset).toISOString().slice(0, 10);
+        const dateKey = toWibDateKey(cursor);
         result.push({ dateKey, hours: durHours });
         cursor = sliceEnd;
     }
@@ -646,32 +683,35 @@ function updatePerformanceSection(data) {
     };
 
     const cards = [
-        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
-        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5) },
-        { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
-        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) }
+        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240), raw: voltVal, min: 180, max: 250 },
+        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5), raw: powerVal, min: 0, max: 8 },
+        { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90), raw: tempVal, min: 20, max: 120 },
+        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100), raw: fuelVal, min: 0, max: 100 }
     ];
 
     const wrap = document.getElementById('perfSimpleCards');
     if (wrap) {
-        wrap.innerHTML = cards.map((c) => `
+        wrap.innerHTML = cards.map((c) => {
+            const pct = toPct(c.raw, c.min, c.max);
+            return `
             <div class="perf-item-card">
                 <div class="perf-item-head">
                     <i class="fas ${c.icon}"></i>
                     <span>${c.name}</span>
                 </div>
                 <div class="perf-item-value">${c.value}</div>
-                <div class="perf-bar"><span style="width:${toPct(
-                    c.name === 'Tegangan' ? voltVal :
-                    c.name === 'Daya' ? powerVal :
-                    c.name === 'Temperatur' ? tempVal :
-                    c.name === 'Bahan Bakar' ? fuelVal :
-                    c.name === 'Tegangan' ? 180 : c.name === 'Daya' ? 0 : c.name === 'Temperatur' ? 0 : c.name === 'Bahan Bakar' ? 0 : 10,
-                    c.name === 'Tegangan' ? 250 : c.name === 'Daya' ? 250 : c.name === 'Temperatur' ? 120 : c.name === 'Bahan Bakar' ? 100 : 15
-                )}%"></span></div>
+                <div class="perf-bar"><span class="perf-bar-fill ${c.status.cls}" data-target-width="${pct}"></span></div>
                 <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
             </div>
-        `).join('');
+        `;
+        }).join('');
+
+        requestAnimationFrame(() => {
+            wrap.querySelectorAll('.perf-bar-fill').forEach((bar) => {
+                const target = Number(bar.dataset.targetWidth || 0);
+                bar.style.width = `${target}%`;
+            });
+        });
     }
 }
 
@@ -682,7 +722,7 @@ function calculateDailyRuntimeFromHistory(historyRows = []) {
 
     for (let i = 6; i >= 0; i--) {
         const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
-        const key = d.toISOString().slice(0, 10);
+        const key = toWibDateKey(d);
         dayMap[key] = 0;
     }
 
