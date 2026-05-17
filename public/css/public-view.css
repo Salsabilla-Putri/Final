@@ -613,8 +613,13 @@ body {
 .perf-item-status {
     margin-top: 8px;
 }
-.perf-bar { margin-top: 8px; height: 7px; border-radius: 6px; background: #e2e8f0; overflow: hidden; }
-.perf-bar span { display: block; height: 100%; background: linear-gradient(90deg, #1745a5, #3b82f6); }
+.perf-bar { margin-top: 8px; height: 8px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
+.perf-bar .perf-bar-fill { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .55s ease, filter .25s ease; background: linear-gradient(90deg, #1745a5, #3b82f6); }
+.perf-item-card:hover .perf-bar .perf-bar-fill { filter: brightness(1.07); }
+.perf-bar .perf-bar-fill.ok { background: linear-gradient(90deg, #10b981, #34d399); }
+.perf-bar .perf-bar-fill.warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.perf-bar .perf-bar-fill.danger { background: linear-gradient(90deg, #ef4444, #f87171); }
+.perf-bar .perf-bar-fill.muted { background: linear-gradient(90deg, #94a3b8, #cbd5e1); }
 
 
 .maintenance-calendar-grid { display:flex; flex-direction:column; gap:10px; }

@@ -268,7 +268,7 @@ function renderHealthScore(engineData, cbmData) {
 
     if (!hasCbmScore) {
         if (lastHealthSnapshot) {
-            container.innerHTML = `${lastHealthSnapshot.html}<div class="health-fallback-note"><i class="fas fa-clock"></i> Menampilkan hasil health terakhir (fallback saat data CBM belum update).</div>`;
+            container.innerHTML = lastHealthSnapshot.html;
         } else {
             container.innerHTML = `<div class="empty-state"><i class="fas fa-info-circle" style="color:#94a3b8;font-size:1.4rem;"></i><p>Health Score menunggu data CBM.</p></div>`;
         }
@@ -303,9 +303,6 @@ function renderHealthScore(engineData, cbmData) {
         }
     });
 
-    if (health < 100 && !warnings.length) {
-        warnings.push({ label: `Health belum sempurna (${health}%). Cek detail CBM di Reports.`, cls: 'warn' });
-    }
 
     if (degradedIndicators.length) {
         const uniq = [...new Set(degradedIndicators)];
@@ -686,32 +683,35 @@ function updatePerformanceSection(data) {
     };
 
     const cards = [
-        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240) },
-        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5) },
-        { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90) },
-        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100) }
+        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240), raw: voltVal, min: 180, max: 250 },
+        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5), raw: powerVal, min: 0, max: 8 },
+        { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90), raw: tempVal, min: 20, max: 120 },
+        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100), raw: fuelVal, min: 0, max: 100 }
     ];
 
     const wrap = document.getElementById('perfSimpleCards');
     if (wrap) {
-        wrap.innerHTML = cards.map((c) => `
+        wrap.innerHTML = cards.map((c) => {
+            const pct = toPct(c.raw, c.min, c.max);
+            return `
             <div class="perf-item-card">
                 <div class="perf-item-head">
                     <i class="fas ${c.icon}"></i>
                     <span>${c.name}</span>
                 </div>
                 <div class="perf-item-value">${c.value}</div>
-                <div class="perf-bar"><span style="width:${toPct(
-                    c.name === 'Tegangan' ? voltVal :
-                    c.name === 'Daya' ? powerVal :
-                    c.name === 'Temperatur' ? tempVal :
-                    c.name === 'Bahan Bakar' ? fuelVal :
-                    c.name === 'Tegangan' ? 180 : c.name === 'Daya' ? 0 : c.name === 'Temperatur' ? 0 : c.name === 'Bahan Bakar' ? 0 : 10,
-                    c.name === 'Tegangan' ? 250 : c.name === 'Daya' ? 250 : c.name === 'Temperatur' ? 120 : c.name === 'Bahan Bakar' ? 100 : 15
-                )}%"></span></div>
+                <div class="perf-bar"><span class="perf-bar-fill ${c.status.cls}" data-target-width="${pct}"></span></div>
                 <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
             </div>
-        `).join('');
+        `;
+        }).join('');
+
+        requestAnimationFrame(() => {
+            wrap.querySelectorAll('.perf-bar-fill').forEach((bar) => {
+                const target = Number(bar.dataset.targetWidth || 0);
+                bar.style.width = `${target}%`;
+            });
+        });
     }
 }
 
