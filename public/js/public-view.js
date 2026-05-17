@@ -248,13 +248,30 @@ function renderHealthScore(engineData, cbmData) {
 
     const health = Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 0));
     const warnings = [];
+    const degradedIndicators = [];
     const components = cbmData.components || cbmData.componentHealth || {};
     Object.values(components).forEach((comp) => {
         const name = comp.name || comp.parameter || 'Sistem';
         const value = (typeof comp.value !== 'undefined' && comp.value !== null) ? ` (${comp.value}${comp.unit || ''})` : '';
-        if (comp.status === 'critical') warnings.push({ label: `Kritis: ${name}${value}`, cls: 'danger' });
-        else if (comp.status === 'warning') warnings.push({ label: `Perhatian: ${name}${value}`, cls: 'warn' });
+        const status = String(comp.status || '').toLowerCase();
+
+        if (status === 'critical' || status === 'bad') {
+            warnings.push({ label: `Kritis: ${name}${value}`, cls: 'danger' });
+            degradedIndicators.push(name);
+        } else if (status === 'warning' || status === 'degraded') {
+            warnings.push({ label: `Perhatian: ${name}${value}`, cls: 'warn' });
+            degradedIndicators.push(name);
+        }
     });
+
+    if (health < 100 && !warnings.length) {
+        warnings.push({ label: `Health belum sempurna (${health}%). Cek detail CBM di Reports.`, cls: 'warn' });
+    }
+
+    if (degradedIndicators.length) {
+        const uniq = [...new Set(degradedIndicators)];
+        warnings.unshift({ label: `Parameter perlu perhatian: ${uniq.join(', ')}`, cls: 'warn' });
+    }
 
     const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
     const pillsHTML = warnings.length
