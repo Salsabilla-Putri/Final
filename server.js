@@ -400,14 +400,16 @@ let latestData = {
 };
 let activeSessions = new Map();
 const ACTIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+const ECU_DISCONNECT_THRESHOLD_MS = 30 * 1000;
 
 async function syncActiveTimeHistory(data) {
     const status = String(data?.status || '').toUpperCase();
     const rpm = Number(data?.rpm || 0);
     const rpmThreshold = 0;
-    const isRunning = status === 'RUNNING' || rpm > rpmThreshold;
-    const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const eventTime = data?.timestamp ? new Date(data.timestamp) : new Date();
+    const isEcuConnected = Math.abs(Date.now() - eventTime.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS;
+    const isRunning = isEcuConnected && (status === 'RUNNING' || rpm > rpmThreshold);
+    const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     const session = activeSessions.get(key);
 
@@ -462,6 +464,31 @@ async function syncActiveTimeHistory(data) {
         activeSessions.delete(key);
     }
 }
+
+
+setInterval(async () => {
+    const now = new Date();
+    for (const [key, session] of activeSessions.entries()) {
+        const idleMs = now.getTime() - session.lastSeenAt.getTime();
+        if (idleMs <= ACTIVE_SESSION_TIMEOUT_MS) continue;
+
+        const [deviceId] = key.split('|');
+        const endedAt = new Date(session.lastSeenAt.getTime() + ACTIVE_SESSION_TIMEOUT_MS);
+        const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
+
+        try {
+            await ActiveTimeHistory.findOneAndUpdate(
+                { deviceId, startedAt: session.startedAt, endedAt: null },
+                { endedAt, durationMs, calc: { rpmThreshold: 0, sampledAt: session.lastSeenAt } },
+                { sort: { createdAt: -1 } }
+            );
+        } catch (e) {
+            console.error('Failed closing stale active session:', e.message);
+        }
+
+        activeSessions.delete(key);
+    }
+}, 10000);
 
 mqttClient.on('connect', () => {
     console.log('✅ Connected to MQTT Broker (shiftr.io)');
@@ -673,6 +700,32 @@ mqttClient.on('message', async (topic, message) => {
 });
 
 // --- API ENDPOINTS ---
+
+
+app.get('/api/engine-data/last-running', async (req, res) => {
+    try {
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const query = {
+            ...(effectiveDeviceId ? { deviceId: effectiveDeviceId } : {}),
+            $or: [
+                { status: { $in: ['RUNNING', 'ON', 'ACTIVE'] } },
+                { rpm: { $gt: 0 } }
+            ]
+        };
+
+        const lastRunning = await GeneratorData.findOne(query).sort({ timestamp: -1 }).lean();
+        if (!lastRunning) {
+            return res.status(404).json({ success: false, error: 'No running engine data found' });
+        }
+
+        const dataAgeMs = Date.now() - new Date(lastRunning.timestamp || 0).getTime();
+        const ecuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
+        res.json({ success: true, data: { ...lastRunning, ecuConnected } });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {

@@ -106,6 +106,18 @@
                     <span class="info-label"><i class="fas fa-map-marker-alt"></i> Location</span>
                     <span id="prof-location" class="info-val">-</span>
                 </div>
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-gauge-high"></i> RPM Terakhir (Saat Running)</span>
+                    <span id="last-rpm" class="info-val">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-plug-circle-check"></i> Status ECU</span>
+                    <span id="last-ecu" class="info-val">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label"><i class="fas fa-calendar-check"></i> Waktu Data Running Terakhir</span>
+                    <span id="last-running-time" class="info-val">-</span>
+                </div>
             </div>
 
             <div class="logout-area">
@@ -159,6 +171,20 @@
           } catch (err) {
               console.error('Gagal memuat profil user:', err);
           }
+
+          try {
+              const runRes = await fetch('/api/engine-data/last-running');
+              const runJson = await runRes.json();
+              if (runJson.success && runJson.data) {
+                  const r = runJson.data;
+                  byId('last-rpm').innerText = `${Number(r.rpm || 0).toFixed(0)} RPM`;
+                  byId('last-ecu').innerText = r.ecuConnected ? 'Terkoneksi' : 'Tidak terkoneksi (dianggap tidak running)';
+                  byId('last-running-time').innerText = new Date(r.timestamp).toLocaleString('id-ID');
+              }
+          } catch (err) {
+              console.error('Gagal memuat data running terakhir:', err);
+          }
+
       });
   </script>
 </body>
