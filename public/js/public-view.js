@@ -920,11 +920,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateClock();
     setInterval(updateClock, 1000);
 
-    // [MODIFIKASI] Navigasi klik profil user ke Halaman public-user.html
     const userBtn = document.getElementById('user-btn');
     if (userBtn) {
         userBtn.addEventListener('click', () => {
-            // public.html dikecualikan: tidak redirect ke halaman profil
+            window.location.href = 'user.html';
         });
     }
 
