@@ -905,7 +905,15 @@ function extractEspFftFromRows(rows, sensorKey) {
     if (!fft || fft.valid !== true) return null;
 
     const source = String(fft.source || '').toLowerCase();
-    if (sensorKey && source && source !== sensorKey) return null;
+    const normalizedSensor = String(sensorKey || '').toLowerCase();
+
+    const sensorAliases = {
+        rpm: ['rpm', 'speed', 'rotation'],
+        freq: ['freq', 'frequency', 'hz'],
+        volt: ['volt', 'voltage', 'v']
+    };
+    const aliases = sensorAliases[normalizedSensor] || [normalizedSensor];
+    const sourceMatchesSensor = !normalizedSensor || !source || aliases.includes(source);
 
     const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins : [];
     const magBins = Array.isArray(fft.magBins) ? fft.magBins : [];
@@ -932,14 +940,16 @@ function extractEspFftFromRows(rows, sensorKey) {
         stats: {
             count: Number(fft.samples) || spectrum.length,
             mean: Number(fft.rms) || 0,
-            trend: 'edge-computed'
+            trend: sourceMatchesSensor ? 'edge-computed' : `edge-computed (source: ${fft.source || 'unknown'})`
         },
         spectrum,
         peaks,
         meta: {
             resolutionHz: Number(fft.resolutionHz) || 0,
             peakHz: Number(fft.peakHz) || 0,
-            peakMagnitude: Number(fft.peakMagnitude) || 0
+            peakMagnitude: Number(fft.peakMagnitude) || 0,
+            source: fft.source || null,
+            sourceMatchesSensor
         }
     };
 }
@@ -1012,8 +1022,6 @@ async function renderFftAnalysis(data) {
     insightsEl.innerHTML = '';
 
     const sensorKey    = selectedSensors[0] || 'rpm';
-    const analysisRows = buildAnalysisRows(data || [], sensorKey);
-
     let espFftResult = null;
     try {
         const dateFrom = document.getElementById('dateFrom')?.value;
@@ -1032,7 +1040,12 @@ async function renderFftAnalysis(data) {
         return;
     }
 
-    drawFftResult(calculateFftLocally(analysisRows, sensorKey), sensorKey);
+    drawFftResult({
+        summary: 'FFT ESP32 belum tersedia untuk rentang waktu ini. Tidak memakai FFT lokal agar konsisten dengan hasil LCD ESP32.',
+        stats: { count: 0, mean: 0, trend: 'waiting-edge-data' },
+        spectrum: [],
+        peaks: []
+    }, sensorKey);
 }
 
 function formatTimestampLabel(timestamp, timeRange) {
