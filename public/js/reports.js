@@ -445,6 +445,18 @@ async function fetchLatestSnapshotRows() {
     return { result, rows: normalizeReportRows(data) };
 }
 
+async function fetchLatestEspFft({ startDate, endDate, deviceId }) {
+    const params = new URLSearchParams();
+    if (startDate) params.set('startDate', startDate.toISOString());
+    if (endDate) params.set('endDate', endDate.toISOString());
+    if (deviceId) params.set('deviceId', deviceId);
+
+    const response = await fetchFirstAvailable(buildApiCandidates('/api/fft/latest', params.toString()));
+    if (!response || !response.ok) return null;
+    const result = await response.json();
+    return result?.data || null;
+}
+
 async function fetchPeriodAlertCount({ startDate, endDate, deviceId }) {
     const params = new URLSearchParams();
     if (startDate) params.set('startDate', startDate.toISOString());
@@ -1002,7 +1014,19 @@ async function renderFftAnalysis(data) {
     const sensorKey    = selectedSensors[0] || 'rpm';
     const analysisRows = buildAnalysisRows(data || [], sensorKey);
 
-    const espFftResult = extractEspFftFromRows(data || [], sensorKey);
+    let espFftResult = null;
+    try {
+        const dateFrom = document.getElementById('dateFrom')?.value;
+        const dateTo = document.getElementById('dateTo')?.value;
+        const startDate = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
+        const endDate = dateTo ? new Date(`${dateTo}T23:59:59.999`) : null;
+        const deviceId = getReportDeviceId();
+        const fftDoc = await fetchLatestEspFft({ startDate, endDate, deviceId });
+        if (fftDoc) espFftResult = extractEspFftFromRows([{ fft: fftDoc }], sensorKey);
+    } catch (e) {
+        console.warn('Failed to fetch FFT from API:', e.message);
+    }
+    if (!espFftResult) espFftResult = extractEspFftFromRows(data || [], sensorKey);
     if (espFftResult) {
         drawFftResult(espFftResult, sensorKey);
         return;
