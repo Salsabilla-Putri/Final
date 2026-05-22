@@ -923,7 +923,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const userBtn = document.getElementById('user-btn');
     if (userBtn) {
         userBtn.addEventListener('click', () => {
-            window.location.href = 'user.html';
+            window.location.href = 'public-user.html';
         });
     }
 
