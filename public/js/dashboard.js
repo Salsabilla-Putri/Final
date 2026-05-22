@@ -15,6 +15,7 @@ async function updateDashboard() {
 // ─── 1. SENSOR DATA ──────────────────────────────────────────────────────────
 // Lacak timestamp data terakhir yang berhasil diterima dari ESP32
 let _lastSensorOkAt = null;
+let _lastDisplayData = null;
 // Jika selama DISCONNECT_THRESHOLD_MS tidak ada data masuk → anggap mesin mati
 const DISCONNECT_THRESHOLD_MS = 30_000; // 30 detik
 
@@ -41,12 +42,6 @@ async function updateSensorData() {
             _lastSensorOkAt = Date.now();
             _disconnectReported = false;
 
-            // Overview
-            setVal('val-rpm',  (data.rpm || 0) + ' RPM');
-            setVal('val-temp', (data.coolant || data.temp || 0).toFixed(1) + '°C');
-            setVal('val-volt', (data.volt || 0).toFixed(1) + ' V');
-
-            // Engine Status
             const statusText = String(data.status || '').toUpperCase();
             const syncText = String(data.sync || '').toUpperCase();
             const rpmValue = Number(data.rpm || 0);
@@ -56,10 +51,21 @@ async function updateSensorData() {
             const isRun  = ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
             const isSync = ['ON-GRID', 'SYNCHRONIZED', 'SYNC'].includes(syncText);
 
+            // Simpan snapshot data terakhir saat mesin masih running / ECU terkoneksi.
+            // Jika kondisi terbaru sudah stop/disconnect, UI tetap menampilkan data terakhir yang valid.
+            if (isRun || isSync) _lastDisplayData = data;
+            const displayData = _lastDisplayData || data;
+
+            // Overview
+            setVal('val-rpm',  (displayData.rpm || 0) + ' RPM');
+            setVal('val-temp', (displayData.coolant || displayData.temp || 0).toFixed(1) + '°C');
+            setVal('val-volt', (displayData.volt || 0).toFixed(1) + ' V');
+
+            // Engine Status
             updateStatus('engSync', isSync, 'Synchronized', 'Not Sync');
             updateStatus('engStat', isRun,  'Running', 'Stopped');
 
-            const fuel   = Math.round(data.fuel || 0);
+            const fuel   = Math.round(displayData.fuel || 0);
             const fuelEl = document.getElementById('fuelLevel');
             if (fuelEl) {
                 fuelEl.innerText  = fuel + '%';
@@ -67,11 +73,11 @@ async function updateSensorData() {
             }
 
             // System Health Check Limits
-            checkLimit('st-volt', data.volt,  200, 240);
-            checkLimit('st-amp',  data.amp,   0,   100);
-            checkLimit('st-freq', data.freq,  48,  52);
-            checkLimit('st-fuel', data.fuel,  20,  100);
-            checkLimit('st-afr',  data.afr,   10,  18);
+            checkLimit('st-volt', displayData.volt,  200, 240);
+            checkLimit('st-amp',  displayData.amp,   0,   100);
+            checkLimit('st-freq', displayData.freq,  48,  52);
+            checkLimit('st-fuel', displayData.fuel,  20,  100);
+            checkLimit('st-afr',  displayData.afr,   10,  18);
         }
     } catch (e) {
         console.warn('Sensor Error', e);
