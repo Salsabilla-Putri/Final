@@ -652,17 +652,32 @@ function toNumber(value, fallback = 0) {
     return Number.isFinite(n) ? n : fallback;
 }
 
-function normalizeGeneratorPayload(rawPayload) {
-    const now = new Date();
+function pickEffectivePayload(rawPayload) {
     const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
+    const records = Array.isArray(payload.records) ? payload.records : [];
+    const latestRecord = records.length ? records[records.length - 1] : null;
+    if (!latestRecord || typeof latestRecord !== 'object') return payload;
+
+    return {
+        ...payload,
+        ...latestRecord,
+        deviceId: latestRecord.deviceId || payload.deviceId,
+        fft: latestRecord.fft ?? payload.fft
+    };
+}
+
+function normalizeGeneratorPayload(rawPayload) {
+    const payload = pickEffectivePayload(rawPayload);
+    const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
+    const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
 
     const snapshot = {
         ...latestData,
         deviceId: payload.deviceId || latestData.deviceId || 'ESP32_GENERATOR_01',
-        timestamp: now,
+        timestamp,
         rpm: toNumber(payload.rpm, latestData.rpm),
         volt: toNumber(payload.volt, latestData.volt),
-        volt_grid: toNumber(payload.volt_grid, latestData.volt_grid),
+        volt_grid: toNumber(payload.volt_grid ?? payload.voltGrid, latestData.volt_grid),
         amp: toNumber(payload.amp, latestData.amp),
         power: toNumber(payload.power, latestData.power),
         freq: toNumber(payload.freq, latestData.freq),
@@ -696,7 +711,7 @@ function normalizeGeneratorPayload(rawPayload) {
 }
 
 function normalizeFftPayload(rawPayload, fallbackDeviceId) {
-    const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
+    const payload = pickEffectivePayload(rawPayload);
     const fft = payload.fft && typeof payload.fft === 'object' ? payload.fft : null;
     if (!fft || fft.valid !== true) return null;
 
@@ -706,7 +721,10 @@ function normalizeFftPayload(rawPayload, fallbackDeviceId) {
     if (!len) return null;
 
     return {
-        timestamp: new Date(),
+        timestamp: (() => {
+            const ts = payload.timestamp ? new Date(payload.timestamp) : new Date();
+            return Number.isNaN(ts.getTime()) ? new Date() : ts;
+        })(),
         deviceId: payload.deviceId || fallbackDeviceId || 'ESP32_GENERATOR_01',
         source: String(fft.source || ''),
         sampleRateHz: toNumber(fft.sampleRateHz, 0),
