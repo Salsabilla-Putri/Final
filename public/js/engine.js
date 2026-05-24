@@ -1,7 +1,12 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
-const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','fuel','afr','tps'];
+const PARAMS = ['volt','amp','power','freq','phase_diff','rpm','batt','coolant','iat','fuel','afr','tps'];
 const ESP_FRESHNESS_MS = 15000;
+const SYNC_DEFAULT_THRESHOLDS = {
+    volt: { min: 210, max: 240 },
+    freq: { min: 49, max: 51 },
+    phase_diff: { min: -10, max: 10 }
+};
 
 
 
@@ -62,8 +67,10 @@ async function fetchAlerts() {
 // === UI UPDATE LOGIC ===
 function updateDashboard(data) {
     const syncEl = document.getElementById('syncIndicator');
-    syncEl.innerText = data.sync || 'UNKNOWN';
-    syncEl.className = data.sync === 'ON-GRID' ? 'indicator ind-on' : 'indicator ind-off';
+    const phaseDiff = Number(data.phase_diff ?? data.phaseDifference ?? data.delta_phase ?? data.fasa ?? data.beda_fasa);
+    const syncStatus = isSyncByThreshold(data, phaseDiff);
+    syncEl.innerText = syncStatus ? 'SYNC' : 'NOT SYNC';
+    syncEl.className = syncStatus ? 'indicator ind-on' : 'indicator ind-off';
 
     const setVal = (id, val, fixed=0) => {
         const el = document.getElementById(id + 'Val');
@@ -73,6 +80,7 @@ function updateDashboard(data) {
     setVal('volt', data.volt, 1);
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
+    setVal('phase_diff', phaseDiff, 1);
     setVal('power', data.power, 0);
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
@@ -91,6 +99,7 @@ function updateDashboard(data) {
     applyVisual('volt', data.volt, { type: 'text' });
     applyVisual('amp', data.amp, { type: 'text' });
     applyVisual('freq', data.freq, { type: 'text' });
+    applyVisual('phase_diff', phaseDiff, { type: 'text' });
     applyVisual('batt', data.batt ?? data.battery ?? data.battVolt, { type: 'text' });
 
     if (data._realtime) {
@@ -100,6 +109,28 @@ function updateDashboard(data) {
             realtimeBadge.title = `Last MQTT update: ${data.lastMqttUpdate}`;
         }
     }
+}
+
+function getThresholdValue(param, key) {
+    const threshold = serverThresholds[param] || SYNC_DEFAULT_THRESHOLDS[param] || {};
+    return Number(threshold[key]);
+}
+
+function isWithinThreshold(param, value) {
+    if (!Number.isFinite(Number(value))) return false;
+    const min = getThresholdValue(param, 'min');
+    const max = getThresholdValue(param, 'max');
+    if (Number.isFinite(min) && Number(value) < min) return false;
+    if (Number.isFinite(max) && Number(value) > max) return false;
+    return true;
+}
+
+function isSyncByThreshold(data, phaseDiff) {
+    return (
+        isWithinThreshold('volt', data.volt) &&
+        isWithinThreshold('freq', data.freq) &&
+        isWithinThreshold('phase_diff', phaseDiff)
+    );
 }
 
 function applyVisual(param, value, opts) {

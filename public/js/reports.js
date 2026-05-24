@@ -19,6 +19,8 @@ const SENSORS = {
     volt:    { name: 'Voltage',        unit: 'V',   icon: 'fas fa-bolt',            color: '#f97316' },
     amp:     { name: 'Current',        unit: 'A',   icon: 'fas fa-plug',            color: '#ec4899' },
     freq:    { name: 'Frequency',      unit: 'Hz',  icon: 'fas fa-wave-square',     color: '#8b5cf6' },
+    phase_diff: { name: 'Phase Difference', unit: '°', icon: 'fas fa-arrows-left-right', color: '#f43f5e' },
+    sync_status: { name: 'Sync Status', unit: '', icon: 'fas fa-link', color: '#22c55e' },
     power:   { name: 'Power',          unit: 'kW',  icon: 'fas fa-charging-station',color: '#14b8a6' },
     temp:    { name: 'Engine Temp',    unit: '°C',  icon: 'fas fa-thermometer-half',color: '#ef4444' },
     coolant: { name: 'Coolant',        unit: '°C',  icon: 'fas fa-snowflake',       color: '#06b6d4' },
@@ -33,6 +35,7 @@ const SENSOR_LIMITS = {
     volt:    { min: 0,   max: 300  },
     amp:     { min: 0,   max: 500  },
     freq:    { min: 0,   max: 80   },
+    phase_diff: { min: -20, max: 20 },
     power:   { min: 0,   max: 2000 },
     temp:    { min: -20, max: 180  },
     coolant: { min: -20, max: 180  },
@@ -50,6 +53,11 @@ let activeRange           = { start: null, end: null };
 let reportStatsBySensor   = null;
 let reportTotalMatched    = 0;
 let periodAlertCount      = 0;
+const REPORT_SYNC_THRESHOLDS = {
+    volt: { min: 210, max: 240 },
+    freq: { min: 49, max: 51 },
+    phase_diff: { min: -10, max: 10 }
+};
 
 function getReportDeviceId() {
     const params = new URLSearchParams(window.location.search);
@@ -205,6 +213,23 @@ function cleanSensorValue(sensorKey, rawValue) {
     return parsed;
 }
 
+function isWithinReportThreshold(param, value) {
+    const val = Number(value);
+    if (!Number.isFinite(val)) return false;
+    const th = REPORT_SYNC_THRESHOLDS[param] || {};
+    if (Number.isFinite(Number(th.min)) && val < Number(th.min)) return false;
+    if (Number.isFinite(Number(th.max)) && val > Number(th.max)) return false;
+    return true;
+}
+
+function isSyncStatus(row) {
+    return (
+        isWithinReportThreshold('volt', row.volt) &&
+        isWithinReportThreshold('freq', row.freq) &&
+        isWithinReportThreshold('phase_diff', row.phase_diff)
+    );
+}
+
 function deduplicateByTimestamp(rows) {
     const byTime = new Map();
 
@@ -287,13 +312,16 @@ function normalizeReportRows(rows) {
             timestamp: new Date(ts).toISOString(),
             temp:    cleanSensorValue('temp',    tempVal),
             coolant: cleanSensorValue('coolant', row.coolant ?? tempVal),
-            power:   cleanSensorValue('power',   powerKw)
+            power:   cleanSensorValue('power',   powerKw),
+            phase_diff: cleanSensorValue('phase_diff', row.phase_diff ?? row.phaseDifference ?? row.delta_phase ?? row.fasa ?? row.beda_fasa)
         };
 
         Object.keys(SENSORS).forEach((sensorKey) => {
-            if (sensorKey === 'temp' || sensorKey === 'coolant' || sensorKey === 'power') return;
+            if (sensorKey === 'temp' || sensorKey === 'coolant' || sensorKey === 'power' || sensorKey === 'phase_diff' || sensorKey === 'sync_status') return;
             normalizedRow[sensorKey] = cleanSensorValue(sensorKey, row[sensorKey]);
         });
+        const isSync = isSyncStatus(normalizedRow);
+        normalizedRow.sync_status = isSync ? 1 : 0;
 
         return normalizedRow;
     }).filter(Boolean);
@@ -1329,6 +1357,8 @@ function renderSensorCards(data) {
         if (key === 'temp'   && current > 90)                   { status = 'critical'; statusClass = 'status-critical'; }
         else if (key === 'volt' && (current < 11 || current > 15)) { status = 'warning';  statusClass = 'status-warning'; }
         else if (key === 'fuel' && current < 20)                   { status = 'warning';  statusClass = 'status-warning'; }
+        else if (key === 'phase_diff' && Math.abs(current) > 10)   { status = 'warning'; statusClass = 'status-warning'; }
+        else if (key === 'sync_status' && current < 1)             { status = 'warning'; statusClass = 'status-warning'; }
 
         const accentColor = '#1745a5';
         const hasDbStats  = !!(reportStatsBySensor && reportStatsBySensor[key]);
@@ -1338,6 +1368,13 @@ function renderSensorCards(data) {
         card.dataset.sensor = key;
         card.style.setProperty('--sensor-accent', accentColor);
         card.classList.toggle('active-sensor', selectedSensors.includes(key));
+
+        const currentLabel = key === 'sync_status'
+            ? (current >= 1 ? 'SYNC' : 'NOT SYNC')
+            : `${current.toFixed(1)}<small style="font-size:12px;"> ${config.unit}</small>`;
+        const avgLabel = key === 'sync_status' ? `${(avg * 100).toFixed(0)} %` : `${avg.toFixed(1)} ${config.unit}`;
+        const minLabel = key === 'sync_status' ? `${(min * 100).toFixed(0)} %` : `${min.toFixed(1)} ${config.unit}`;
+        const maxLabel = key === 'sync_status' ? `${(max * 100).toFixed(0)} %` : `${max.toFixed(1)} ${config.unit}`;
 
         card.innerHTML = `
             <div class="sensor-header">
@@ -1352,19 +1389,19 @@ function renderSensorCards(data) {
             <div class="sensor-stats">
                 <div class="stat-item">
                     <div class="stat-label">CURRENT</div>
-                    <div class="stat-value current-value">${current.toFixed(1)}<small style="font-size:12px;"> ${config.unit}</small></div>
+                    <div class="stat-value current-value">${currentLabel}</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">AVERAGE</div>
-                    <div class="stat-value">${avg.toFixed(1)} ${config.unit}</div>
+                    <div class="stat-value">${avgLabel}</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">MIN</div>
-                    <div class="stat-value">${min.toFixed(1)} ${config.unit}</div>
+                    <div class="stat-value">${minLabel}</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">MAX</div>
-                    <div class="stat-value">${max.toFixed(1)} ${config.unit}</div>
+                    <div class="stat-value">${maxLabel}</div>
                 </div>
             </div>
             <div class="sensor-footer">
