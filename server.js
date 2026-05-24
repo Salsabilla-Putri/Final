@@ -70,6 +70,7 @@ async function ensureDbReady() {
     .then(async () => {
         console.log('✅ MongoDB Connected');
         await loadThresholdsFromDB(); // Load threshold saat server nyala/reconnect
+        await closeOrphanedSessionsOnStartup(); // Tutup sesi yg terbengkalai dari run sebelumnya
     })
     .catch((err) => {
         console.error('❌ MongoDB Connection Error:', err);
@@ -96,21 +97,6 @@ const generatorDataSchema = new mongoose.Schema({
     map: Number, batt: Number, afr: Number, tps: Number
 });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
-
-const fftDataSchema = new mongoose.Schema({
-    timestamp: { type: Date, default: Date.now, index: true },
-    deviceId: { type: String, required: true, index: true },
-    source: { type: String, default: '' },
-    sampleRateHz: Number,
-    samples: Number,
-    resolutionHz: Number,
-    peakHz: Number,
-    peakMagnitude: Number,
-    rms: Number,
-    freqBins: [Number],
-    magBins: [Number]
-});
-const FFTData = mongoose.models.FFTData || mongoose.model('FFTData', fftDataSchema, 'fftdata');
 
 const alertSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
@@ -417,6 +403,60 @@ let activeSessions = new Map();
 const ACTIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 const ECU_DISCONNECT_THRESHOLD_MS = 30 * 1000;
 
+/**
+ * Menutup semua sesi aktif yang ada di memory sekarang.
+ * Dipanggil saat: MQTT offline, server shutdown, atau kondisi abnormal lainnya.
+ * @param {string} reason - Alasan penutupan (untuk log)
+ */
+async function closeAllActiveSessions(reason = 'unknown') {
+    if (activeSessions.size === 0) return;
+    console.warn(`⚠️  Closing ${activeSessions.size} active session(s) — reason: ${reason}`);
+    const now = new Date();
+    for (const [key, session] of activeSessions.entries()) {
+        const deviceId = key; // key = deviceId (format: `${deviceId}`)
+        const endedAt = now;
+        const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
+        try {
+            await ActiveTimeHistory.findOneAndUpdate(
+                { deviceId, startedAt: session.startedAt, endedAt: null },
+                { endedAt, durationMs, calc: { rpmThreshold: 0, sampledAt: session.lastSeenAt } },
+                { sort: { createdAt: -1 } }
+            );
+        } catch (e) {
+            console.error(`Failed to close session for ${deviceId}:`, e.message);
+        }
+    }
+    activeSessions.clear();
+}
+
+/**
+ * Dipanggil sekali saat server (re)start.
+ * Menutup semua record activeTimeHistories yang masih endedAt=null —
+ * sisa dari server crash / restart sebelumnya.
+ */
+async function closeOrphanedSessionsOnStartup() {
+    try {
+        const orphans = await ActiveTimeHistory.find({ endedAt: null }).lean();
+        if (orphans.length === 0) return;
+        console.warn(`🔧 Found ${orphans.length} orphaned active session(s) — closing with server-restart marker`);
+        const now = new Date();
+        for (const orphan of orphans) {
+            const endedAt = orphan.updatedAt && orphan.updatedAt > orphan.startedAt
+                ? new Date(Math.min(orphan.updatedAt.getTime(), now.getTime()))
+                : now;
+            const durationMs = Math.max(0, endedAt.getTime() - new Date(orphan.startedAt).getTime());
+            await ActiveTimeHistory.findByIdAndUpdate(orphan._id, {
+                endedAt,
+                durationMs,
+                'calc.rule': 'closed-on-server-restart'
+            });
+        }
+        console.log(`✅ Orphaned sessions closed.`);
+    } catch (e) {
+        console.error('closeOrphanedSessionsOnStartup error:', e.message);
+    }
+}
+
 async function syncActiveTimeHistory(data) {
     const status = String(data?.status || '').toUpperCase();
     const rpm = Number(data?.rpm || 0);
@@ -514,7 +554,14 @@ mqttClient.on('connect', () => {
 });
 
 mqttClient.on('reconnect', () => console.log('🔄 MQTT Reconnecting...'));
-mqttClient.on('offline',   () => console.warn('⚠️  MQTT Offline'));
+mqttClient.on('offline',   () => {
+    console.warn('⚠️  MQTT Offline — closing all active sessions');
+    closeAllActiveSessions('mqtt-offline').catch(e => console.error('closeAllActiveSessions error:', e.message));
+});
+mqttClient.on('close', () => {
+    console.warn('⚠️  MQTT Connection Closed — closing all active sessions');
+    closeAllActiveSessions('mqtt-close').catch(e => console.error('closeAllActiveSessions error:', e.message));
+});
 
 mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
@@ -652,36 +699,21 @@ function toNumber(value, fallback = 0) {
     return Number.isFinite(n) ? n : fallback;
 }
 
-function pickEffectivePayload(rawPayload) {
-    const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
-    const records = Array.isArray(payload.records) ? payload.records : [];
-    const latestRecord = records.length ? records[records.length - 1] : null;
-    if (!latestRecord || typeof latestRecord !== 'object') return payload;
-
-    return {
-        ...payload,
-        ...latestRecord,
-        deviceId: latestRecord.deviceId || payload.deviceId,
-        fft: latestRecord.fft ?? payload.fft
-    };
-}
-
 function normalizeGeneratorPayload(rawPayload) {
-    const payload = pickEffectivePayload(rawPayload);
-    const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
-    const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
+    const now = new Date();
+    const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
 
     const snapshot = {
         ...latestData,
         deviceId: payload.deviceId || latestData.deviceId || 'ESP32_GENERATOR_01',
-        timestamp,
+        timestamp: now,
         rpm: toNumber(payload.rpm, latestData.rpm),
         volt: toNumber(payload.volt, latestData.volt),
-        volt_grid: toNumber(payload.volt_grid ?? payload.voltGrid, latestData.volt_grid),
+        volt_grid: toNumber(payload.volt_grid, latestData.volt_grid),
         amp: toNumber(payload.amp, latestData.amp),
         power: toNumber(payload.power, latestData.power),
         freq: toNumber(payload.freq, latestData.freq),
-        freq_grid: toNumber(payload.freq_grid ?? payload.freqGrid, latestData.freq_grid),
+        freq_grid: toNumber(payload.freq_grid, latestData.freq_grid),
         temp: toNumber(payload.temp ?? payload.coolant, latestData.temp),
         coolant: toNumber(payload.coolant ?? payload.temp, latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
@@ -693,7 +725,6 @@ function normalizeGeneratorPayload(rawPayload) {
         batt: toNumber(payload.batt ?? payload.battery ?? payload.battVolt, latestData.batt),
         afr: toNumber(payload.afr, latestData.afr),
         tps: toNumber(payload.tps, latestData.tps),
-        phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle, latestData.phaseAngle ?? 0),
         _realtime: true
     };
 
@@ -710,34 +741,6 @@ function normalizeGeneratorPayload(rawPayload) {
     return snapshot;
 }
 
-function normalizeFftPayload(rawPayload, fallbackDeviceId) {
-    const payload = pickEffectivePayload(rawPayload);
-    const fft = payload.fft && typeof payload.fft === 'object' ? payload.fft : null;
-    if (!fft || fft.valid !== true) return null;
-
-    const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins.map((v) => Number(v)).filter(Number.isFinite) : [];
-    const magBins = Array.isArray(fft.magBins) ? fft.magBins.map((v) => Number(v)).filter(Number.isFinite) : [];
-    const len = Math.min(freqBins.length, magBins.length);
-    if (!len) return null;
-
-    return {
-        timestamp: (() => {
-            const ts = payload.timestamp ? new Date(payload.timestamp) : new Date();
-            return Number.isNaN(ts.getTime()) ? new Date() : ts;
-        })(),
-        deviceId: payload.deviceId || fallbackDeviceId || 'ESP32_GENERATOR_01',
-        source: String(fft.source || ''),
-        sampleRateHz: toNumber(fft.sampleRateHz, 0),
-        samples: toNumber(fft.samples, len),
-        resolutionHz: toNumber(fft.resolutionHz, 0),
-        peakHz: toNumber(fft.peakHz, 0),
-        peakMagnitude: toNumber(fft.peakMagnitude, 0),
-        rms: toNumber(fft.rms, 0),
-        freqBins: freqBins.slice(0, len),
-        magBins: magBins.slice(0, len)
-    };
-}
-
 mqttClient.on('message', async (topic, message) => {
     try {
         if (topic !== 'gen/data') return;
@@ -752,22 +755,6 @@ mqttClient.on('message', async (topic, message) => {
         }
 
         latestData = normalizeGeneratorPayload(parsed);
-        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-        if (fftDoc) {
-            await new FFTData(fftDoc).save();
-            latestData.fft = {
-                valid: true,
-                source: fftDoc.source,
-                sampleRateHz: fftDoc.sampleRateHz,
-                samples: fftDoc.samples,
-                resolutionHz: fftDoc.resolutionHz,
-                peakHz: fftDoc.peakHz,
-                peakMagnitude: fftDoc.peakMagnitude,
-                rms: fftDoc.rms,
-                freqBins: fftDoc.freqBins,
-                magBins: fftDoc.magBins
-            };
-        }
         await autoSaveLatestData();
     } catch (error) {
         console.error('❌ MQTT Message Error:', error);
@@ -964,23 +951,6 @@ app.get('/api/engine-data/history', async (req, res) => {
         res.json({ success: true, count: data.length, data, source: 'database' });
     } catch (error) {
         res.json({ success: true, count: 0, data: [], source: 'memory', warning: error.message });
-    }
-});
-
-app.get('/api/fft/latest', async (req, res) => {
-    try {
-        const { deviceId, startDate, endDate } = req.query;
-        const query = {};
-        if (deviceId) query.deviceId = deviceId;
-        if (startDate || endDate) {
-            query.timestamp = {};
-            if (startDate) query.timestamp.$gte = new Date(startDate);
-            if (endDate) query.timestamp.$lte = new Date(endDate);
-        }
-        const latest = await FFTData.findOne(query).sort({ timestamp: -1 }).lean();
-        res.json({ success: true, data: latest || null });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -2150,6 +2120,16 @@ app.use('/api', (req, res) => {
 app.get(/(.*)/, (req, res) => { res.sendFile(path.join(__dirname, 'public', 'login.html')); });
 
 const PORT = process.env.PORT || 3000;
+
+// ── GRACEFUL SHUTDOWN ────────────────────────────────────────────────────────
+// Tutup semua sesi aktif sebelum proses Node dihentikan (Ctrl+C, systemd stop, dll.)
+async function gracefulShutdown(signal) {
+    console.log(`\n🛑 ${signal} received — shutting down gracefully`);
+    await closeAllActiveSessions(`server-shutdown-${signal}`).catch(() => {});
+    process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
 if (require.main === module) {
     app.listen(PORT, () => {
