@@ -82,7 +82,7 @@ function updateDashboard(data) {
     setVal('afr', data.afr, 1);
     setVal('tps', data.tps, 0);
 
-    applyVisual('rpm', data.rpm, { type: 'gauge', max: 4500 });
+    applyVisual('rpm', data.rpm, { type: 'gauge', max: 6000 });
     applyVisual('afr', data.afr, { type: 'gauge', max: 20 });
     applyVisual('tps', data.tps, { type: 'gauge', max: 100 });
     applyVisual('coolant', data.coolant || data.temp, { type: 'bar', max: 120 });
