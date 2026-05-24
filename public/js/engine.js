@@ -2,7 +2,11 @@
 const API_URL = '/api';
 const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','fuel','afr','tps'];
 const ESP_FRESHNESS_MS = 15000;
-
+const SYNC_THRESHOLDS = {
+    voltDeltaMax: 10,
+    freqDeltaMax: 0.5,
+    phaseDeltaMax: 15
+};
 
 
 let serverThresholds = {}; 
@@ -19,6 +23,27 @@ function setEspConnectionStatus(isConnected) {
         el.className = 'indicator ind-off';
         el.innerHTML = 'Disconnected';
     }
+}
+
+
+function getSyncByThreshold(data) {
+    const vGen = Number(data?.volt);
+    const vGrid = Number(data?.volt_grid ?? data?.voltGrid);
+    const fGen = Number(data?.freq);
+    const fGrid = Number(data?.freq_grid ?? data?.freqGrid);
+    const phase = Number(data?.phaseAngle ?? data?.phase_angle ?? data?.phaseDiff);
+
+    const hasVolt = Number.isFinite(vGen) && Number.isFinite(vGrid);
+    const hasFreq = Number.isFinite(fGen) && Number.isFinite(fGrid);
+    const hasPhase = Number.isFinite(phase);
+
+    if (!hasVolt || !hasFreq || !hasPhase) return String(data?.sync || 'UNKNOWN').toUpperCase();
+
+    const voltOk = Math.abs(vGen - vGrid) <= SYNC_THRESHOLDS.voltDeltaMax;
+    const freqOk = Math.abs(fGen - fGrid) <= SYNC_THRESHOLDS.freqDeltaMax;
+    const phaseOk = Math.abs(phase) <= SYNC_THRESHOLDS.phaseDeltaMax;
+
+    return (voltOk && freqOk && phaseOk) ? 'SYNC' : 'UNSYNC';
 }
 
 // === DATA FETCHING ===
@@ -62,8 +87,9 @@ async function fetchAlerts() {
 // === UI UPDATE LOGIC ===
 function updateDashboard(data) {
     const syncEl = document.getElementById('syncIndicator');
-    syncEl.innerText = data.sync || 'UNKNOWN';
-    syncEl.className = data.sync === 'ON-GRID' ? 'indicator ind-on' : 'indicator ind-off';
+    const syncStatus = getSyncByThreshold(data);
+    syncEl.innerText = syncStatus;
+    syncEl.className = ['ON-GRID', 'SYNC', 'SYNCHRONIZED'].includes(syncStatus) ? 'indicator ind-on' : 'indicator ind-off';
 
     const setVal = (id, val, fixed=0) => {
         const el = document.getElementById(id + 'Val');
@@ -74,6 +100,7 @@ function updateDashboard(data) {
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
     setVal('power', data.power, 0);
+    setVal('phase', data.phaseAngle ?? data.phase_angle ?? data.phaseDiff, 1);
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
     setVal('fuel', data.fuel, 0);
@@ -92,6 +119,7 @@ function updateDashboard(data) {
     applyVisual('amp', data.amp, { type: 'text' });
     applyVisual('freq', data.freq, { type: 'text' });
     applyVisual('batt', data.batt ?? data.battery ?? data.battVolt, { type: 'text' });
+    applyVisual('phase', data.phaseAngle ?? data.phase_angle ?? data.phaseDiff, { type: 'text' });
 
     if (data._realtime) {
         const realtimeBadge = document.getElementById('realtimeBadge');
