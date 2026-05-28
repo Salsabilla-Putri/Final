@@ -25,7 +25,8 @@ const SENSORS = {
     fuel:    { name: 'Fuel',           unit: '%',   icon: 'fas fa-gas-pump',        color: '#10b981' },
     iat:     { name: 'Intake Air',     unit: '°C',  icon: 'fas fa-wind',            color: '#f59e0b' },
     batt:    { name: 'Battery Voltage',unit: 'V',   icon: 'fas fa-car-battery',     color: '#6366f1' },
-    afr:     { name: 'AFR',            unit: '',    icon: 'fas fa-burn',            color: '#3b82f6' }
+    afr:     { name: 'AFR',            unit: '',    icon: 'fas fa-burn',            color: '#3b82f6' },
+    phase:   { name: 'Phase Difference', unit: '°',   icon: 'fas fa-code-compare',    color: '#0ea5e9' }
 };
 
 const SENSOR_LIMITS = {
@@ -39,7 +40,8 @@ const SENSOR_LIMITS = {
     fuel:    { min: 0,   max: 100  },
     iat:     { min: -20, max: 120  },
     batt:    { min: 0,   max: 24   },
-    afr:     { min: 0,   max: 40   }
+    afr:     { min: 0,   max: 40   },
+    phase:   { min: -180,max: 180  }
 };
 
 let myChart               = null;
@@ -292,7 +294,10 @@ function normalizeReportRows(rows) {
 
         Object.keys(SENSORS).forEach((sensorKey) => {
             if (sensorKey === 'temp' || sensorKey === 'coolant' || sensorKey === 'power') return;
-            normalizedRow[sensorKey] = cleanSensorValue(sensorKey, row[sensorKey]);
+            const rawValue = sensorKey === 'phase'
+                ? (row.phase ?? row.phaseAngle ?? row.phase_angle ?? row.phaseDiff)
+                : row[sensorKey];
+            normalizedRow[sensorKey] = cleanSensorValue(sensorKey, rawValue);
         });
 
         return normalizedRow;
@@ -1253,6 +1258,8 @@ function showNoDataMessage() {
     setText('totalHours',   '-- hrs');
     setText('daysActive',   '-- days');
     setText('longestSession','-- hrs');
+    setText('phaseDiffSummary', '--°');
+    setText('syncStatusSummary', '--');
 }
 
 function setText(id, value) {
@@ -1293,6 +1300,18 @@ function updateOverview(data) {
         setText('totalHours',    `${totalHours.toFixed(1)} hrs`);
         setText('daysActive',    `${daysSet.size} days`);
         setText('longestSession',`${(maxSession / 3600).toFixed(1)} hrs`);
+
+        const latest = data[data.length - 1] || {};
+        const vGen = Number(latest.volt);
+        const vGrid = Number(latest.volt_grid ?? latest.voltGrid);
+        const fGen = Number(latest.freq);
+        const fGrid = Number(latest.freq_grid ?? latest.freqGrid);
+        const phase = Number(latest.phase ?? latest.phaseAngle ?? latest.phase_angle ?? latest.phaseDiff);
+        const voltOk = Number.isFinite(vGen) && Number.isFinite(vGrid) && Math.abs(vGen - vGrid) <= 10;
+        const freqOk = Number.isFinite(fGen) && Number.isFinite(fGrid) && Math.abs(fGen - fGrid) <= 0.5;
+        const phaseOk = Number.isFinite(phase) && Math.abs(phase) <= 15;
+        setText('phaseDiffSummary', Number.isFinite(phase) ? `${phase.toFixed(1)}°` : '--°');
+        setText('syncStatusSummary', (voltOk && freqOk && phaseOk) ? 'SYNC' : 'UNSYNC');
     } catch (e) { console.error('Error in updateOverview:', e); }
 }
 

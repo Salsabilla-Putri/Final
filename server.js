@@ -506,8 +506,12 @@ setInterval(async () => {
 
 mqttClient.on('connect', () => {
     console.log('✅ Connected to MQTT Broker (shiftr.io)');
+    mqttClient.subscribe('gen/realtime', (err) => {
+        if (err) console.error('❌ Subscribe error (gen/realtime):', err.message);
+        else console.log('📡 Subscribed to gen/realtime');
+    });
     mqttClient.subscribe('gen/data', (err) => {
-        if (err) console.error('❌ Subscribe error:', err.message);
+        if (err) console.error('❌ Subscribe error (gen/data):', err.message);
         else console.log('📡 Subscribed to gen/data');
     });
 });
@@ -739,7 +743,7 @@ function normalizeFftPayload(rawPayload, fallbackDeviceId) {
 
 mqttClient.on('message', async (topic, message) => {
     try {
-        if (topic !== 'gen/data') return;
+        if (topic !== 'gen/realtime' && topic !== 'gen/data') return;
 
         const raw = message.toString();
         let parsed;
@@ -750,24 +754,46 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        latestData = normalizeGeneratorPayload(parsed);
-        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-        if (fftDoc) {
-            await new FFTData(fftDoc).save();
-            latestData.fft = {
-                valid: true,
-                source: fftDoc.source,
-                sampleRateHz: fftDoc.sampleRateHz,
-                samples: fftDoc.samples,
-                resolutionHz: fftDoc.resolutionHz,
-                peakHz: fftDoc.peakHz,
-                peakMagnitude: fftDoc.peakMagnitude,
-                rms: fftDoc.rms,
-                freqBins: fftDoc.freqBins,
-                magBins: fftDoc.magBins
-            };
+        if (topic === 'gen/realtime') {
+            latestData = normalizeGeneratorPayload(parsed);
+            const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
+            if (fftDoc) {
+                latestData.fft = {
+                    valid: true,
+                    source: fftDoc.source,
+                    sampleRateHz: fftDoc.sampleRateHz,
+                    samples: fftDoc.samples,
+                    resolutionHz: fftDoc.resolutionHz,
+                    peakHz: fftDoc.peakHz,
+                    peakMagnitude: fftDoc.peakMagnitude,
+                    rms: fftDoc.rms,
+                    freqBins: fftDoc.freqBins,
+                    magBins: fftDoc.magBins
+                };
+            }
+            return;
         }
-        await autoSaveLatestData();
+
+        if (topic === 'gen/data') {
+            latestData = normalizeGeneratorPayload(parsed);
+            const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
+            if (fftDoc) {
+                await new FFTData(fftDoc).save();
+                latestData.fft = {
+                    valid: true,
+                    source: fftDoc.source,
+                    sampleRateHz: fftDoc.sampleRateHz,
+                    samples: fftDoc.samples,
+                    resolutionHz: fftDoc.resolutionHz,
+                    peakHz: fftDoc.peakHz,
+                    peakMagnitude: fftDoc.peakMagnitude,
+                    rms: fftDoc.rms,
+                    freqBins: fftDoc.freqBins,
+                    magBins: fftDoc.magBins
+                };
+            }
+            await autoSaveLatestData();
+        }
     } catch (error) {
         console.error('❌ MQTT Message Error:', error);
     }
