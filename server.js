@@ -92,8 +92,7 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
     freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, status: String, oil: Number, iat: Number,
-    map: Number, batt: Number, afr: Number, tps: Number
+    sync: String, status: String, iat: Number, batt: Number, afr: Number, tps: Number
 });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
