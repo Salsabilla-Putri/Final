@@ -210,8 +210,9 @@ function fmtHours(h) {
  * Endpoint  : GET /api/generator-active-time/history?limit=200
  * Response  : { success: true, data: [{ startedAt, endedAt }, ...] }
  *
- * Setiap sesi tanpa endedAt dianggap masih berjalan (endedAt = sekarang).
- * Sesi yang melintas tengah malam dipecah per-hari secara proporsional.
+ * Sesi tanpa endedAt memakai effectiveEndedAt dari server agar waktu tidak terus
+ * bertambah saat ECU sudah tidak terkoneksi. Sesi yang melintas tengah malam
+ * dipecah per-hari secara proporsional.
  */
 async function initChart() {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
@@ -230,14 +231,16 @@ async function initChart() {
     }
 
     try {
-        const res  = await fetch(`${API_URL}/generator-active-time/history?limit=200`);
+        const startDate = new Date(now.getTime() - 7 * 86400000).toISOString();
+        const res  = await fetch(`${API_URL}/generator-active-time/history?limit=500&startDate=${encodeURIComponent(startDate)}`);
         const json = await res.json();
 
         if (json.success && Array.isArray(json.data)) {
             json.data.forEach(r => {
                 const start = new Date(r.startedAt);
-                // Sesi masih berjalan (belum ada endedAt) → gunakan waktu sekarang
-                const end   = r.endedAt ? new Date(r.endedAt) : now;
+                // Untuk sesi terbuka, gunakan effectiveEndedAt/effectiveDurationMs dari server.
+                // Ini mencegah chart menghitung waktu disconnect sebagai jam aktif.
+                const end   = r.effectiveEndedAt ? new Date(r.effectiveEndedAt) : (r.endedAt ? new Date(r.endedAt) : now);
 
                 if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
 

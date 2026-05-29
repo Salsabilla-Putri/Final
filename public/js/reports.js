@@ -450,11 +450,12 @@ async function fetchLatestSnapshotRows() {
     return { result, rows: normalizeReportRows(data) };
 }
 
-async function fetchLatestEspFft({ startDate, endDate, deviceId }) {
+async function fetchLatestEspFft({ startDate, endDate, deviceId, source }) {
     const params = new URLSearchParams();
     if (startDate) params.set('startDate', startDate.toISOString());
     if (endDate) params.set('endDate', endDate.toISOString());
     if (deviceId) params.set('deviceId', deviceId);
+    if (source) params.set('source', source);
 
     const response = await fetchFirstAvailable(buildApiCandidates('/api/fft/latest', params.toString()));
     if (!response || !response.ok) return null;
@@ -907,21 +908,24 @@ function extractEspFftFromRows(rows, sensorKey) {
     if (!fft && typeof latestRow.fft_json === 'string') {
         try { fft = JSON.parse(latestRow.fft_json); } catch (_) { fft = null; }
     }
-    if (!fft || fft.valid !== true) return null;
+    if (!fft) return null;
+    const freqBinsCandidate = Array.isArray(fft.freqBins) ? fft.freqBins : [];
+    const magBinsCandidate = Array.isArray(fft.magBins) ? fft.magBins : [];
+    if (fft.valid === false && (!freqBinsCandidate.length || !magBinsCandidate.length)) return null;
 
     const source = String(fft.source || '').toLowerCase();
     const normalizedSensor = String(sensorKey || '').toLowerCase();
 
     const sensorAliases = {
-        rpm: ['rpm', 'speed', 'rotation'],
-        freq: ['freq', 'frequency', 'hz'],
-        volt: ['volt', 'voltage', 'v']
+        rpm: ['rpm', 'rpm_fft', 'speed', 'rotation'],
+        freq: ['freq', 'freq_fft', 'frequency', 'hz'],
+        volt: ['volt', 'volt_fft', 'voltage', 'v']
     };
     const aliases = sensorAliases[normalizedSensor] || [normalizedSensor];
     const sourceMatchesSensor = !normalizedSensor || !source || aliases.includes(source);
 
-    const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins : [];
-    const magBins = Array.isArray(fft.magBins) ? fft.magBins : [];
+    const freqBins = freqBinsCandidate;
+    const magBins = magBinsCandidate;
     const len = Math.min(freqBins.length, magBins.length);
     if (!len) return null;
 
@@ -1034,7 +1038,7 @@ async function renderFftAnalysis(data) {
         const startDate = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
         const endDate = dateTo ? new Date(`${dateTo}T23:59:59.999`) : null;
         const deviceId = getReportDeviceId();
-        const fftDoc = await fetchLatestEspFft({ startDate, endDate, deviceId });
+        const fftDoc = await fetchLatestEspFft({ startDate, endDate, deviceId, source: sensorKey });
         if (fftDoc) espFftResult = extractEspFftFromRows([{ fft: fftDoc }], sensorKey);
     } catch (e) {
         console.warn('Failed to fetch FFT from API:', e.message);
