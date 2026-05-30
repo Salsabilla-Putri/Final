@@ -92,7 +92,7 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
     freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, status: String, iat: Number, batt: Number, afr: Number, tps: Number
+    sync: String, status: String, iat: Number, map: Number, batt: Number, afr: Number, tps: Number
 });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
@@ -377,7 +377,8 @@ let ACTIVE_THRESHOLDS = {
     fuel: { min: 20 },
     amp: { max: 100 },
     freq: { min: 48, max: 52 },
-    batt: { min: 11.8, max: 14.8 }
+    batt: { min: 11.8, max: 14.8 },
+    map: { min: 20, max: 250 }
 };
 
 // Fungsi Load dari DB ke Memory Server
@@ -726,7 +727,8 @@ async function checkAndSaveAlerts(data) {
     check('temp', data.temp);
     check('fuel', data.fuel);
     check('iat', data.iat);
-        check('afr', data.afr);
+    check('map', data.map);
+    check('afr', data.afr);
     check('tps', data.tps);
     check('batt', data.batt);
 
@@ -1079,6 +1081,7 @@ app.get('/api/public/dashboard', async (req, res) => {
                     fuel: { percent: fuelPercent, hoursLeft: fuelHoursLeft.toFixed(1), description: fuelPercent > 50 ? "Cukup" : (fuelPercent > 20 ? "Mulai Menipis" : "Segera Isi") },
                     power: { kw: powerKw.toFixed(1), lamps: equivalentLamps, description: powerKw > 15 ? "Beban Tinggi" : (powerKw > 5 ? "Beban Normal" : "Beban Ringan") },
                     temperature: { value: temp, status: tempStatus },
+                    map: { value: latest.map || 0, status: latest.map >= 20 && latest.map <= 250 ? 'Normal' : 'Perlu Dicek' },
                     voltage: { value: latest.volt, status: latest.volt > 210 ? "Stabil" : (latest.volt > 190 ? "Terganggu" : "Tidak Stabil") }
                 }
             }
@@ -1628,7 +1631,7 @@ app.post('/api/reports/analysis', async (req, res) => {
 // ── Helper: build MongoDB aggregation stats (bySensor) ──────────────────────
 //  Runs a single $group pipeline over the given query and returns the same
 //  { totalMatched, bySensor } shape expected by the frontend.
-const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','afr','tps','batt'];
+const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','map','afr','tps','batt'];
 
 async function buildSensorStats(collection, matchQuery) {
     const groupStage = { _id: null, totalMatched: { $sum: 1 } };
@@ -1702,6 +1705,7 @@ app.get('/api/reports', async (req, res) => {
                 coolant: normalizeNumeric(row.coolant ?? row.temp ?? row.temperature),
                 fuel:    normalizeNumeric(row.fuel),
                 iat:     normalizeNumeric(row.iat),
+                map:     normalizeNumeric(row.map ?? row.mapPressure ?? row.manifoldPressure),
                 batt:    normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
                 afr:     normalizeNumeric(row.afr),
                 tps:     normalizeNumeric(row.tps)

@@ -20,6 +20,7 @@ const PARAMS = {
     fuel: { unit: '%', min: 20, warn: 30, color: '#10b981' }, // Hijau
     coolant: { unit: '°C', max: 100, warn: 90, color: '#06b6d4' }, // Cyan
     iat: { unit: '°C', color: '#f59e0b' }, // Amber
+    map: { unit: 'kPa', color: '#0f766e' }, // Teal
     batt: { unit: 'Volt', max: 24, warn: 22, min: 10, color: '#6366f1' }, // Indigo
     afr: { unit: 'R', color: '#3b82f6' }, // Blue
     tps: { unit: '%', color: '#a855f7' } // Purple
