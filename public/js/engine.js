@@ -266,8 +266,12 @@ window.removeThreshold = async () => {
 
 // === INIT ===
 document.addEventListener('DOMContentLoaded', () => {
-    fetch('sidebar.html').then(r=>r.text()).then(h=>document.getElementById('sidebar-container').innerHTML=h);
-    document.getElementById('userarea').querySelector('span').innerText = localStorage.getItem('username') || 'Pengguna';
+    // Sidebar dimuat dan dikontrol oleh public/js/sidebar.js agar konsisten
+    // dengan halaman lain. Jangan memuat ulang sidebar di sini karena bisa
+    // menimpa tombol mobile, overlay, active state, dan event logout.
+    const userLabel = document.querySelector('#userarea span');
+    if (userLabel) userLabel.innerText = localStorage.getItem('username') || 'Pengguna';
+
     setEspConnectionStatus(false);
     loadThresholds();
     fetchData();
