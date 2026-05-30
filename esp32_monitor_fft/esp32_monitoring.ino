@@ -1133,8 +1133,13 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
 
+  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
+  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
+
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
+  json += "\"amp\":" + String(currentA, 2) + ",";
+  json += "\"power\":" + String(powerKW, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
@@ -1165,6 +1170,8 @@ String buildJsonParameterBatchPayload() {
 String buildJsonRecord(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
   const FFTData &f = r.fft;
+  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
+  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
 
   String json = "{";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
@@ -1186,6 +1193,8 @@ String buildJsonRecord(const StorageRecord &r) {
 
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
+  json += "\"amp\":" + String(currentA, 2) + ",";
+  json += "\"power\":" + String(powerKW, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
@@ -1314,7 +1323,7 @@ void initSDCard() {
   if (!SD.exists(DB_FILE)) {
     File f = SD.open(DB_FILE, FILE_WRITE);
     if (f) {
-      f.println("timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms");
+      f.println("timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms");
       f.close();
     }
   }
@@ -1326,6 +1335,8 @@ void initSDCard() {
 String buildCsvLine(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
   const FFTData &f = r.fft;
+  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
+  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
 
   String line = "";
   line += getCsvTimestampWIBms(); line += ",";
@@ -1343,6 +1354,8 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.fuelAvg, 1); line += ",";
   line += String(a.freqAvg, 3); line += ",";
   line += String(a.voltAvg, 2); line += ",";
+  line += String(currentA, 2); line += ",";
+  line += String(powerKW, 3); line += ",";
   line += String(a.phaseAngleAvg, 2); line += ",";
   line += String(a.synced ? 1 : 0); line += ",";
   line += String(f.peakHz, 3); line += ",";
@@ -2362,9 +2375,14 @@ String buildCloudEstimateRecordOnly() {
   json += "\"clt\":" + String(a.cltAvg, 1) + ",";
   json += "\"afr\":" + String(a.afrAvg, 2) + ",";
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
+  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
+  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
+
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
+  json += "\"amp\":" + String(currentA, 2) + ",";
+  json += "\"power\":" + String(powerKW, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
   json += "}";
@@ -2397,7 +2415,7 @@ void printDatabaseReport() {
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
 
   Serial.println(F("LOCAL SD PARAMETERS"));
-  Serial.println(F("  timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms"));
+  Serial.println(F("  timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms"));
 
   Serial.println(F("CLOUD / MONGODB ESTIMATE (PARAMETER ONLY, FFT EXCLUDED)"));
   Serial.print  (F("  mqtt status     : ")); Serial.println(mqtt.connected() ? F("CONNECTED") : F("DISCONNECTED"));
@@ -2410,7 +2428,7 @@ void printDatabaseReport() {
   Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
   Serial.print  (F("  pub OK/FAIL     : ")); Serial.print(mqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(mqttPublishFailCount);
   Serial.println(F("CLOUD PARAMETERS"));
-  Serial.println(F("  deviceId,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,phaseAngle,synced"));
+  Serial.println(F("  deviceId,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced"));
   Serial.println(F("NOTE: freqGrid dan voltGrid tetap dipakai untuk display/sinkronisasi, tetapi tidak disimpan ke database."));
   Serial.println(F("========================================================"));
 }
@@ -2483,7 +2501,7 @@ void resetSDDatabase() {
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
     File f = SD.open(DB_FILE, FILE_WRITE);
     if (f) {
-      f.println(F("timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms"));
+      f.println(F("timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms"));
       f.close();
       dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0;
       Serial.println(F("[DB] database.csv reset OK."));

@@ -44,6 +44,7 @@ async function connectDB() {
         console.log('✅ MongoDB Connected');
         connectionPromise = null;
         await loadThresholdsFromDB();
+        await cleanupGeneratorDataFieldsFromDB();
     }).catch((err) => {
         connectionPromise = null; // reset agar bisa retry di request berikutnya
         throw err;
@@ -56,12 +57,35 @@ async function connectDB() {
 const generatorDataSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     deviceId: { type: String, required: true },
-    rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
-    freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
+    rpm: Number, volt: Number, amp: Number, power: Number,
+    freq: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, status: String, oil: Number, iat: Number,
     map: Number, batt: Number, afr: Number, tps: Number
-});
+}, { versionKey: false });
 const GeneratorData = mongoose.models.GeneratorData || mongoose.model('GeneratorData', generatorDataSchema, 'generatordatas');
+
+async function cleanupGeneratorDataFieldsFromDB() {
+    try {
+        if (!GeneratorData?.collection) return;
+
+        const result = await GeneratorData.collection.updateMany(
+            {
+                $or: [
+                    { __v: { $exists: true } },
+                    { volt_grid: { $exists: true } },
+                    { freq_grid: { $exists: true } }
+                ]
+            },
+            { $unset: { __v: '', volt_grid: '', freq_grid: '' } }
+        );
+
+        if (result.modifiedCount > 0) {
+            console.log(`🧹 Cleaned ${result.modifiedCount} generator data docs: removed __v, volt_grid, freq_grid`);
+        }
+    } catch (error) {
+        console.error('Generator data cleanup error:', error.message);
+    }
+}
 
 const alertSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
@@ -189,13 +213,74 @@ async function loadThresholdsFromDB() {
 // ─── MQTT (best-effort, non-blocking) ────────────────────────────────────────
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
-    rpm: 0, volt: 0, volt_grid: 0, amp: 0, power: 0, freq: 0, freq_grid: 0, temp: 0, coolant: 0,
+    rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let lastPersistAt = 0;
 
 let activeSessions = new Map();
 const ACTIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+
+function firstDefined(...values) {
+    return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function readCoolantValue(payload = {}) {
+    return firstDefined(
+        payload.coolant,
+        payload.clt,
+        payload.cltAvg,
+        payload.coolantTemp,
+        payload.coolant_temp,
+        payload.engineCoolant,
+        payload.engine_coolant,
+        payload.ect
+    );
+}
+
+function readAmpValue(payload = {}) {
+    return firstDefined(
+        payload.amp,
+        payload.current,
+        payload.currentA,
+        payload.current_a,
+        payload.generatorCurrent,
+        payload.generator_current,
+        payload.arus
+    );
+}
+
+function readPowerValue(payload = {}) {
+    const powerKw = firstDefined(
+        payload.power,
+        payload.powerKW,
+        payload.powerKw,
+        payload.power_kW,
+        payload.power_kw,
+        payload.kw,
+        payload.kW,
+        payload.daya
+    );
+    if (powerKw !== undefined) return powerKw;
+
+    const powerWatt = firstDefined(payload.watt, payload.watts, payload.powerW, payload.power_w);
+    const parsedWatt = Number(powerWatt);
+    return Number.isFinite(parsedWatt) ? parsedWatt / 1000 : undefined;
+}
+
+function pickEffectivePayload(rawPayload) {
+    const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
+    const records = Array.isArray(payload.records) ? payload.records : [];
+    const latestRecord = records.length ? records[records.length - 1] : null;
+    if (!latestRecord || typeof latestRecord !== 'object') return payload;
+
+    return {
+        ...payload,
+        ...latestRecord,
+        deviceId: latestRecord.deviceId || payload.deviceId,
+        fft: latestRecord.fft ?? payload.fft
+    };
+}
 
 async function syncActiveTimeHistory(data) {
     const status = String(data?.status || '').toUpperCase();
@@ -288,9 +373,10 @@ function initMQTT() {
             }
         };
 
-        const applySnapshot = (snapshot) => {
+        const applySnapshot = (rawSnapshot) => {
+            const snapshot = pickEffectivePayload(rawSnapshot);
             if (!snapshot || typeof snapshot !== 'object') return;
-            const numericKeys = ['rpm', 'volt', 'volt_grid', 'amp', 'power', 'freq', 'freq_grid', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
+            const numericKeys = ['rpm', 'volt', 'freq', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
             const nextData = { ...latestData };
 
             nextData.deviceId = snapshot.deviceId || nextData.deviceId;
@@ -304,11 +390,30 @@ function initMQTT() {
                 }
             }
 
-            if (snapshot.coolant === undefined && snapshot.temp !== undefined) {
-                nextData.coolant = Number(snapshot.temp) || nextData.coolant;
+            const coolantValue = readCoolantValue(snapshot);
+            if (coolantValue !== undefined) {
+                const parsedCoolant = Number(coolantValue);
+                if (Number.isFinite(parsedCoolant)) nextData.coolant = parsedCoolant;
             }
-            if (snapshot.temp === undefined && snapshot.coolant !== undefined) {
-                nextData.temp = Number(snapshot.coolant) || nextData.temp;
+
+            const ampValue = readAmpValue(snapshot);
+            if (ampValue !== undefined) {
+                const parsedAmp = Number(ampValue);
+                if (Number.isFinite(parsedAmp)) nextData.amp = parsedAmp;
+            }
+
+            const powerValue = readPowerValue(snapshot);
+            if (powerValue !== undefined) {
+                const parsedPower = Number(powerValue);
+                if (Number.isFinite(parsedPower)) nextData.power = parsedPower;
+            } else if (nextData.volt && nextData.amp) {
+                nextData.power = (nextData.volt * nextData.amp) / 1000;
+            }
+
+            const tempValue = firstDefined(snapshot.temp, snapshot.temperature);
+            if (tempValue !== undefined) {
+                const parsedTemp = Number(tempValue);
+                if (Number.isFinite(parsedTemp)) nextData.temp = parsedTemp;
             }
 
             latestData = nextData;
