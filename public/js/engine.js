@@ -26,7 +26,23 @@ function setEspConnectionStatus(isConnected) {
 }
 
 
+function normalizeSyncStatus(data = {}) {
+    if (data.synced !== undefined && data.synced !== null && data.synced !== '') {
+        const value = typeof data.synced === 'string' ? data.synced.trim().toLowerCase() : data.synced;
+        if ([true, 1, 'true', '1', 'on-grid', 'ongrid'].includes(value)) return 'ON-GRID';
+        if ([false, 0, 'false', '0', 'off-grid', 'offgrid'].includes(value)) return 'OFF-GRID';
+    }
+
+    const rawSync = String(data.sync ?? data.syncStatus ?? data.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync)) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync)) return 'OFF-GRID';
+    return rawSync || 'UNKNOWN';
+}
+
 function getSyncByThreshold(data) {
+    const espSyncStatus = normalizeSyncStatus(data);
+    if (espSyncStatus !== 'UNKNOWN') return espSyncStatus;
+
     const vGen = Number(data?.volt);
     const vGrid = Number(data?.volt_grid ?? data?.voltGrid);
     const fGen = Number(data?.freq);
@@ -37,13 +53,13 @@ function getSyncByThreshold(data) {
     const hasFreq = Number.isFinite(fGen) && Number.isFinite(fGrid);
     const hasPhase = Number.isFinite(phase);
 
-    if (!hasVolt || !hasFreq || !hasPhase) return String(data?.sync || 'UNKNOWN').toUpperCase();
+    if (!hasVolt || !hasFreq || !hasPhase) return 'UNKNOWN';
 
     const voltOk = Math.abs(vGen - vGrid) <= SYNC_THRESHOLDS.voltDeltaMax;
     const freqOk = Math.abs(fGen - fGrid) <= SYNC_THRESHOLDS.freqDeltaMax;
     const phaseOk = Math.abs(phase) <= SYNC_THRESHOLDS.phaseDeltaMax;
 
-    return (voltOk && freqOk && phaseOk) ? 'SYNC' : 'UNSYNC';
+    return (voltOk && freqOk && phaseOk) ? 'ON-GRID' : 'OFF-GRID';
 }
 
 // === DATA FETCHING ===
@@ -89,7 +105,7 @@ function updateDashboard(data) {
     const syncEl = document.getElementById('syncIndicator');
     const syncStatus = getSyncByThreshold(data);
     syncEl.innerText = syncStatus;
-    syncEl.className = ['ON-GRID', 'SYNC', 'SYNCHRONIZED'].includes(syncStatus) ? 'indicator ind-on' : 'indicator ind-off';
+    syncEl.className = syncStatus === 'ON-GRID' ? 'indicator ind-on' : 'indicator ind-off';
 
     const setVal = (id, val, fixed=0) => {
         const el = document.getElementById(id + 'Val');
