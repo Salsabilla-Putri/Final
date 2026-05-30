@@ -90,7 +90,9 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, synced: Boolean, status: String, iat: Number, map: Number, batt: Number, afr: Number, tps: Number
+    sync: String, synced: Boolean, status: String,
+    iat: Number, map: Number, batt: Number, afr: Number, tps: Number,
+    phaseAngle: Number
 }, { versionKey: false });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
@@ -436,7 +438,7 @@ const mqttClient = mqtt
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
+    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, phaseAngle: 0
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
@@ -676,35 +678,118 @@ mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
 
-// Auto-save ke DB setiap 1 detik dari snapshot gen/data.
-// ESP32 mengirim semua variabel sebagai satu JSON ke topik gen/data.
-let lastSaveAt = 0;
-const SAVE_INTERVAL_MS = 1_000; // simpan tiap 1 detik
+// ============================================================
+// MONGODB BATCH SAVE
+// Realtime data tetap diterima setiap 1 detik dari MQTT,
+// tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
+// setiap 5 menit atau saat buffer mencapai 300 record.
+// ============================================================
 
-async function autoSaveLatestData() {
-    if (!isDbReady()) return;
-    const now = Date.now();
-    if (now - lastSaveAt < SAVE_INTERVAL_MS) return;
-    lastSaveAt = now;
+const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '300000', 10); // 5 menit
+const DB_BATCH_MAX_RECORDS = parseInt(process.env.DB_BATCH_MAX_RECORDS || '300', 10);
 
-    try {
-        const snapshot = { ...latestData, timestamp: new Date() };
+let generatorBatchBuffer = [];
+let fftBatchBuffer = [];
+let isFlushingGeneratorBatch = false;
 
-        // Tentukan status dari RPM
-        if (snapshot.rpm > 0) {
-            snapshot.status = snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
-        } else {
-            snapshot.status = 'STOPPED';
-        }
+function buildGeneratorDbDocument(data) {
+    const snapshot = { ...data };
 
-        await new GeneratorData(snapshot).save();
-        await syncActiveTimeHistory(snapshot);
-        await checkAndSaveAlerts(snapshot);
-        console.log(`💾 Auto-saved | rpm=${snapshot.rpm} volt=${snapshot.volt} sync=${snapshot.sync}`);
-    } catch (saveErr) {
-        console.error('❌ Auto-save Error:', saveErr.message);
+    if (snapshot.rpm > 0) {
+        snapshot.status = snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
+    } else {
+        snapshot.status = 'STOPPED';
+    }
+
+    const ts = snapshot.timestamp ? new Date(snapshot.timestamp) : new Date();
+
+    return {
+        timestamp: Number.isNaN(ts.getTime()) ? new Date() : ts,
+        deviceId: snapshot.deviceId || 'ESP32_GENERATOR_01',
+        rpm: toNumber(snapshot.rpm, 0),
+        volt: toNumber(snapshot.volt, 0),
+        amp: toNumber(snapshot.amp, 0),
+        power: toNumber(snapshot.power, 0),
+        freq: toNumber(snapshot.freq, 0),
+        temp: toNumber(snapshot.temp, 0),
+        coolant: toNumber(snapshot.coolant, 0),
+        fuel: toNumber(snapshot.fuel, 0),
+        sync: snapshot.sync || 'OFF-GRID',
+        synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
+        status: snapshot.status,
+        iat: toNumber(snapshot.iat, 0),
+        map: toNumber(snapshot.map, 0),
+        batt: toNumber(snapshot.batt, 0),
+        afr: toNumber(snapshot.afr, 0),
+        tps: toNumber(snapshot.tps, 0),
+        phaseAngle: toNumber(snapshot.phaseAngle, 0)
+    };
+}
+
+function addGeneratorDataToBatch(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return;
+
+    const doc = buildGeneratorDbDocument(snapshot);
+    generatorBatchBuffer.push(doc);
+
+    if (generatorBatchBuffer.length >= DB_BATCH_MAX_RECORDS) {
+        flushGeneratorBatch('max-records').catch((err) => {
+            console.error('❌ Batch flush error:', err.message);
+        });
     }
 }
+
+function addFftDataToBatch(fftDoc) {
+    if (!fftDoc || typeof fftDoc !== 'object') return;
+
+    fftBatchBuffer.push(fftDoc);
+}
+
+async function flushGeneratorBatch(reason = 'interval') {
+    if (isFlushingGeneratorBatch) return;
+    if (!generatorBatchBuffer.length && !fftBatchBuffer.length) return;
+
+    if (!isDbReady()) {
+        console.warn(`⚠️ MongoDB not ready, batch retained | generator=${generatorBatchBuffer.length} fft=${fftBatchBuffer.length}`);
+        return;
+    }
+
+    isFlushingGeneratorBatch = true;
+
+    const generatorBatch = generatorBatchBuffer.splice(0, generatorBatchBuffer.length);
+    const fftBatch = fftBatchBuffer.splice(0, fftBatchBuffer.length);
+
+    try {
+        if (generatorBatch.length > 0) {
+            // Hanya simpan data historis.
+            // Alert dan active-time diproses realtime di handler MQTT gen/realtime,
+            // sehingga tidak dobel saat batch 5 menit disimpan.
+            await GeneratorData.insertMany(generatorBatch, { ordered: false });
+        }
+
+        if (fftBatch.length > 0) {
+            await FFTData.insertMany(fftBatch, { ordered: false });
+        }
+
+        console.log(
+            `💾 MongoDB batch saved | reason=${reason} | generator=${generatorBatch.length} records | fft=${fftBatch.length} records`
+        );
+    } catch (err) {
+        console.error('❌ MongoDB batch save error:', err.message);
+
+        // Jika gagal, masukkan kembali ke depan buffer agar tidak hilang.
+        generatorBatchBuffer = generatorBatch.concat(generatorBatchBuffer);
+        fftBatchBuffer = fftBatch.concat(fftBatchBuffer);
+    } finally {
+        isFlushingGeneratorBatch = false;
+    }
+}
+
+setInterval(() => {
+    flushGeneratorBatch('interval-5min').catch((err) => {
+        console.error('❌ Scheduled batch flush error:', err.message);
+    });
+}, DB_BATCH_INTERVAL_MS);
 
 // LOGIC ALARM DINAMIS (Menggunakan ACTIVE_THRESHOLDS)
 // --- LOGIC ALARM DINAMIS (UPDATED) ---
@@ -782,28 +867,6 @@ async function checkAndSaveAlerts(data) {
         }
     }
 }
-// --- TAMBAHAN API UNTUK HALAMAN ALARM ---
-
-// 1. Acknowledge (Konfirmasi) Alarm - Mengubah Status jadi "Resolved"
-app.put('/api/alerts/:id/ack', async (req, res) => {
-    try {
-        await Alert.findByIdAndUpdate(req.params.id, { resolved: true });
-        res.json({ success: true, message: 'Alert Acknowledged' });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// 2. Hapus Alarm dari Database
-app.delete('/api/alerts/:id', async (req, res) => {
-    try {
-        await Alert.findByIdAndDelete(req.params.id);
-        res.json({ success: true, message: 'Alert Deleted' });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
 function toNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
@@ -963,53 +1026,51 @@ mqttClient.on('message', async (topic, message) => {
 
         const raw = message.toString();
         let parsed;
+
         try {
             parsed = JSON.parse(raw);
         } catch (parseError) {
-            console.warn('⚠️ Invalid JSON on gen/data:', raw);
+            console.warn(`⚠️ Invalid JSON on ${topic}:`, raw);
             return;
         }
 
+        // Semua topic tetap memperbarui latestData agar dashboard tidak kosong
+        // meskipun salah satu topic terlambat atau belum aktif.
+        latestData = normalizeGeneratorPayload(parsed);
+
+        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
+        if (fftDoc) {
+            latestData.fft = {
+                valid: true,
+                source: fftDoc.source,
+                sampleRateHz: fftDoc.sampleRateHz,
+                samples: fftDoc.samples,
+                resolutionHz: fftDoc.resolutionHz,
+                peakHz: fftDoc.peakHz,
+                peakMagnitude: fftDoc.peakMagnitude,
+                rms: fftDoc.rms,
+                freqBins: fftDoc.freqBins,
+                magBins: fftDoc.magBins
+            };
+        }
+
+        // gen/realtime = jalur realtime untuk dashboard, alert, dan active-time.
+        // Tidak masuk ke buffer database agar tidak terjadi double record jika
+        // ESP32 juga mengirim data yang sama ke gen/data.
         if (topic === 'gen/realtime') {
-            latestData = normalizeGeneratorPayload(parsed);
-            const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-            if (fftDoc) {
-                latestData.fft = {
-                    valid: true,
-                    source: fftDoc.source,
-                    sampleRateHz: fftDoc.sampleRateHz,
-                    samples: fftDoc.samples,
-                    resolutionHz: fftDoc.resolutionHz,
-                    peakHz: fftDoc.peakHz,
-                    peakMagnitude: fftDoc.peakMagnitude,
-                    rms: fftDoc.rms,
-                    freqBins: fftDoc.freqBins,
-                    magBins: fftDoc.magBins
-                };
-            }
+            await checkAndSaveAlerts(latestData);
+            await syncActiveTimeHistory(latestData);
             return;
         }
 
+        // gen/data = jalur histori database.
+        // Data ditampung di buffer, lalu disimpan ke MongoDB menggunakan insertMany
+        // setiap 5 menit atau saat mencapai 300 record.
         if (topic === 'gen/data') {
-            latestData = normalizeGeneratorPayload(parsed);
-            const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-            if (fftDoc) {
-                await new FFTData(fftDoc).save();
-                latestData.fft = {
-                    valid: true,
-                    source: fftDoc.source,
-                    sampleRateHz: fftDoc.sampleRateHz,
-                    samples: fftDoc.samples,
-                    resolutionHz: fftDoc.resolutionHz,
-                    peakHz: fftDoc.peakHz,
-                    peakMagnitude: fftDoc.peakMagnitude,
-                    rms: fftDoc.rms,
-                    freqBins: fftDoc.freqBins,
-                    magBins: fftDoc.magBins
-                };
-            }
-            await autoSaveLatestData();
+            addGeneratorDataToBatch(latestData);
+            if (fftDoc) addFftDataToBatch(fftDoc);
         }
+
     } catch (error) {
         console.error('❌ MQTT Message Error:', error);
     }
