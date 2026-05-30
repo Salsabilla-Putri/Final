@@ -90,7 +90,7 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, status: String, iat: Number, map: Number, batt: Number, afr: Number, tps: Number
+    sync: String, synced: Boolean, status: String, iat: Number, map: Number, batt: Number, afr: Number, tps: Number
 }, { versionKey: false });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
@@ -856,6 +856,20 @@ function readPowerValue(payload = {}) {
     return Number.isFinite(parsedWatt) ? parsedWatt / 1000 : undefined;
 }
 
+function normalizeSyncStatus(payload = {}, fallbackSync = 'OFF-GRID') {
+    if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
+        const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
+        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid') return 'ON-GRID';
+        if (value === false || value === 0 || value === 'false' || value === '0' || value === 'off-grid' || value === 'offgrid') return 'OFF-GRID';
+    }
+
+    const rawSync = firstDefined(payload.sync, payload.syncStatus, payload.gridStatus, fallbackSync, 'OFF-GRID');
+    const key = String(rawSync).trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(key)) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(key)) return 'OFF-GRID';
+    return key || 'OFF-GRID';
+}
+
 function pickEffectivePayload(rawPayload) {
     const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
     const records = Array.isArray(payload.records) ? payload.records : [];
@@ -875,6 +889,8 @@ function normalizeGeneratorPayload(rawPayload) {
     const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
     const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
 
+    const syncStatus = normalizeSyncStatus(payload, latestData.sync);
+
     const snapshot = {
         ...latestData,
         deviceId: payload.deviceId || latestData.deviceId || 'ESP32_GENERATOR_01',
@@ -887,7 +903,8 @@ function normalizeGeneratorPayload(rawPayload) {
         temp: toNumber(firstDefined(payload.temp, payload.temperature), latestData.temp),
         coolant: toNumber(readCoolantValue(payload), latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
-        sync: String(payload.sync || latestData.sync || 'OFF-GRID'),
+        sync: syncStatus,
+        synced: syncStatus === 'ON-GRID',
         status: String(payload.status || latestData.status || 'STOPPED'),
         oil: toNumber(payload.oil, latestData.oil),
         iat: toNumber(payload.iat, latestData.iat),
