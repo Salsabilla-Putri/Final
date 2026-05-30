@@ -92,7 +92,7 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
     freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, status: String, iat: Number, batt: Number, afr: Number, tps: Number
+    sync: String, status: String, iat: Number, map: Number, batt: Number, afr: Number, tps: Number
 });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
@@ -143,6 +143,7 @@ const activeTimeHistorySchema = new mongoose.Schema({
     startedAt: { type: Date, required: true, index: true },
     endedAt: { type: Date, default: null, index: true },
     durationMs: { type: Number, default: 0 },
+    closeReason: { type: String, default: null },
     source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' },
     calc: {
         rpmThreshold: { type: Number, default: 0 },
@@ -376,7 +377,8 @@ let ACTIVE_THRESHOLDS = {
     fuel: { min: 20 },
     amp: { max: 100 },
     freq: { min: 48, max: 52 },
-    batt: { min: 11.8, max: 14.8 }
+    batt: { min: 11.8, max: 14.8 },
+    map: { min: 20, max: 250 }
 };
 
 // Fungsi Load dari DB ke Memory Server
@@ -413,19 +415,157 @@ let latestData = {
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let activeSessions = new Map();
-const ACTIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
-const ECU_DISCONNECT_THRESHOLD_MS = 30 * 1000;
+const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
+const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
 
-async function syncActiveTimeHistory(data) {
+function isEngineRunning(data) {
     const status = String(data?.status || '').toUpperCase();
     const rpm = Number(data?.rpm || 0);
+    return status === 'RUNNING' || status === 'ON-GRID' || rpm > 0;
+}
+
+function safeEventTime(value) {
+    const dt = value ? new Date(value) : new Date();
+    return Number.isNaN(dt.getTime()) ? new Date() : dt;
+}
+
+function getSessionSampledAt(row) {
+    const sampledAt = row?.calc?.sampledAt ? new Date(row.calc.sampledAt) : null;
+    if (sampledAt && !Number.isNaN(sampledAt.getTime())) return sampledAt;
+    const startedAt = row?.startedAt ? new Date(row.startedAt) : null;
+    return startedAt && !Number.isNaN(startedAt.getTime()) ? startedAt : new Date();
+}
+
+function getEffectiveSessionEnd(row, referenceTime = new Date()) {
+    const endedAt = row?.endedAt ? new Date(row.endedAt) : null;
+    if (endedAt && !Number.isNaN(endedAt.getTime())) return endedAt;
+
+    const sampledAt = getSessionSampledAt(row);
+    const reference = safeEventTime(referenceTime);
+    const elapsedSinceSample = reference.getTime() - sampledAt.getTime();
+    return elapsedSinceSample > ACTIVE_SESSION_TIMEOUT_MS ? sampledAt : reference;
+}
+
+function decorateActiveTimeRow(row, referenceTime = new Date()) {
+    const plain = typeof row?.toObject === 'function' ? row.toObject() : { ...row };
+    const startedAt = safeEventTime(plain.startedAt);
+    const effectiveEndedAt = getEffectiveSessionEnd(plain, referenceTime);
+    const effectiveDurationMs = Math.max(0, effectiveEndedAt.getTime() - startedAt.getTime());
+
+    return {
+        ...plain,
+        effectiveEndedAt,
+        effectiveDurationMs,
+        isOpen: !plain.endedAt && effectiveEndedAt.getTime() >= referenceTime.getTime() - 1000
+    };
+}
+
+async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 'esp32_disconnect') {
+    const start = safeEventTime(startedAt);
+    const end = safeEventTime(endedAt);
+    const durationMs = Math.max(0, end.getTime() - start.getTime());
+
+    return ActiveTimeHistory.findOneAndUpdate(
+        { deviceId, startedAt: start, endedAt: null },
+        {
+            endedAt: end,
+            durationMs,
+            closeReason: reason,
+            calc: { rpmThreshold: 0, sampledAt: end }
+        },
+        { sort: { createdAt: -1 }, new: true }
+    );
+}
+
+async function closeActiveSessions(reason = 'esp32_disconnect', requestedDeviceId = null) {
+    const closed = [];
+
+    for (const [key, session] of activeSessions.entries()) {
+        const [deviceId] = key.split('|');
+        if (requestedDeviceId && deviceId !== requestedDeviceId) continue;
+        const endedAt = session.lastSeenAt || new Date();
+        try {
+            const row = await finalizeOpenActiveSession(deviceId, session.startedAt, endedAt, reason);
+            if (row) closed.push(row);
+        } catch (e) {
+            console.error('Failed closing active session:', e.message);
+        }
+        activeSessions.delete(key);
+    }
+
+    const query = { endedAt: null };
+    if (requestedDeviceId) query.deviceId = requestedDeviceId;
+    const openRows = await ActiveTimeHistory.find(query).lean();
+    for (const row of openRows) {
+        const endedAt = getEffectiveSessionEnd(row, new Date());
+        try {
+            const updated = await finalizeOpenActiveSession(row.deviceId, row.startedAt, endedAt, reason);
+            if (updated) closed.push(updated);
+        } catch (e) {
+            console.error('Failed closing DB active session:', e.message);
+        }
+    }
+
+    return closed;
+}
+
+async function closeStaleActiveSessions(requestedDeviceId = null) {
+    const closed = [];
+    const now = new Date();
+
+    for (const [key, session] of activeSessions.entries()) {
+        const [deviceId] = key.split('|');
+        if (requestedDeviceId && deviceId !== requestedDeviceId) continue;
+        if (now.getTime() - session.lastSeenAt.getTime() <= ACTIVE_SESSION_TIMEOUT_MS) continue;
+        try {
+            const row = await finalizeOpenActiveSession(deviceId, session.startedAt, session.lastSeenAt, 'esp32_disconnect');
+            if (row) closed.push(row);
+        } catch (e) {
+            console.error('Failed closing stale active session:', e.message);
+        }
+        activeSessions.delete(key);
+    }
+
+    const query = { endedAt: null };
+    if (requestedDeviceId) query.deviceId = requestedDeviceId;
+    const openRows = await ActiveTimeHistory.find(query).lean();
+    for (const row of openRows) {
+        const sampledAt = getSessionSampledAt(row);
+        if (now.getTime() - sampledAt.getTime() <= ACTIVE_SESSION_TIMEOUT_MS) continue;
+        try {
+            const updated = await finalizeOpenActiveSession(row.deviceId, row.startedAt, sampledAt, 'esp32_disconnect');
+            if (updated) closed.push(updated);
+        } catch (e) {
+            console.error('Failed closing stale DB active session:', e.message);
+        }
+    }
+
+    return closed;
+}
+
+async function syncActiveTimeHistory(data) {
     const rpmThreshold = 0;
-    const eventTime = data?.timestamp ? new Date(data.timestamp) : new Date();
-    const isEcuConnected = Math.abs(Date.now() - eventTime.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS;
-    const isRunning = isEcuConnected && (status === 'RUNNING' || rpm > rpmThreshold);
+    const eventTime = safeEventTime(data?.timestamp);
+    const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
+    const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
+    const isRunning = isEcuConnected && isEngineRunning(data);
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
-    const session = activeSessions.get(key);
+    let session = activeSessions.get(key);
+
+    if (!session) {
+        const openRow = await ActiveTimeHistory.findOne({ deviceId, endedAt: null }).sort({ startedAt: -1 }).lean();
+        if (openRow) {
+            const sampledAt = getSessionSampledAt(openRow);
+            const gapMs = eventTime.getTime() - sampledAt.getTime();
+            if (isRunning && gapMs >= 0 && gapMs <= ACTIVE_SESSION_TIMEOUT_MS) {
+                session = { startedAt: safeEventTime(openRow.startedAt), lastSeenAt: sampledAt };
+                activeSessions.set(key, session);
+            } else {
+                await finalizeOpenActiveSession(deviceId, openRow.startedAt, sampledAt, 'esp32_disconnect');
+            }
+        }
+    }
 
     if (isRunning && !session) {
         activeSessions.set(key, { startedAt: eventTime, lastSeenAt: eventTime });
@@ -441,13 +581,7 @@ async function syncActiveTimeHistory(data) {
     if (isRunning && session) {
         const gapMs = eventTime.getTime() - session.lastSeenAt.getTime();
         if (gapMs > ACTIVE_SESSION_TIMEOUT_MS) {
-            const endedAt = new Date(session.lastSeenAt.getTime() + ACTIVE_SESSION_TIMEOUT_MS);
-            const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
-            await ActiveTimeHistory.findOneAndUpdate(
-                { deviceId, startedAt: session.startedAt, endedAt: null },
-                { endedAt, durationMs, calc: { rpmThreshold, sampledAt: session.lastSeenAt } },
-                { sort: { createdAt: -1 } }
-            );
+            await finalizeOpenActiveSession(deviceId, session.startedAt, session.lastSeenAt, 'esp32_disconnect');
 
             activeSessions.set(key, { startedAt: eventTime, lastSeenAt: eventTime });
             await ActiveTimeHistory.create({
@@ -469,13 +603,13 @@ async function syncActiveTimeHistory(data) {
     }
 
     if (!isRunning && session) {
-        const durationMs = Math.max(0, eventTime.getTime() - session.startedAt.getTime());
-        await ActiveTimeHistory.findOneAndUpdate(
-            { deviceId, startedAt: session.startedAt, endedAt: null },
-            { endedAt: eventTime, durationMs, calc: { rpmThreshold, sampledAt: eventTime } },
-            { sort: { createdAt: -1 } }
-        );
+        await finalizeOpenActiveSession(deviceId, session.startedAt, eventTime, 'engine_stopped');
         activeSessions.delete(key);
+        return;
+    }
+
+    if (!isRunning) {
+        await closeActiveSessions(isEcuConnected ? 'engine_stopped' : 'esp32_disconnect', deviceId);
     }
 }
 
@@ -487,15 +621,10 @@ setInterval(async () => {
         if (idleMs <= ACTIVE_SESSION_TIMEOUT_MS) continue;
 
         const [deviceId] = key.split('|');
-        const endedAt = new Date(session.lastSeenAt.getTime() + ACTIVE_SESSION_TIMEOUT_MS);
-        const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
+        const endedAt = session.lastSeenAt;
 
         try {
-            await ActiveTimeHistory.findOneAndUpdate(
-                { deviceId, startedAt: session.startedAt, endedAt: null },
-                { endedAt, durationMs, calc: { rpmThreshold: 0, sampledAt: session.lastSeenAt } },
-                { sort: { createdAt: -1 } }
-            );
+            await finalizeOpenActiveSession(deviceId, session.startedAt, endedAt, 'esp32_disconnect');
         } catch (e) {
             console.error('Failed closing stale active session:', e.message);
         }
@@ -598,7 +727,8 @@ async function checkAndSaveAlerts(data) {
     check('temp', data.temp);
     check('fuel', data.fuel);
     check('iat', data.iat);
-        check('afr', data.afr);
+    check('map', data.map);
+    check('afr', data.afr);
     check('tps', data.tps);
     check('batt', data.batt);
 
@@ -951,6 +1081,7 @@ app.get('/api/public/dashboard', async (req, res) => {
                     fuel: { percent: fuelPercent, hoursLeft: fuelHoursLeft.toFixed(1), description: fuelPercent > 50 ? "Cukup" : (fuelPercent > 20 ? "Mulai Menipis" : "Segera Isi") },
                     power: { kw: powerKw.toFixed(1), lamps: equivalentLamps, description: powerKw > 15 ? "Beban Tinggi" : (powerKw > 5 ? "Beban Normal" : "Beban Ringan") },
                     temperature: { value: temp, status: tempStatus },
+                    map: { value: latest.map || 0, status: latest.map >= 20 && latest.map <= 250 ? 'Normal' : 'Perlu Dicek' },
                     voltage: { value: latest.volt, status: latest.volt > 210 ? "Stabil" : (latest.volt > 190 ? "Terganggu" : "Tidak Stabil") }
                 }
             }
@@ -992,9 +1123,38 @@ app.get('/api/engine-data/history', async (req, res) => {
     }
 });
 
+function normalizeFftApiDoc(doc) {
+    if (!doc) return null;
+    const freqBins = Array.isArray(doc.freqBins) ? doc.freqBins.map(Number).filter(Number.isFinite) : [];
+    const magBins = Array.isArray(doc.magBins) ? doc.magBins.map(Number).filter(Number.isFinite) : [];
+    const len = Math.min(freqBins.length, magBins.length);
+    return {
+        ...doc,
+        valid: len > 0,
+        freqBins: freqBins.slice(0, len),
+        magBins: magBins.slice(0, len),
+        samples: Number(doc.samples) || len,
+        sampleRateHz: Number(doc.sampleRateHz) || 0,
+        resolutionHz: Number(doc.resolutionHz) || 0,
+        peakHz: Number(doc.peakHz) || 0,
+        peakMagnitude: Number(doc.peakMagnitude) || 0,
+        rms: Number(doc.rms) || 0
+    };
+}
+
+function buildFftSourceAliases(source) {
+    const key = String(source || '').toLowerCase();
+    const aliases = {
+        rpm: ['rpm', 'rpm_fft', 'speed', 'rotation'],
+        freq: ['freq', 'freq_fft', 'frequency', 'hz'],
+        volt: ['volt', 'volt_fft', 'voltage', 'v']
+    };
+    return aliases[key] || (key ? [key] : []);
+}
+
 app.get('/api/fft/latest', async (req, res) => {
     try {
-        const { deviceId, startDate, endDate } = req.query;
+        const { deviceId, startDate, endDate, source } = req.query;
         const query = {};
         if (deviceId) query.deviceId = deviceId;
         if (startDate || endDate) {
@@ -1002,8 +1162,14 @@ app.get('/api/fft/latest', async (req, res) => {
             if (startDate) query.timestamp.$gte = new Date(startDate);
             if (endDate) query.timestamp.$lte = new Date(endDate);
         }
-        const latest = await FFTData.findOne(query).sort({ timestamp: -1 }).lean();
-        res.json({ success: true, data: latest || null });
+
+        const aliases = buildFftSourceAliases(source);
+        const sourcePatterns = aliases.map((alias) => new RegExp(`^${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+        const sourceQuery = sourcePatterns.length ? { ...query, source: { $in: sourcePatterns } } : query;
+        let latest = await FFTData.findOne(sourceQuery).sort({ timestamp: -1 }).lean();
+        if (!latest && aliases.length) latest = await FFTData.findOne(query).sort({ timestamp: -1 }).lean();
+
+        res.json({ success: true, data: normalizeFftApiDoc(latest) });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1043,8 +1209,38 @@ app.get('/api/generator-active-time/history', async (req, res) => {
             if (endDate) query.startedAt.$lte = new Date(endDate);
         }
 
-        const rows = await ActiveTimeHistory.find(query).sort({ startedAt: -1 }).limit(parseInt(limit, 10));
-        res.json({ success: true, count: rows.length, data: rows });
+        await closeStaleActiveSessions(effectiveDeviceId);
+        const now = new Date();
+        const rows = await ActiveTimeHistory.find(query).sort({ startedAt: -1 }).limit(parseInt(limit, 10)).lean();
+        const data = rows.map((row) => decorateActiveTimeRow(row, now));
+        res.json({ success: true, count: data.length, data });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
+app.post('/api/active-session/close', async (req, res) => {
+    try {
+        const requestedDeviceId = req.body?.deviceId || req.query.deviceId || null;
+        const reason = req.body?.reason || req.query.reason || 'esp32_disconnect';
+        const closed = await closeActiveSessions(reason, requestedDeviceId);
+        res.json({ success: true, closed: closed.length });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/daily-active-time/recalculate', async (req, res) => {
+    try {
+        const requestedDeviceId = req.body?.deviceId || req.query.deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const closed = await closeStaleActiveSessions(requestedDeviceId);
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const rows = await ActiveTimeHistory.find({ deviceId: requestedDeviceId, startedAt: { $gte: startOfToday } }).lean();
+        const now = new Date();
+        const totalDurationMs = rows.reduce((sum, row) => sum + decorateActiveTimeRow(row, now).effectiveDurationMs, 0);
+        res.json({ success: true, closed: closed.length, totalDurationMs, totalDurationHours: +(totalDurationMs / 3600000).toFixed(2) });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1059,14 +1255,11 @@ app.get('/api/generator-active-time/stats', async (req, res) => {
         const query = { startedAt: { $gte: since } };
         if (effectiveDeviceId) query.deviceId = effectiveDeviceId;
 
+        await closeStaleActiveSessions(effectiveDeviceId);
+        const now = new Date();
         const rows = await ActiveTimeHistory.find(query).lean();
-        const now = Date.now();
         const totalDurationMs = rows.reduce((sum, row) => {
-            const started = new Date(row.startedAt).getTime();
-            const sampledAt = row?.calc?.sampledAt ? new Date(row.calc.sampledAt).getTime() : started;
-            const impliedEnded = Math.min(now, sampledAt + ACTIVE_SESSION_TIMEOUT_MS);
-            const ended = row.endedAt ? new Date(row.endedAt).getTime() : impliedEnded;
-            return sum + Math.max(0, ended - started);
+            return sum + decorateActiveTimeRow(row, now).effectiveDurationMs;
         }, 0);
 
         res.json({
@@ -1438,7 +1631,7 @@ app.post('/api/reports/analysis', async (req, res) => {
 // ── Helper: build MongoDB aggregation stats (bySensor) ──────────────────────
 //  Runs a single $group pipeline over the given query and returns the same
 //  { totalMatched, bySensor } shape expected by the frontend.
-const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','afr','tps','batt'];
+const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','map','afr','tps','batt'];
 
 async function buildSensorStats(collection, matchQuery) {
     const groupStage = { _id: null, totalMatched: { $sum: 1 } };
@@ -1512,6 +1705,7 @@ app.get('/api/reports', async (req, res) => {
                 coolant: normalizeNumeric(row.coolant ?? row.temp ?? row.temperature),
                 fuel:    normalizeNumeric(row.fuel),
                 iat:     normalizeNumeric(row.iat),
+                map:     normalizeNumeric(row.map ?? row.mapPressure ?? row.manifoldPressure),
                 batt:    normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
                 afr:     normalizeNumeric(row.afr),
                 tps:     normalizeNumeric(row.tps)

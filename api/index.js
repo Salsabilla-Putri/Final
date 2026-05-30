@@ -171,7 +171,8 @@ let ACTIVE_THRESHOLDS = {
     volt: { min: 180, max: 250 }, fuel: { min: 20 },
     amp: { max: 100 },
     freq: { min: 48, max: 52 },
-    batt: { min: 11.8, max: 14.8 }
+    batt: { min: 11.8, max: 14.8 },
+    map: { min: 20, max: 250 }
 };
 
 async function loadThresholdsFromDB() {
@@ -352,7 +353,7 @@ async function checkAndSaveAlerts(data) {
             alertsToSave.push({ parameter: param, value: val, message: `${param.toUpperCase()} Too Low (< ${T[param].min})`, severity });
         }
     };
-    ['rpm','volt','amp','freq','power','coolant','temp','fuel','iat','afr','tps','batt']
+    ['rpm','volt','amp','freq','power','coolant','temp','fuel','iat','map','afr','tps','batt']
         .forEach(p => check(p, data[p]));
 
     if (alertsToSave.length > 0) {
@@ -830,7 +831,7 @@ app.get('/api/reports', async (req, res) => {
                 amp: normalizeNumeric(row.amp ?? row.current), power: normalizeNumeric(row.power ?? row.kw),
                 freq: normalizeNumeric(row.freq ?? row.frequency), temp: normalizeNumeric(row.temp ?? row.temperature),
                 coolant: normalizeNumeric(row.coolant ?? row.temp), fuel: normalizeNumeric(row.fuel),
-                iat: normalizeNumeric(row.iat), batt: normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
+                iat: normalizeNumeric(row.iat), map: normalizeNumeric(row.map ?? row.mapPressure ?? row.manifoldPressure), batt: normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
                 afr: normalizeNumeric(row.afr), tps: normalizeNumeric(row.tps)
             };
         };
@@ -878,6 +879,8 @@ app.get('/api/reports', async (req, res) => {
                     fuelAvg: { $avg: '$fuel' }, fuelMin: { $min: '$fuel' }, fuelMax: { $max: '$fuel' },
                     iatCount: { $sum: { $cond: [{ $ne: ['$iat', null] }, 1, 0] } },
                     iatAvg: { $avg: '$iat' }, iatMin: { $min: '$iat' }, iatMax: { $max: '$iat' },
+                    mapCount: { $sum: { $cond: [{ $ne: ['$map', null] }, 1, 0] } },
+                    mapAvg: { $avg: '$map' }, mapMin: { $min: '$map' }, mapMax: { $max: '$map' },
                     battCount: { $sum: { $cond: [{ $ne: ['$batt', null] }, 1, 0] } },
                     battAvg: { $avg: '$batt' }, battMin: { $min: '$batt' }, battMax: { $max: '$batt' },
                     afrCount: { $sum: { $cond: [{ $ne: ['$afr', null] }, 1, 0] } },
@@ -887,7 +890,7 @@ app.get('/api/reports', async (req, res) => {
         ];
 
         const summary = (await GeneratorData.aggregate(summaryPipeline))[0] || {};
-        const sensorKeys = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','batt','afr','tps'];
+        const sensorKeys = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','map','batt','afr','tps'];
         const bySensor = {};
 
         sensorKeys.forEach((key) => {

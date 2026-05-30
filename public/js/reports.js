@@ -24,6 +24,7 @@ const SENSORS = {
     coolant: { name: 'Coolant',        unit: '°C',  icon: 'fas fa-snowflake',       color: '#06b6d4' },
     fuel:    { name: 'Fuel',           unit: '%',   icon: 'fas fa-gas-pump',        color: '#10b981' },
     iat:     { name: 'Intake Air',     unit: '°C',  icon: 'fas fa-wind',            color: '#f59e0b' },
+    map:     { name: 'MAP',            unit: 'kPa', icon: 'fas fa-gauge-high',      color: '#0f766e' },
     batt:    { name: 'Battery Voltage',unit: 'V',   icon: 'fas fa-car-battery',     color: '#6366f1' },
     afr:     { name: 'AFR',            unit: '',    icon: 'fas fa-burn',            color: '#3b82f6' },
     phase:   { name: 'Phase Difference', unit: '°',   icon: 'fas fa-code-compare',    color: '#0ea5e9' }
@@ -39,6 +40,7 @@ const SENSOR_LIMITS = {
     coolant: { min: -20, max: 180  },
     fuel:    { min: 0,   max: 100  },
     iat:     { min: -20, max: 120  },
+    map:     { min: 0,   max: 250  },
     batt:    { min: 0,   max: 24   },
     afr:     { min: 0,   max: 40   },
     phase:   { min: -180,max: 180  }
@@ -435,7 +437,7 @@ function createDemoRows() {
         power: 620 + index * 22, freq: 50 + ((index % 2) * 0.08),
         temp: 76 + index, coolant: 76 + index, fuel: 68 - index,
         iat: 31 + (index * 0.4), batt: 12.4 + (Math.random() * 0.8),
-        afr: 14.1 + (index * 0.05), tps: 34 + index, status: 'DEMO', sync: 'SIMULATED'
+        afr: 14.1 + (index * 0.05), map: 95 + index * 2, tps: 34 + index, status: 'DEMO', sync: 'SIMULATED'
     }));
 }
 
@@ -450,11 +452,12 @@ async function fetchLatestSnapshotRows() {
     return { result, rows: normalizeReportRows(data) };
 }
 
-async function fetchLatestEspFft({ startDate, endDate, deviceId }) {
+async function fetchLatestEspFft({ startDate, endDate, deviceId, source }) {
     const params = new URLSearchParams();
     if (startDate) params.set('startDate', startDate.toISOString());
     if (endDate) params.set('endDate', endDate.toISOString());
     if (deviceId) params.set('deviceId', deviceId);
+    if (source) params.set('source', source);
 
     const response = await fetchFirstAvailable(buildApiCandidates('/api/fft/latest', params.toString()));
     if (!response || !response.ok) return null;
@@ -907,21 +910,24 @@ function extractEspFftFromRows(rows, sensorKey) {
     if (!fft && typeof latestRow.fft_json === 'string') {
         try { fft = JSON.parse(latestRow.fft_json); } catch (_) { fft = null; }
     }
-    if (!fft || fft.valid !== true) return null;
+    if (!fft) return null;
+    const freqBinsCandidate = Array.isArray(fft.freqBins) ? fft.freqBins : [];
+    const magBinsCandidate = Array.isArray(fft.magBins) ? fft.magBins : [];
+    if (fft.valid === false && (!freqBinsCandidate.length || !magBinsCandidate.length)) return null;
 
     const source = String(fft.source || '').toLowerCase();
     const normalizedSensor = String(sensorKey || '').toLowerCase();
 
     const sensorAliases = {
-        rpm: ['rpm', 'speed', 'rotation'],
-        freq: ['freq', 'frequency', 'hz'],
-        volt: ['volt', 'voltage', 'v']
+        rpm: ['rpm', 'rpm_fft', 'speed', 'rotation'],
+        freq: ['freq', 'freq_fft', 'frequency', 'hz'],
+        volt: ['volt', 'volt_fft', 'voltage', 'v']
     };
     const aliases = sensorAliases[normalizedSensor] || [normalizedSensor];
     const sourceMatchesSensor = !normalizedSensor || !source || aliases.includes(source);
 
-    const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins : [];
-    const magBins = Array.isArray(fft.magBins) ? fft.magBins : [];
+    const freqBins = freqBinsCandidate;
+    const magBins = magBinsCandidate;
     const len = Math.min(freqBins.length, magBins.length);
     if (!len) return null;
 
@@ -1034,7 +1040,7 @@ async function renderFftAnalysis(data) {
         const startDate = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
         const endDate = dateTo ? new Date(`${dateTo}T23:59:59.999`) : null;
         const deviceId = getReportDeviceId();
-        const fftDoc = await fetchLatestEspFft({ startDate, endDate, deviceId });
+        const fftDoc = await fetchLatestEspFft({ startDate, endDate, deviceId, source: sensorKey });
         if (fftDoc) espFftResult = extractEspFftFromRows([{ fft: fftDoc }], sensorKey);
     } catch (e) {
         console.warn('Failed to fetch FFT from API:', e.message);
