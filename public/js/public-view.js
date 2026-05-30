@@ -672,6 +672,7 @@ function updatePerformanceSection(data) {
     const voltVal = pickValue(p.voltage?.value, p.volt?.value, p.voltage, p.volt, data.voltage, data.volt);
     const fuelVal = pickValue(p.fuel?.percent, p.fuel?.value, p.fuel, data.fuel);
     const tempVal = pickValue(p.temperature?.value, p.coolant?.value, p.temp?.value, p.temperature, p.coolant, p.temp, data.temperature, data.coolant, data.temp);
+    const mapVal = pickValue(p.map?.value, p.map, data.map);
 
     const powerVal = pickValue(p.power?.kw, p.power?.value, p.kw?.value, p.power, p.kw, data.power, data.kw);
 
@@ -685,6 +686,7 @@ function updatePerformanceSection(data) {
         { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240), raw: voltVal, min: 180, max: 250 },
         { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5), raw: powerVal, min: 0, max: 8 },
         { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90), raw: tempVal, min: 20, max: 120 },
+        { name: 'MAP', icon: 'fa-gauge-high', value: metricText(mapVal, 'kPa', 0), status: statusOf(mapVal, 20, 250), raw: mapVal, min: 0, max: 250 },
         { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100), raw: fuelVal, min: 0, max: 100 }
     ];
 

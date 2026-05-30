@@ -1,6 +1,6 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
-const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','fuel','afr','tps'];
+const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps'];
 const ESP_FRESHNESS_MS = 15000;
 const SYNC_THRESHOLDS = {
     voltDeltaMax: 10,
@@ -103,6 +103,7 @@ function updateDashboard(data) {
     setVal('phase', data.phaseAngle ?? data.phase_angle ?? data.phaseDiff, 1);
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
+    setVal('map', data.map, 0);
     setVal('fuel', data.fuel, 0);
     setVal('rpm', data.rpm, 0);
     setVal('batt', data.batt ?? data.battery ?? data.battVolt, 1);
@@ -114,6 +115,7 @@ function updateDashboard(data) {
     applyVisual('tps', data.tps, { type: 'gauge', max: 100 });
     applyVisual('coolant', data.coolant || data.temp, { type: 'bar', max: 120 });
     applyVisual('iat', data.iat, { type: 'bar', max: 100 });
+    applyVisual('map', data.map, { type: 'bar', max: 250 });
     applyVisual('fuel', data.fuel, { type: 'bar', max: 100 });
     applyVisual('volt', data.volt, { type: 'text' });
     applyVisual('amp', data.amp, { type: 'text' });

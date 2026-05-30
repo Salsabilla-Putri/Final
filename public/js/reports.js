@@ -24,6 +24,7 @@ const SENSORS = {
     coolant: { name: 'Coolant',        unit: '°C',  icon: 'fas fa-snowflake',       color: '#06b6d4' },
     fuel:    { name: 'Fuel',           unit: '%',   icon: 'fas fa-gas-pump',        color: '#10b981' },
     iat:     { name: 'Intake Air',     unit: '°C',  icon: 'fas fa-wind',            color: '#f59e0b' },
+    map:     { name: 'MAP',            unit: 'kPa', icon: 'fas fa-gauge-high',      color: '#0f766e' },
     batt:    { name: 'Battery Voltage',unit: 'V',   icon: 'fas fa-car-battery',     color: '#6366f1' },
     afr:     { name: 'AFR',            unit: '',    icon: 'fas fa-burn',            color: '#3b82f6' },
     phase:   { name: 'Phase Difference', unit: '°',   icon: 'fas fa-code-compare',    color: '#0ea5e9' }
@@ -39,6 +40,7 @@ const SENSOR_LIMITS = {
     coolant: { min: -20, max: 180  },
     fuel:    { min: 0,   max: 100  },
     iat:     { min: -20, max: 120  },
+    map:     { min: 0,   max: 250  },
     batt:    { min: 0,   max: 24   },
     afr:     { min: 0,   max: 40   },
     phase:   { min: -180,max: 180  }
@@ -435,7 +437,7 @@ function createDemoRows() {
         power: 620 + index * 22, freq: 50 + ((index % 2) * 0.08),
         temp: 76 + index, coolant: 76 + index, fuel: 68 - index,
         iat: 31 + (index * 0.4), batt: 12.4 + (Math.random() * 0.8),
-        afr: 14.1 + (index * 0.05), tps: 34 + index, status: 'DEMO', sync: 'SIMULATED'
+        afr: 14.1 + (index * 0.05), map: 95 + index * 2, tps: 34 + index, status: 'DEMO', sync: 'SIMULATED'
     }));
 }
 

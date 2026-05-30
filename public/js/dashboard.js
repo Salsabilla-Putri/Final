@@ -77,6 +77,7 @@ async function updateSensorData() {
             checkLimit('st-amp',  displayData.amp,   0,   100);
             checkLimit('st-freq', displayData.freq,  48,  52);
             checkLimit('st-fuel', displayData.fuel,  20,  100);
+            checkLimit('st-map',  displayData.map,   20,  250);
             checkLimit('st-afr',  displayData.afr,   10,  18);
         }
     } catch (e) {
