@@ -70,6 +70,7 @@ async function ensureDbReady() {
     .then(async () => {
         console.log('✅ MongoDB Connected');
         await loadThresholdsFromDB(); // Load threshold saat server nyala/reconnect
+        await cleanupGeneratorDataFieldsFromDB();
     })
     .catch((err) => {
         console.error('❌ MongoDB Connection Error:', err);
@@ -83,18 +84,38 @@ async function ensureDbReady() {
     return isDbReady();
 }
 
-// DATABASE (startup connect + auto retry via ensureDbReady saat endpoint dipanggil)
-ensureDbReady().catch(() => undefined);
-
 // --- SCHEMAS ---
 const generatorDataSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     deviceId: { type: String, required: true },
-    rpm: Number, volt: Number, volt_grid: Number, amp: Number, power: Number,
-    freq: Number, freq_grid: Number, temp: Number, coolant: Number, fuel: Number,
+    rpm: Number, volt: Number, amp: Number, power: Number,
+    freq: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, status: String, iat: Number, map: Number, batt: Number, afr: Number, tps: Number
-});
+}, { versionKey: false });
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
+
+async function cleanupGeneratorDataFieldsFromDB() {
+    try {
+        if (!GeneratorData?.collection) return;
+
+        const result = await GeneratorData.collection.updateMany(
+            {
+                $or: [
+                    { __v: { $exists: true } },
+                    { volt_grid: { $exists: true } },
+                    { freq_grid: { $exists: true } }
+                ]
+            },
+            { $unset: { __v: '', volt_grid: '', freq_grid: '' } }
+        );
+
+        if (result.modifiedCount > 0) {
+            console.log(`🧹 Cleaned ${result.modifiedCount} generator data docs: removed __v, volt_grid, freq_grid`);
+        }
+    } catch (error) {
+        console.error('Generator data cleanup error:', error.message);
+    }
+}
 
 const fftDataSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now, index: true },
@@ -128,6 +149,9 @@ const configSchema = new mongoose.Schema({
     value: Object // Menyimpan object JSON threshold
 });
 const Config = mongoose.model('Config', configSchema);
+
+// DATABASE (startup connect + auto retry via ensureDbReady saat endpoint dipanggil)
+ensureDbReady().catch(() => undefined);
 
 
 const userSchema = new mongoose.Schema({
@@ -411,7 +435,7 @@ const mqttClient = mqtt
 
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
-    rpm: 0, volt: 0, volt_grid: 0, amp: 0, power: 0, freq: 0, freq_grid: 0, temp: 0, coolant: 0,
+    rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let activeSessions = new Map();
@@ -785,6 +809,53 @@ function toNumber(value, fallback = 0) {
     return Number.isFinite(n) ? n : fallback;
 }
 
+function firstDefined(...values) {
+    return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function readCoolantValue(payload = {}) {
+    return firstDefined(
+        payload.coolant,
+        payload.clt,
+        payload.cltAvg,
+        payload.coolantTemp,
+        payload.coolant_temp,
+        payload.engineCoolant,
+        payload.engine_coolant,
+        payload.ect
+    );
+}
+
+function readAmpValue(payload = {}) {
+    return firstDefined(
+        payload.amp,
+        payload.current,
+        payload.currentA,
+        payload.current_a,
+        payload.generatorCurrent,
+        payload.generator_current,
+        payload.arus
+    );
+}
+
+function readPowerValue(payload = {}) {
+    const powerKw = firstDefined(
+        payload.power,
+        payload.powerKW,
+        payload.powerKw,
+        payload.power_kW,
+        payload.power_kw,
+        payload.kw,
+        payload.kW,
+        payload.daya
+    );
+    if (powerKw !== undefined) return powerKw;
+
+    const powerWatt = firstDefined(payload.watt, payload.watts, payload.powerW, payload.power_w);
+    const parsedWatt = Number(powerWatt);
+    return Number.isFinite(parsedWatt) ? parsedWatt / 1000 : undefined;
+}
+
 function pickEffectivePayload(rawPayload) {
     const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
     const records = Array.isArray(payload.records) ? payload.records : [];
@@ -810,13 +881,11 @@ function normalizeGeneratorPayload(rawPayload) {
         timestamp,
         rpm: toNumber(payload.rpm, latestData.rpm),
         volt: toNumber(payload.volt, latestData.volt),
-        volt_grid: toNumber(payload.volt_grid ?? payload.voltGrid, latestData.volt_grid),
-        amp: toNumber(payload.amp, latestData.amp),
-        power: toNumber(payload.power, latestData.power),
+        amp: toNumber(readAmpValue(payload), latestData.amp),
+        power: toNumber(readPowerValue(payload), latestData.power),
         freq: toNumber(payload.freq, latestData.freq),
-        freq_grid: toNumber(payload.freq_grid ?? payload.freqGrid, latestData.freq_grid),
-        temp: toNumber(payload.temp ?? payload.coolant, latestData.temp),
-        coolant: toNumber(payload.coolant ?? payload.temp, latestData.coolant),
+        temp: toNumber(firstDefined(payload.temp, payload.temperature), latestData.temp),
+        coolant: toNumber(readCoolantValue(payload), latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
         sync: String(payload.sync || latestData.sync || 'OFF-GRID'),
         status: String(payload.status || latestData.status || 'STOPPED'),
@@ -830,8 +899,8 @@ function normalizeGeneratorPayload(rawPayload) {
         _realtime: true
     };
 
-    if (!payload.power && snapshot.volt && snapshot.amp) {
-        snapshot.power = snapshot.volt * snapshot.amp;
+    if (readPowerValue(payload) === undefined && snapshot.volt && snapshot.amp) {
+        snapshot.power = (snapshot.volt * snapshot.amp) / 1000;
     }
 
     if (!payload.status) {
