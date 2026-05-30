@@ -99,7 +99,7 @@ function updateDashboard(data) {
     setVal('volt', data.volt, 1);
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
-    setVal('power', data.power, 0);
+    setVal('power', data.power, 2);
     setVal('phase', data.phaseAngle ?? data.phase_angle ?? data.phaseDiff, 1);
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
