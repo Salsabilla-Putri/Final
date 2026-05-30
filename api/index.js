@@ -59,7 +59,7 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, status: String, oil: Number, iat: Number,
+    sync: String, synced: Boolean, status: String, oil: Number, iat: Number,
     map: Number, batt: Number, afr: Number, tps: Number
 }, { versionKey: false });
 const GeneratorData = mongoose.models.GeneratorData || mongoose.model('GeneratorData', generatorDataSchema, 'generatordatas');
@@ -268,6 +268,20 @@ function readPowerValue(payload = {}) {
     return Number.isFinite(parsedWatt) ? parsedWatt / 1000 : undefined;
 }
 
+function normalizeSyncStatus(payload = {}, fallbackSync = 'OFF-GRID') {
+    if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
+        const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
+        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid') return 'ON-GRID';
+        if (value === false || value === 0 || value === 'false' || value === '0' || value === 'off-grid' || value === 'offgrid') return 'OFF-GRID';
+    }
+
+    const rawSync = firstDefined(payload.sync, payload.syncStatus, payload.gridStatus, fallbackSync, 'OFF-GRID');
+    const key = String(rawSync).trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(key)) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(key)) return 'OFF-GRID';
+    return key || 'OFF-GRID';
+}
+
 function pickEffectivePayload(rawPayload) {
     const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
     const records = Array.isArray(payload.records) ? payload.records : [];
@@ -380,7 +394,8 @@ function initMQTT() {
             const nextData = { ...latestData };
 
             nextData.deviceId = snapshot.deviceId || nextData.deviceId;
-            nextData.sync = snapshot.sync || nextData.sync;
+            nextData.sync = normalizeSyncStatus(snapshot, nextData.sync);
+            nextData.synced = nextData.sync === 'ON-GRID';
             nextData.status = snapshot.status || nextData.status;
 
             for (const key of numericKeys) {

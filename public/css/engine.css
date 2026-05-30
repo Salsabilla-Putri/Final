@@ -51,7 +51,7 @@ body {
 }
 .grid { 
     display: grid; gap: 16px; 
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); 
+    grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 /* === PARAM BOX === */
@@ -181,6 +181,10 @@ table.alert-table th { background: #f7fbff; font-weight: 700; color: #123; }
 .modal-footer { display: flex; gap: 8px; margin-top: 8px; }
 
 /* RESPONSIVE */
+@media (max-width: 1100px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 768px) {
     .topbar,
     .sidebar:hover ~ .topbar,

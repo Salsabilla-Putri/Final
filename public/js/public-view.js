@@ -53,6 +53,20 @@ function setConnectionStatus(online) {
         : '<i class="fas fa-circle"></i> Offline';
 }
 
+
+function normalizeSyncStatus(data = {}) {
+    if (data.synced !== undefined && data.synced !== null && data.synced !== '') {
+        const value = typeof data.synced === 'string' ? data.synced.trim().toLowerCase() : data.synced;
+        if ([true, 1, 'true', '1', 'on-grid', 'ongrid'].includes(value)) return 'ON-GRID';
+        if ([false, 0, 'false', '0', 'off-grid', 'offgrid'].includes(value)) return 'OFF-GRID';
+    }
+
+    const rawSync = String(data.sync ?? data.syncStatus ?? data.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync)) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync)) return 'OFF-GRID';
+    return rawSync || '--';
+}
+
 // ── Last updated timestamp ───────────────────────────────────────────────────
 function setLastUpdated() {
     const el = document.getElementById('lastUpdated');
@@ -159,8 +173,9 @@ function updateOperationsSection(data, cbmData) {
     // Sync
     const syncEl = document.getElementById('engSync');
     if (syncEl) {
-        syncEl.innerText  = data.sync || '--';
-        syncEl.className  = data.sync === 'ON-GRID' ? 'st-ok' : 'st-warn';
+        const syncStatus = normalizeSyncStatus(data);
+        syncEl.innerText = syncStatus;
+        syncEl.className = syncStatus === 'ON-GRID' ? 'st-ok' : 'st-warn';
     }
 
     // Status
@@ -276,7 +291,7 @@ function renderHealthScore(engineData, cbmData) {
         const runtimeEl = document.getElementById('st-runtime');
         const lastMaintEl = document.getElementById('st-last-maint');
         const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
-        const sync = String(engineData.sync || '').toUpperCase();
+        const sync = normalizeSyncStatus(engineData);
         if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
         if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
         if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
@@ -330,7 +345,7 @@ function renderHealthScore(engineData, cbmData) {
     const runtimeEl = document.getElementById('st-runtime');
     const lastMaintEl = document.getElementById('st-last-maint');
     const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
-    const sync = String(engineData.sync || '').toUpperCase();
+    const sync = normalizeSyncStatus(engineData);
     if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
     if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
     if (lastMaintEl) lastMaintEl.textContent = latestMaintenance

@@ -12,6 +12,28 @@ async function updateDashboard() {
     await updateAlerts();
 }
 
+
+function normalizeSyncStatus(data = {}) {
+    if (data.synced !== undefined && data.synced !== null && data.synced !== '') {
+        const value = typeof data.synced === 'string' ? data.synced.trim().toLowerCase() : data.synced;
+        if ([true, 1, 'true', '1', 'on-grid', 'ongrid'].includes(value)) return 'ON-GRID';
+        if ([false, 0, 'false', '0', 'off-grid', 'offgrid'].includes(value)) return 'OFF-GRID';
+    }
+
+    const rawSync = String(data.sync ?? data.syncStatus ?? data.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync)) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync)) return 'OFF-GRID';
+    return rawSync || '--';
+}
+
+function updateSyncStatus(id, data) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const syncStatus = normalizeSyncStatus(data);
+    el.innerText = syncStatus;
+    el.className = syncStatus === 'ON-GRID' ? 'st-ok' : 'st-err';
+}
+
 // ─── 1. SENSOR DATA ──────────────────────────────────────────────────────────
 // Lacak timestamp data terakhir yang berhasil diterima dari ESP32
 let _lastSensorOkAt = null;
@@ -43,13 +65,13 @@ async function updateSensorData() {
             _disconnectReported = false;
 
             const statusText = String(data.status || '').toUpperCase();
-            const syncText = String(data.sync || '').toUpperCase();
+            const syncText = normalizeSyncStatus(data);
             const rpmValue = Number(data.rpm || 0);
 
             // Beberapa device tidak selalu kirim status persis "RUNNING".
             // Fallback: jika RPM > 0 maka mesin dianggap berjalan.
             const isRun  = ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
-            const isSync = ['ON-GRID', 'SYNCHRONIZED', 'SYNC'].includes(syncText);
+            const isSync = syncText === 'ON-GRID';
 
             // Simpan snapshot data terakhir saat mesin masih running / ECU terkoneksi.
             // Jika kondisi terbaru sudah stop/disconnect, UI tetap menampilkan data terakhir yang valid.
@@ -62,7 +84,7 @@ async function updateSensorData() {
             setVal('val-volt', (displayData.volt || 0).toFixed(1) + ' V');
 
             // Engine Status
-            updateStatus('engSync', isSync, 'Synchronized', 'Not Sync');
+            updateSyncStatus('engSync', data);
             updateStatus('engStat', isRun,  'Running', 'Stopped');
 
             const fuel   = Math.round(displayData.fuel || 0);
