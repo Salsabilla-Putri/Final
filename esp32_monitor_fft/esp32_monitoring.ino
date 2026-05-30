@@ -4,7 +4,7 @@
 // CSV UART + 1s Aggregation Record + SD CSV + MQTT + FFT Page
 //
 // RX CSV dari ESP32-1 setelah penambahan MAP:
-// $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,freq,freqGrid,volt,voltGrid,phaseAngle,engineSync,gridSync,valid
+// $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid
 //
 // Wiring UART:
 // ESP32-1 TX GPIO25  ---> ESP32-2 RX GPIO16
@@ -29,6 +29,8 @@
 #include <HardwareSerial.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include "esp_wifi.h"
 
 #ifndef ESP_ARDUINO_VERSION_MAJOR
@@ -129,8 +131,23 @@
 #define MQTT_PASS  "TA252601020"
 #endif
 
+#ifndef MQTT_REALTIME_TOPIC
+#define MQTT_REALTIME_TOPIC "gen/realtime"
+#endif
+
+#ifndef MQTT_DATA_TOPIC
+#define MQTT_DATA_TOPIC "gen/data"
+#endif
+
+// Backward compatibility untuk log lama.
 #ifndef MQTT_TOPIC
-#define MQTT_TOPIC "gen/data"
+#define MQTT_TOPIC MQTT_REALTIME_TOPIC
+#endif
+
+// Endpoint backend untuk sinkronisasi ulang data historis dari SD card.
+// Ganti URL ini jika domain Render/backend berbeda.
+#ifndef CLOUD_INGEST_URL
+#define CLOUD_INGEST_URL "https://generator-monitoring-system.onrender.com/api/ingest/batch"
 #endif
 
 // NTP WIB.
@@ -150,8 +167,9 @@ HardwareSerial LinkSerial(2);
 String linkRxBuffer = "";
 
 // ESP32-1 sinkronisasi mengirim frame setiap 100 ms = 10 Hz.
-#define LINK_EXPECTED_FRAME_INTERVAL_MS 100UL
-#define LINK_EXPECTED_FRAME_HZ          10
+// ESP32-1 sinkronisasi mengirim frame setiap 200 ms = 5 Hz.
+#define LINK_EXPECTED_FRAME_INTERVAL_MS 200UL
+#define LINK_EXPECTED_FRAME_HZ          5
 
 // ============================================================
 // TFT + TOUCH
@@ -202,6 +220,8 @@ SemaphoreHandle_t sdMutex = NULL;
 SemaphoreHandle_t dataMutex = NULL;
 
 const char* DB_FILE = "/database.csv";
+const char* SYNC_STATE_FILE = "/sync_state.txt";
+const char* FAILED_SYNC_LOG_FILE = "/failed_batches.log";
 
 // ============================================================
 // TIMING
@@ -211,15 +231,22 @@ const char* DB_FILE = "/database.csv";
 #define AGGREGATION_INTERVAL_MS   1000
 #define STORAGE_BATCH_SIZE        1
 
-const unsigned long publishInterval   = 1000;
-const unsigned long localSaveInterval = 1000;
+const unsigned long publishInterval   = 1000;   // realtime dashboard + alert
+const unsigned long localSaveInterval = 1000;   // local SD database
 const unsigned long drawInterval      = 500;
+
+// Cloud historical sync dari SD card.
+// Data historis dikirim ke backend sebagai chunk agar aman untuk RAM ESP32.
+#define CLOUD_SYNC_INTERVAL_MS       300000UL  // 5 menit
+#define CLOUD_RETRY_INTERVAL_MS       30000UL  // retry saat backlog/koneksi pulih
+#define CLOUD_HTTP_TIMEOUT_MS         15000UL
+#define CLOUD_CHUNK_SIZE                 30    // 30 record/chunk agar payload HTTP tidak terlalu besar
 
 // ============================================================
 // FFT EDGE
 // ============================================================
 #define ENABLE_FFT_EDGE        1
-#define FFT_SAMPLE_RATE_HZ     10.0f   // Mengikuti UART ESP32-1: 100 ms = 10 Hz
+#define FFT_SAMPLE_RATE_HZ     5.0f   // Mengikuti UART ESP32-1: 200 ms = 5 Hz
 #define FFT_SAMPLES            64
 #define FFT_BINS_TO_SEND       32
 #define FFT_COMPUTE_INTERVAL_MS 1000UL   // FFT dihitung di task terpisah, bukan di SensorTask50Hz.
@@ -254,6 +281,8 @@ struct RawData {
   float freqGrid = 0;
   float volt = 0;
   float voltGrid = 0;
+  float currentA = 0;   // Arus generator dari ESP32 sinkronisasi/dummy electrical
+  float powerKW = 0;    // Daya generator dari ESP32 sinkronisasi/dummy electrical
   float phaseAngle = 0;
 
   bool speeduinoSync = false;
@@ -281,6 +310,8 @@ struct AggregatedData {
   float freqGridAvg = 0; float freqGridMin = 0; float freqGridMax = 0;
   float voltAvg = 0; float voltMin = 0; float voltMax = 0;
   float voltGridAvg = 0; float voltGridMin = 0; float voltGridMax = 0;
+  float currentAvg = 0; float currentMin = 0; float currentMax = 0;
+  float powerAvg = 0; float powerMin = 0; float powerMax = 0;
   float phaseAngleAvg = 0; float phaseAngleMin = 0; float phaseAngleMax = 0;
 
   bool synced = false;
@@ -304,6 +335,8 @@ struct AggAccumulator {
   float freqGridSum = 0; float freqGridMin = 999999; float freqGridMax = -999999;
   float voltSum = 0; float voltMin = 999999; float voltMax = -999999;
   float voltGridSum = 0; float voltGridMin = 999999; float voltGridMax = -999999;
+  float currentSum = 0; float currentMin = 999999; float currentMax = -999999;
+  float powerSum = 0; float powerMin = 999999; float powerMax = -999999;
   float phaseAngleSum = 0; float phaseAngleMin = 999999; float phaseAngleMax = -999999;
 
   uint16_t syncedCount = 0;
@@ -325,6 +358,12 @@ struct StorageRecord {
   bool valid = false;
   uint32_t batchSeq = 0;
   uint8_t slotIndex = 0;
+
+  // Identitas lokal untuk store-and-forward dari SD card.
+  // recordId dipakai backend sebagai unique key agar retry tidak menghasilkan duplikasi MongoDB.
+  uint32_t localSeq = 0;
+  String recordId = "";
+
   String timestamp = "";
   uint32_t timestampMs = 0;
   AggregatedData agg;
@@ -402,6 +441,7 @@ unsigned long lastWifiCheck = 0;
 unsigned long lastLinkFrameMs = 0;
 unsigned long lastSDRetry = 0;
 unsigned long lastDBStorageReport = 0;
+unsigned long lastCloudSyncAttempt = 0;
 
 uint32_t storageBatchSeq = 0;
 uint8_t storageBatchCount = 0;
@@ -409,6 +449,19 @@ uint8_t storageBatchCount = 0;
 unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
 uint64_t dbTotalWrittenBytes = 0;
+
+// Store-and-forward cloud sync state.
+uint32_t localSeqCounter = 0;
+uint32_t lastCloudSentSeq = 0;
+uint32_t lastSavedLocalSeq = 0;
+uint32_t cloudSyncSuccessCount = 0;
+uint32_t cloudSyncFailCount = 0;
+uint32_t cloudLastRecordsSent = 0;
+uint32_t cloudLastPayloadBytes = 0;
+uint32_t cloudLastHttpCode = 0;
+unsigned long cloudLastSuccessMs = 0;
+unsigned long cloudLastAttemptMs = 0;
+bool cloudSyncBusy = false;
 uint32_t dbLastLineBytes = 0;
 uint64_t dbCachedFileSizeBytes = 0;
 uint64_t sdCachedCardSizeBytes = 0;
@@ -642,19 +695,20 @@ bool parseBridgeCsv(const String &line, RawData &out) {
   String data = line.substring(1);
 
   // Format baru dari ESP32-1 sinkronisasi setelah penambahan MAP:
-  // 18 field:
+  // 20 field baru:
   // $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,
-  // freq,freqGrid,volt,voltGrid,phaseAngle,engineSync,gridSync,valid
+  // freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid
   //
   // Backward compatibility:
-  // 17 field lama tanpa MAP tetap diterima, tetapi MAP diisi estimasi.
-  String fields[18];
+  // 18 field lama dengan MAP tetapi tanpa arus/power tetap diterima.
+  // 17 field lama tanpa MAP tetap diterima, tetapi MAP/arus/power diisi estimasi.
+  String fields[20];
   int fieldIndex = 0;
   int start = 0;
 
   for (int i = 0; i <= data.length(); i++) {
     if (i == data.length() || data[i] == ',') {
-      if (fieldIndex < 18) {
+      if (fieldIndex < 20) {
         fields[fieldIndex] = data.substring(start, i);
         fields[fieldIndex].trim();
         fieldIndex++;
@@ -672,8 +726,8 @@ bool parseBridgeCsv(const String &line, RawData &out) {
   out.rpm = fields[2].toInt();
   out.tps = fields[3].toInt();
 
-  if (fieldIndex >= 18) {
-    // Format baru dengan MAP real dari Speeduino.
+  if (fieldIndex >= 20) {
+    // Format baru dengan MAP, arus, dan power dari ESP32 sinkronisasi.
     out.map = fields[4].toInt();
     out.iat = fields[5].toInt();
     out.clt = fields[6].toInt();
@@ -686,6 +740,30 @@ bool parseBridgeCsv(const String &line, RawData &out) {
     out.freqGrid = fields[11].toFloat();
     out.volt = fields[12].toFloat();
     out.voltGrid = fields[13].toFloat();
+    out.currentA = fields[14].toFloat();
+    out.powerKW = fields[15].toFloat();
+
+    out.phaseAngle = fields[16].toFloat();
+    out.speeduinoSync = fields[17].toInt() == 1;
+    out.gridSync = fields[18].toInt() == 1;
+    out.valid = fields[19].toInt() == 1;
+  } else if (fieldIndex >= 18) {
+    // Format lama dengan MAP, tetapi belum ada arus/power.
+    out.map = fields[4].toInt();
+    out.iat = fields[5].toInt();
+    out.clt = fields[6].toInt();
+
+    out.afr = fields[7].toFloat();
+    out.batt = fields[8].toFloat();
+    out.fuel = fields[9].toFloat();
+
+    out.freq = fields[10].toFloat();
+    out.freqGrid = fields[11].toFloat();
+    out.volt = fields[12].toFloat();
+    out.voltGrid = fields[13].toFloat();
+
+    out.currentA = estimateGeneratorCurrentA(out.rpm, out.tps, out.map, out.volt);
+    out.powerKW = estimateGeneratorPowerKW(out.volt, out.currentA);
 
     out.phaseAngle = fields[14].toFloat();
     out.speeduinoSync = fields[15].toInt() == 1;
@@ -705,6 +783,9 @@ bool parseBridgeCsv(const String &line, RawData &out) {
     out.freqGrid = fields[10].toFloat();
     out.volt = fields[11].toFloat();
     out.voltGrid = fields[12].toFloat();
+
+    out.currentA = estimateGeneratorCurrentA(out.rpm, out.tps, out.map, out.volt);
+    out.powerKW = estimateGeneratorPowerKW(out.volt, out.currentA);
 
     out.phaseAngle = fields[13].toFloat();
     out.speeduinoSync = fields[14].toInt() == 1;
@@ -819,6 +900,8 @@ void addSampleToAccumulator(const RawData &d) {
   acc.freqGridSum += d.freqGrid; acc.freqGridMin = min(acc.freqGridMin, d.freqGrid); acc.freqGridMax = max(acc.freqGridMax, d.freqGrid);
   acc.voltSum += d.volt; acc.voltMin = min(acc.voltMin, d.volt); acc.voltMax = max(acc.voltMax, d.volt);
   acc.voltGridSum += d.voltGrid; acc.voltGridMin = min(acc.voltGridMin, d.voltGrid); acc.voltGridMax = max(acc.voltGridMax, d.voltGrid);
+  acc.currentSum += d.currentA; acc.currentMin = min(acc.currentMin, d.currentA); acc.currentMax = max(acc.currentMax, d.currentA);
+  acc.powerSum += d.powerKW; acc.powerMin = min(acc.powerMin, d.powerKW); acc.powerMax = max(acc.powerMax, d.powerKW);
   acc.phaseAngleSum += d.phaseAngle; acc.phaseAngleMin = min(acc.phaseAngleMin, d.phaseAngle); acc.phaseAngleMax = max(acc.phaseAngleMax, d.phaseAngle);
 
   if (d.gridSync) acc.syncedCount++;
@@ -847,6 +930,8 @@ AggregatedData makeAggregateFromAccumulator() {
   out.freqGridAvg = acc.freqGridSum / acc.count; out.freqGridMin = acc.freqGridMin; out.freqGridMax = acc.freqGridMax;
   out.voltAvg = acc.voltSum / acc.count; out.voltMin = acc.voltMin; out.voltMax = acc.voltMax;
   out.voltGridAvg = acc.voltGridSum / acc.count; out.voltGridMin = acc.voltGridMin; out.voltGridMax = acc.voltGridMax;
+  out.currentAvg = acc.currentSum / acc.count; out.currentMin = acc.currentMin; out.currentMax = acc.currentMax;
+  out.powerAvg = acc.powerSum / acc.count; out.powerMin = acc.powerMin; out.powerMax = acc.powerMax;
   out.phaseAngleAvg = acc.phaseAngleSum / acc.count; out.phaseAngleMin = acc.phaseAngleMin; out.phaseAngleMax = acc.phaseAngleMax;
 
   out.synced = acc.syncedCount > (acc.count / 2);
@@ -861,6 +946,12 @@ void pushStorageRecord(const AggregatedData &a) {
   rec.valid = true;
   rec.batchSeq = storageBatchSeq;
   rec.slotIndex = storageBatchCount;
+
+  // localSeq dibuat saat agregasi 1 detik selesai.
+  // Nilai awal localSeqCounter dipulihkan dari database.csv saat boot.
+  rec.localSeq = ++localSeqCounter;
+  rec.recordId = String(DEVICE_ID) + "-" + String(rec.localSeq);
+
   rec.timestamp = getIsoTimestampWIBms();
   rec.timestampMs = millis();
   rec.agg = a;
@@ -1112,18 +1203,13 @@ void SensorTask50Hz(void *pvParameters) {
 String buildJsonRecordParametersOnly(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
 
+  // Database cloud dihitung hanya dari parameter utama generator/mesin.
+  // Tidak memasukkan FFT, freqGrid, voltGrid, metadata batch, atau timestampMs.
   String json = "{";
+  json += "\"recordId\":\"" + r.recordId + "\",";
+  json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
-  json += "\"timestampMs\":" + String(r.timestampMs) + ",";
-  json += "\"batchSeq\":" + String(r.batchSeq) + ",";
-  json += "\"slot\":" + String(r.slotIndex) + ",";
-  json += "\"sampleWindowMs\":" + String(AGGREGATION_INTERVAL_MS) + ",";
-  json += "\"samples\":" + String(a.samples) + ",";
-
-  // Parameter generator/engine utama saja. FFT sengaja tidak dimasukkan
-  // agar estimasi ukuran cloud database merepresentasikan data operasional
-  // generator, bukan payload analitik spektrum.
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
   json += "\"map\":" + String(a.mapAvg, 1) + ",";
@@ -1132,56 +1218,39 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"afr\":" + String(a.afrAvg, 2) + ",";
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
-
-  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
-  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
-
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
-  json += "\"amp\":" + String(currentA, 2) + ",";
-  json += "\"power\":" + String(powerKW, 3) + ",";
-  json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
+  json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
+  json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
-
   json += "}";
   return json;
 }
 
+
 String buildJsonParameterBatchPayload() {
-  String json = "{";
-  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-  json += "\"type\":\"parameter_1s_record\",";
-  json += "\"publishedAt\":\"" + getIsoTimestampWIBms() + "\",";
-  json += "\"records\":[";
-
-  bool first = true;
+  // Untuk estimasi database, cukup hitung record parameter utama yang benar-benar disimpan.
+  // STORAGE_BATCH_SIZE saat ini = 1, sehingga output ini adalah 1 dokumen database.
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
-    if (!storageBatch[i].valid) continue;
-    if (!first) json += ",";
-    json += buildJsonRecordParametersOnly(storageBatch[i]);
-    first = false;
+    if (storageBatch[i].valid) return buildJsonRecordParametersOnly(storageBatch[i]);
   }
-
-  json += "]}";
-  return json;
+  return "{}";
 }
 
+
 String buildJsonRecord(const StorageRecord &r) {
+  // Payload MQTT untuk web dashboard: field utama + FFT.
+  // Estimasi database tetap memakai buildJsonRecordParametersOnly(),
+  // sehingga ukuran cloud DB yang dihitung hanya field utama generator/mesin.
   const AggregatedData &a = r.agg;
   const FFTData &f = r.fft;
-  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
-  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
 
   String json = "{";
+  json += "\"recordId\":\"" + r.recordId + "\",";
+  json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
-  json += "\"timestampMs\":" + String(r.timestampMs) + ",";
-  json += "\"batchSeq\":" + String(r.batchSeq) + ",";
-  json += "\"slot\":" + String(r.slotIndex) + ",";
-  json += "\"sampleWindowMs\":" + String(AGGREGATION_INTERVAL_MS) + ",";
-  json += "\"samples\":" + String(a.samples) + ",";
-
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
   json += "\"map\":" + String(a.mapAvg, 1) + ",";
@@ -1190,18 +1259,18 @@ String buildJsonRecord(const StorageRecord &r) {
   json += "\"afr\":" + String(a.afrAvg, 2) + ",";
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
-
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
-  json += "\"amp\":" + String(currentA, 2) + ",";
-  json += "\"power\":" + String(powerKW, 3) + ",";
-  json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
+  json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
+  json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
 
   json += "\"fft\":{";
   json += "\"valid\":" + String(f.valid ? "true" : "false") + ",";
   json += "\"source\":\"" + String(getFFTSourceName()) + "\",";
+  json += "\"xUnit\":\"Hz\",";
+  json += "\"yUnit\":\"magnitude\",";
   json += "\"sampleRateHz\":" + String(f.sampleRateHz, 1) + ",";
   json += "\"resolutionHz\":" + String(f.resolutionHz, 3) + ",";
   json += "\"peakHz\":" + String(f.peakHz, 3) + ",";
@@ -1210,7 +1279,7 @@ String buildJsonRecord(const StorageRecord &r) {
   json += "\"bins\":[";
   for (uint16_t i = 0; i < FFT_BINS_TO_SEND; i++) {
     if (i) json += ",";
-    json += "{\"f\":" + String(f.freqBins[i], 3) + ",\"m\":" + String(f.magBins[i], 5) + "}";
+    json += "{\"x\":" + String(f.freqBins[i], 3) + ",\"y\":" + String(f.magBins[i], 5) + "}";
   }
   json += "]}";
 
@@ -1264,7 +1333,7 @@ void publishRealtimeData() {
   mqttLastRecordsSent = recordsInPayload;
 
   uint32_t pubStart = micros();
-  bool ok = mqtt.publish(MQTT_TOPIC, payload.c_str());
+  bool ok = mqtt.publish(MQTT_REALTIME_TOPIC, payload.c_str());
   perfMqttPublishUs = micros() - pubStart;
 
   mqttOK = ok;
@@ -1277,6 +1346,344 @@ void publishRealtimeData() {
   } else {
     mqttPublishFailCount++;
   }
+}
+
+// ============================================================
+// CLOUD BACKUP SYNC FROM SD CARD
+// ============================================================
+String jsonEscape(const String &s) {
+  String out;
+  out.reserve(s.length() + 8);
+  for (uint16_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') {
+      out += '\\';
+      out += c;
+    } else if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\r') {
+      out += "\\r";
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+bool splitCsvLine(const String &line, String fields[], uint8_t maxFields, uint8_t &count) {
+  count = 0;
+  int start = 0;
+  for (int i = 0; i <= line.length(); i++) {
+    if (i == line.length() || line[i] == ',') {
+      if (count < maxFields) {
+        fields[count] = line.substring(start, i);
+        fields[count].trim();
+        count++;
+      }
+      start = i + 1;
+    }
+  }
+  return count > 0;
+}
+
+uint32_t parseLocalSeqFromCsvLine(const String &line) {
+  String fields[4];
+  uint8_t count = 0;
+  if (!splitCsvLine(line, fields, 4, count)) return 0;
+  if (count < 2) return 0;
+  return (uint32_t)fields[1].toInt();
+}
+
+String csvLineToJsonRecord(const String &line) {
+  String f[22];
+  uint8_t n = 0;
+  if (!splitCsvLine(line, f, 22, n)) return "";
+  if (n < 20) return "";
+
+  String json = "{";
+  json += "\"recordId\":\"" + jsonEscape(f[0]) + "\",";
+  json += "\"localSeq\":" + f[1] + ",";
+  json += "\"timestamp\":\"" + jsonEscape(f[2]) + "\",";
+  json += "\"deviceId\":\"" + jsonEscape(f[3]) + "\",";
+  json += "\"rpm\":" + f[4] + ",";
+  json += "\"tps\":" + f[5] + ",";
+  json += "\"map\":" + f[6] + ",";
+  json += "\"iat\":" + f[7] + ",";
+  json += "\"clt\":" + f[8] + ",";
+  json += "\"afr\":" + f[9] + ",";
+  json += "\"batt\":" + f[10] + ",";
+  json += "\"fuel\":" + f[11] + ",";
+  json += "\"freq\":" + f[12] + ",";
+  json += "\"volt\":" + f[13] + ",";
+  json += "\"currentA\":" + f[14] + ",";
+  json += "\"amp\":" + f[14] + ",";
+  json += "\"powerKW\":" + f[15] + ",";
+  json += "\"power\":" + f[15] + ",";
+  json += "\"phaseAngle\":" + f[16] + ",";
+  json += "\"phase_diff\":" + f[16] + ",";
+  json += "\"sync\":\"" + jsonEscape(f[17]) + "\",";
+  json += "\"status\":\"" + jsonEscape(f[18]) + "\",";
+  json += "\"synced\":" + String((f[17] == "ON-GRID" || f[19].toInt() == 1) ? "true" : "false");
+  json += "}";
+  return json;
+}
+
+void writeSyncState(uint32_t lastSeq) {
+  if (!sdOK) return;
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    deselectAllSPI();
+    if (SD.exists(SYNC_STATE_FILE)) SD.remove(SYNC_STATE_FILE);
+
+    File f = SD.open(SYNC_STATE_FILE, FILE_WRITE);
+    if (f) {
+      f.print("lastSentSeq=");
+      f.println(lastSeq);
+      f.print("lastSentAt=");
+      f.println(getIsoTimestampWIBms());
+      f.close();
+      lastCloudSentSeq = lastSeq;
+    }
+
+    xSemaphoreGive(sdMutex);
+  }
+}
+
+uint32_t readSyncState() {
+  if (!sdOK || !SD.exists(SYNC_STATE_FILE)) return 0;
+
+  uint32_t seq = 0;
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    deselectAllSPI();
+    File f = SD.open(SYNC_STATE_FILE, FILE_READ);
+    while (f && f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.startsWith("lastSentSeq=")) {
+        seq = (uint32_t)line.substring(String("lastSentSeq=").length()).toInt();
+        break;
+      }
+    }
+    if (f) f.close();
+    xSemaphoreGive(sdMutex);
+  }
+
+  lastCloudSentSeq = seq;
+  return seq;
+}
+
+uint32_t readLastLocalSeqFromDatabase() {
+  if (!sdOK || !SD.exists(DB_FILE)) return 0;
+
+  uint32_t maxSeq = 0;
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(800)) == pdTRUE) {
+    deselectAllSPI();
+    File f = SD.open(DB_FILE, FILE_READ);
+    while (f && f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0 || line.startsWith("recordId,")) continue;
+      uint32_t seq = parseLocalSeqFromCsvLine(line);
+      if (seq > maxSeq) maxSeq = seq;
+    }
+    if (f) f.close();
+    xSemaphoreGive(sdMutex);
+  }
+
+  return maxSeq;
+}
+
+void appendFailedSyncLog(const String &reason) {
+  if (!sdOK) return;
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    deselectAllSPI();
+    File f = SD.open(FAILED_SYNC_LOG_FILE, FILE_APPEND);
+    if (f) {
+      f.print(getIsoTimestampWIBms());
+      f.print(",lastSentSeq=");
+      f.print(lastCloudSentSeq);
+      f.print(",reason=");
+      f.println(reason);
+      f.close();
+    }
+    xSemaphoreGive(sdMutex);
+  }
+}
+
+bool buildPendingCloudPayload(String &payload, uint32_t &maxSeqInPayload, uint32_t &recordCount) {
+  payload = "";
+  maxSeqInPayload = lastCloudSentSeq;
+  recordCount = 0;
+
+  if (!sdOK || !SD.exists(DB_FILE)) return false;
+
+  String recordsJson = "";
+  recordsJson.reserve(12000);
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
+    deselectAllSPI();
+
+    File f = SD.open(DB_FILE, FILE_READ);
+    while (f && f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0 || line.startsWith("recordId,")) continue;
+
+      uint32_t seq = parseLocalSeqFromCsvLine(line);
+      if (seq <= lastCloudSentSeq) continue;
+
+      String recJson = csvLineToJsonRecord(line);
+      if (recJson.length() == 0) continue;
+
+      if (recordCount > 0) recordsJson += ",";
+      recordsJson += recJson;
+      recordCount++;
+
+      if (seq > maxSeqInPayload) maxSeqInPayload = seq;
+      if (recordCount >= CLOUD_CHUNK_SIZE) break;
+    }
+
+    if (f) f.close();
+    xSemaphoreGive(sdMutex);
+  } else {
+    return false;
+  }
+
+  if (recordCount == 0) return false;
+
+  String batchId = String(DEVICE_ID) + "-" + String(lastCloudSentSeq + 1) + "-" + String(maxSeqInPayload);
+
+  payload.reserve(recordsJson.length() + 300);
+  payload = "{";
+  payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  payload += "\"batchId\":\"" + batchId + "\",";
+  payload += "\"source\":\"esp32_sd_backup\",";
+  payload += "\"sentAt\":\"" + getIsoTimestampWIBms() + "\",";
+  payload += "\"recordCount\":" + String(recordCount) + ",";
+  payload += "\"records\":[";
+  payload += recordsJson;
+  payload += "]}";
+
+  return true;
+}
+
+long extractJsonLong(const String &json, const String &key, long fallback) {
+  String pattern = "\"" + key + "\":";
+  int idx = json.indexOf(pattern);
+  if (idx < 0) return fallback;
+  idx += pattern.length();
+
+  while (idx < json.length() && (json[idx] == ' ' || json[idx] == '\t')) idx++;
+
+  int end = idx;
+  while (end < json.length() && (isDigit(json[end]) || json[end] == '-')) end++;
+
+  if (end <= idx) return fallback;
+  return json.substring(idx, end).toInt();
+}
+
+bool postCloudPayloadToBackend(const String &payload, uint32_t maxSeqInPayload, uint32_t recordCount) {
+  if (!wifiOK || WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  int httpCode = -1;
+  String response = "";
+  bool ok = false;
+
+  String url = String(CLOUD_INGEST_URL);
+
+  uint32_t startUs = micros();
+
+  if (url.startsWith("https://")) {
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    if (!http.begin(secureClient, url)) {
+      appendFailedSyncLog("HTTP_BEGIN_HTTPS_FAIL");
+      return false;
+    }
+  } else {
+    WiFiClient plainClient;
+    if (!http.begin(plainClient, url)) {
+      appendFailedSyncLog("HTTP_BEGIN_FAIL");
+      return false;
+    }
+  }
+
+  http.setTimeout(CLOUD_HTTP_TIMEOUT_MS);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Id", DEVICE_ID);
+
+  httpCode = http.POST((uint8_t*)payload.c_str(), payload.length());
+  cloudLastHttpCode = httpCode;
+
+  if (httpCode > 0) {
+    response = http.getString();
+    if (httpCode >= 200 && httpCode < 300 && response.indexOf("\"success\":true") >= 0) {
+      uint32_t acceptedSeq = (uint32_t)extractJsonLong(response, "lastAcceptedSeq", maxSeqInPayload);
+      if (acceptedSeq == 0) acceptedSeq = maxSeqInPayload;
+      writeSyncState(acceptedSeq);
+      cloudSyncSuccessCount++;
+      cloudLastSuccessMs = millis();
+      cloudLastRecordsSent = recordCount;
+      cloudLastPayloadBytes = payload.length();
+      ok = true;
+    }
+  }
+
+  http.end();
+
+  if (!ok) {
+    cloudSyncFailCount++;
+    String reason = "HTTP_" + String(httpCode);
+    if (response.length()) reason += "_" + response.substring(0, min((int)response.length(), 80));
+    appendFailedSyncLog(reason);
+  }
+
+  uint32_t elapsedUs = micros() - startUs;
+  Serial.printf("[CLOUD SYNC] http=%d ok=%d records=%lu payload=%uB maxSeq=%lu time=%lu us\n",
+                httpCode, ok ? 1 : 0, (unsigned long)recordCount,
+                (unsigned int)payload.length(), (unsigned long)maxSeqInPayload,
+                (unsigned long)elapsedUs);
+
+  return ok;
+}
+
+void syncPendingDataFromSDOnce(bool force = false) {
+  if (cloudSyncBusy) return;
+  if (!sdOK || !wifiOK || WiFi.status() != WL_CONNECTED) return;
+  if (testOnceMode && testOnceDone) return;
+
+  unsigned long nowMs = millis();
+  unsigned long interval = force ? 0UL : CLOUD_RETRY_INTERVAL_MS;
+  if (!force && (nowMs - lastCloudSyncAttempt < interval)) return;
+
+  lastCloudSyncAttempt = nowMs;
+  cloudLastAttemptMs = nowMs;
+  cloudSyncBusy = true;
+
+  // Refresh checkpoint dari SD agar state tetap benar setelah reboot.
+  readSyncState();
+
+  String payload;
+  uint32_t maxSeq = 0;
+  uint32_t recordCount = 0;
+
+  bool hasPending = buildPendingCloudPayload(payload, maxSeq, recordCount);
+  if (hasPending) {
+    postCloudPayloadToBackend(payload, maxSeq, recordCount);
+  }
+
+  cloudSyncBusy = false;
+}
+
+void handleCloudBackupSync() {
+  if (!wifiOK || !sdOK) return;
+
+  // Coba sync satu chunk tiap 30 detik jika ada backlog. Saat backlog sudah habis,
+  // fungsi buildPendingCloudPayload() akan return false dan tidak ada HTTP request.
+  syncPendingDataFromSDOnce(false);
 }
 
 // ============================================================
@@ -1323,10 +1730,21 @@ void initSDCard() {
   if (!SD.exists(DB_FILE)) {
     File f = SD.open(DB_FILE, FILE_WRITE);
     if (f) {
-      f.println("timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms");
+      f.println("recordId,localSeq,timestamp,deviceId,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phaseAngle,sync,status,synced");
       f.close();
     }
   }
+
+  if (!SD.exists(SYNC_STATE_FILE)) {
+    writeSyncState(0);
+  } else {
+    readSyncState();
+  }
+
+  localSeqCounter = readLastLocalSeqFromDatabase();
+  if (localSeqCounter < lastCloudSentSeq) localSeqCounter = lastCloudSentSeq;
+  Serial.printf("[SD] Local seq restored: lastLocal=%lu lastCloudSent=%lu\n",
+                (unsigned long)localSeqCounter, (unsigned long)lastCloudSentSeq);
 
   updateStorageCache();
   Serial.println("══════════════════════════════════════");
@@ -1334,16 +1752,15 @@ void initSDCard() {
 
 String buildCsvLine(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
-  const FFTData &f = r.fft;
-  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
-  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
+
+  String syncText = a.synced ? "ON-GRID" : "OFF-GRID";
+  String statusText = (a.rpmAvg <= 0.0f) ? "STOPPED" : (a.synced ? "ON-GRID" : "RUNNING");
 
   String line = "";
-  line += getCsvTimestampWIBms(); line += ",";
-  line += String(r.batchSeq); line += ",";
-  line += String(r.slotIndex); line += ",";
-  line += String(r.timestampMs); line += ",";
-  line += String(a.samples); line += ",";
+  line += r.recordId; line += ",";
+  line += String(r.localSeq); line += ",";
+  line += r.timestamp; line += ",";
+  line += String(DEVICE_ID); line += ",";
   line += String(a.rpmAvg, 1); line += ",";
   line += String(a.tpsAvg, 1); line += ",";
   line += String(a.mapAvg, 1); line += ",";
@@ -1354,15 +1771,15 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.fuelAvg, 1); line += ",";
   line += String(a.freqAvg, 3); line += ",";
   line += String(a.voltAvg, 2); line += ",";
-  line += String(currentA, 2); line += ",";
-  line += String(powerKW, 3); line += ",";
+  line += String(a.currentAvg, 2); line += ",";
+  line += String(a.powerAvg, 3); line += ",";
   line += String(a.phaseAngleAvg, 2); line += ",";
-  line += String(a.synced ? 1 : 0); line += ",";
-  line += String(f.peakHz, 3); line += ",";
-  line += String(f.peakMagnitude, 5); line += ",";
-  line += String(f.rms, 5);
+  line += syncText; line += ",";
+  line += statusText; line += ",";
+  line += String(a.synced ? 1 : 0);
   return line;
 }
+
 
 void saveSnapshotToSD() {
   if (!sdOK) return;
@@ -1390,8 +1807,13 @@ void saveSnapshotToSD() {
 
     for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
       if (!storageBatch[i].valid) continue;
+
+      // Hindari duplikasi jika loop save berjalan sebelum agregasi baru tersedia.
+      if (storageBatch[i].localSeq <= lastSavedLocalSeq) continue;
+
       String line = buildCsvLine(storageBatch[i]);
       file.println(line);
+      lastSavedLocalSeq = storageBatch[i].localSeq;
       dbLastLineBytes = line.length() + 2;
       dbTotalWrittenBytes += dbLastLineBytes;
     }
@@ -1666,7 +2088,9 @@ void reconnectMQTT() {
   Serial.print("[MQTT] Port  : "); Serial.println(MQTT_PORT);
   Serial.print("[MQTT] User  : "); Serial.println(MQTT_USER);
   Serial.println("[MQTT] Pass  : ********");
-  Serial.print("[MQTT] Topic : "); Serial.println(MQTT_TOPIC);
+  Serial.print("[MQTT] Realtime Topic : "); Serial.println(MQTT_REALTIME_TOPIC);
+  Serial.print("[MQTT] Data Topic     : "); Serial.println(MQTT_DATA_TOPIC);
+  Serial.print("[HTTP] Cloud ingest  : "); Serial.println(CLOUD_INGEST_URL);
   Serial.print("[MQTT] Client: "); Serial.println(clientId);
   Serial.print("[MQTT] Connecting... ");
 
@@ -1813,550 +2237,329 @@ void drawPanel(int x, int y, int w, int h, const char* title) {
 void drawValueCard(int x, int y, int w, int h, const char* label, const char* value, const char* unit, uint16_t color) {
   tft.fillRoundRect(x, y, w, h, 8, C_WHITE);
   tft.drawRoundRect(x, y, w, h, 8, C_BORDER);
-
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
-  tft.setCursor(x + 8, y + 8);
+  tft.setCursor(x + 8, y + 7);
   tft.print(label);
-
   tft.setTextColor(color, C_WHITE);
   tft.setTextSize(2);
-  tft.setCursor(x + 8, y + 28);
+  tft.setCursor(x + 8, y + 25);
   tft.print(value);
-
-  tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
-  tft.setCursor(x + w - 34, y + 35);
+  tft.print(" ");
   tft.print(unit);
 }
 
-void drawValueBox(int x, int y, int w, int h, const char* label, const char* value, const char* unit, uint16_t color) {
-  tft.fillRoundRect(x, y, w, h, 8, C_WHITE);
-  tft.drawRoundRect(x, y, w, h, 8, C_BORDER);
-  tft.setTextDatum(MC_DATUM);
-
-  tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setTextSize(1);
-  tft.drawString(label, x + w / 2, y + 15);
-
-  tft.setTextColor(color, C_WHITE);
-  tft.setTextSize(2);
-  tft.drawString(value, x + w / 2, y + h / 2 + 4);
-
-  tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setTextSize(1);
-  tft.drawString(unit, x + w / 2, y + h - 13);
-  tft.setTextDatum(TL_DATUM);
-}
-
-void drawLineBar(int x, int y, int w, int h, float value, float minVal, float maxVal, uint16_t color, const char* label) {
-  float p = (value - minVal) / (maxVal - minVal);
-  if (p < 0) p = 0;
-  if (p > 1) p = 1;
-
-  tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(x, y - 12);
-  tft.print(label);
-
+void drawLinearBar(int x, int y, int w, int h, float value, float minV, float maxV, uint16_t color) {
+  tft.fillRoundRect(x, y, w, h, 4, 0xE71C);
   tft.drawRoundRect(x, y, w, h, 4, C_BORDER);
-  tft.fillRoundRect(x + 2, y + 2, w - 4, h - 4, 3, 0xEF7D);
-
-  int fillW = (int)((w - 4) * p);
-  tft.fillRoundRect(x + 2, y + 2, fillW, h - 4, 3, color);
-
-  tft.fillRect(x + w + 6, y - 4, 42, h + 8, C_WHITE);
-  tft.setTextColor(C_DARK, C_WHITE);
-  tft.setCursor(x + w + 8, y - 1);
-  tft.print(value, 1);
-}
-
-void drawSemiGauge(int x, int y, int r, float value, float minVal, float maxVal,
-                   const char* label, const char* valueText, const char* unit,
-                   uint16_t color) {
-  const int w = 140;
-  const int h = 108;
-  tft.fillRoundRect(x, y, w, h, 10, C_WHITE);
-  tft.drawRoundRect(x, y, w, h, 10, C_BORDER);
-
-  int cx = x + w / 2;
-  int cy = y + 70;
-
-  for (int a = 180; a <= 360; a += 6) {
-    float rad = a * PI / 180.0f;
-    int x1 = cx + cos(rad) * (r - 8);
-    int y1 = cy + sin(rad) * (r - 8);
-    int x2 = cx + cos(rad) * r;
-    int y2 = cy + sin(rad) * r;
-    tft.drawLine(x1, y1, x2, y2, C_GRID);
-  }
-
-  float p = (value - minVal) / (maxVal - minVal);
+  float p = (value - minV) / (maxV - minV);
   if (p < 0) p = 0;
   if (p > 1) p = 1;
+  tft.fillRoundRect(x + 2, y + 2, (int)((w - 4) * p), h - 4, 4, color);
+}
 
-  int endA = 180 + (int)(180.0f * p);
-  for (int a = 180; a <= endA; a += 4) {
-    float rad = a * PI / 180.0f;
-    int x1 = cx + cos(rad) * (r - 10);
-    int y1 = cy + sin(rad) * (r - 10);
-    int x2 = cx + cos(rad) * r;
-    int y2 = cy + sin(rad) * r;
-    tft.drawLine(x1, y1, x2, y2, color);
+void drawGauge(int cx, int cy, int r, float value, float minV, float maxV, const char* label, const char* unit, uint16_t color) {
+  tft.fillCircle(cx, cy, r + 3, C_WHITE);
+  tft.drawCircle(cx, cy, r, C_BORDER);
+  tft.drawCircle(cx, cy, r - 1, C_BORDER);
+
+  // Semicircle ticks.
+  for (int i = 0; i <= 10; i++) {
+    float a = PI * (1.0f + i / 10.0f);
+    int x1 = cx + cos(a) * (r - 7);
+    int y1 = cy + sin(a) * (r - 7);
+    int x2 = cx + cos(a) * (r - 2);
+    int y2 = cy + sin(a) * (r - 2);
+    tft.drawLine(x1, y1, x2, y2, C_MUTED);
   }
 
-  float needleRad = endA * PI / 180.0f;
-  int nx = cx + cos(needleRad) * (r - 18);
-  int ny = cy + sin(needleRad) * (r - 18);
+  float p = (value - minV) / (maxV - minV);
+  if (p < 0) p = 0;
+  if (p > 1) p = 1;
+  float angle = PI * (1.0f + p);
+  int nx = cx + cos(angle) * (r - 14);
+  int ny = cy + sin(angle) * (r - 14);
   tft.drawLine(cx, cy, nx, ny, color);
   tft.fillCircle(cx, cy, 4, color);
 
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
-  tft.drawString(label, cx, y + 12);
-
-  // Semua nilai gauge berada di tengah bawah gauge.
-  tft.fillRect(x + 14, y + 80, w - 28, 22, C_WHITE);
+  tft.drawString(label, cx, cy + r - 25);
   tft.setTextColor(color, C_WHITE);
   tft.setTextSize(2);
-  tft.drawString(valueText, cx - 8, y + 91);
-
-  tft.setTextColor(C_MUTED, C_WHITE);
+  tft.drawString(String(value, 1), cx, cy + r - 10);
   tft.setTextSize(1);
-  tft.drawString(unit, cx + 44, y + 94);
+  tft.drawString(unit, cx, cy + r + 7);
   tft.setTextDatum(TL_DATUM);
 }
 
-void drawHeaderStatusDots(bool force) {
-  static bool lastLink = false, lastWifi = false, lastMqtt = false, lastSd = false;
-  bool nowMqtt = mqtt.connected();
+// ============================================================
+// PAGE RENDER
+// ============================================================
+void drawNavBar() {
+  tft.fillRect(0, 284, SW, 36, C_PRIMARY);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1);
 
-  if (force || lastLink != linkOK) {
-    tft.fillCircle(315, 28, 6, C_PRIMARY);
-    tft.fillCircle(315, 28, 5, linkOK ? C_GREEN : C_RED);
-    lastLink = linkOK;
-  }
-  if (force || lastWifi != wifiOK) {
-    tft.fillCircle(368, 28, 6, C_PRIMARY);
-    tft.fillCircle(368, 28, 5, wifiOK ? C_GREEN : C_RED);
-    lastWifi = wifiOK;
-  }
-  if (force || lastMqtt != nowMqtt) {
-    tft.fillCircle(421, 28, 6, C_PRIMARY);
-    tft.fillCircle(421, 28, 5, nowMqtt ? C_GREEN : C_RED);
-    lastMqtt = nowMqtt;
-  }
-  if (force || lastSd != sdOK) {
-    tft.fillCircle(459, 28, 6, C_PRIMARY);
-    tft.fillCircle(459, 28, 5, sdOK ? C_GREEN : C_RED);
-    lastSd = sdOK;
-  }
-}
-
-void drawBottomNav() {
-  int y = 292;
-  int h = 26;
-
-  uint16_t colors[3] = {
-    activePage == PAGE_GENERATOR ? C_PRIMARY : C_WHITE,
-    activePage == PAGE_ENGINE ? C_PRIMARY : C_WHITE,
-    activePage == PAGE_FFT ? C_PRIMARY : C_WHITE
-  };
-
-  uint16_t texts[3] = {
-    activePage == PAGE_GENERATOR ? C_WHITE : C_PRIMARY,
-    activePage == PAGE_ENGINE ? C_WHITE : C_PRIMARY,
-    activePage == PAGE_FFT ? C_WHITE : C_PRIMARY
-  };
-
-  const char* labels[3] = {"GENERATOR", "ENGINE", "FFT"};
-  int xs[3] = {10, 167, 324};
-
+  const char* labels[3] = {"GEN", "ENGINE", "FFT"};
+  int centers[3] = {80, 240, 400};
   for (int i = 0; i < 3; i++) {
-    tft.fillRoundRect(xs[i], y, 145, h, 8, colors[i]);
-    tft.drawRoundRect(xs[i], y, 145, h, 8, C_PRIMARY);
-    tft.setTextColor(texts[i], colors[i]);
-    tft.setTextSize(1);
-    tft.setCursor(xs[i] + 45, y + 9);
-    tft.print(labels[i]);
+    uint16_t bg = (activePage == i) ? C_GREEN : C_PRIMARY2;
+    tft.fillRoundRect(centers[i] - 55, 290, 110, 24, 8, bg);
+    tft.setTextColor(C_WHITE, bg);
+    tft.drawString(labels[i], centers[i], 302);
   }
+  tft.setTextDatum(TL_DATUM);
 }
 
-// ============================================================
-// PAGES
-// ============================================================
 void drawGeneratorPage(bool full) {
-  static bool initialized = false;
-  static float lastFreqGen = NAN, lastFreqGrid = NAN, lastVoltGen = NAN, lastVoltGrid = NAN;
-  static float lastPhase = NAN, lastDeltaF = NAN, lastCurrentA = NAN, lastPowerKW = NAN;
-  static bool lastSynced = false, lastFftValid = false;
-
   AggregatedData d;
-  FFTData f;
-
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     d = aggData;
-    f = fftData;
     xSemaphoreGive(dataMutex);
   }
 
-  if (full || !initialized) {
+  if (full) {
     tft.fillScreen(C_BG);
-    drawHeader("GENERATOR MONITOR");
-    drawBottomNav();
-    initialized = true;
-    lastFreqGen = lastFreqGrid = lastVoltGen = lastVoltGrid = NAN;
-    lastPhase = lastDeltaF = lastCurrentA = lastPowerKW = NAN;
-  } else {
-    drawHeaderStatusDots(false);
+    drawHeader("GENERATOR SYNCHRONIZATION");
+    drawPanel(8, 52, 220, 100, "GENERATOR");
+    drawPanel(252, 52, 220, 100, "GRID");
+    drawPanel(8, 162, 464, 102, "SYNC STATUS");
+    drawNavBar();
   }
 
-  if (changedFloat(lastVoltGen, d.voltAvg, 0.5f)) {
-    drawSemiGauge(14, 52, 46, d.voltAvg, 180.0f, 250.0f, "VOLT GEN", fmtF(d.voltAvg, 0), "V",
-                  valColor(d.voltAvg, 240, 250, 200, 180));
-    lastVoltGen = d.voltAvg;
-  }
+  uint16_t vColor = valColor(d.voltAvg, 240, 260, 180, 160);
+  uint16_t vgColor = valColor(d.voltGridAvg, 240, 260, 180, 160);
+  uint16_t fColor = valColor(d.freqAvg, 52, 55, 48, 45);
+  uint16_t fgColor = valColor(d.freqGridAvg, 52, 55, 48, 45);
 
-  if (changedFloat(lastFreqGen, d.freqAvg, 0.02f)) {
-    drawSemiGauge(170, 52, 46, d.freqAvg, 45.0f, 55.0f, "FREQ GEN", fmtF(d.freqAvg, 2), "Hz",
-                  valColor(d.freqAvg, 51.0, 52.0, 49.0, 48.0));
-    lastFreqGen = d.freqAvg;
-  }
+  drawGauge(70, 103, 38, d.voltAvg, 0, 300, "Volt Gen", "V", vColor);
+  drawGauge(314, 103, 38, d.voltGridAvg, 0, 300, "Volt Grid", "V", vgColor);
 
-  if (changedFloat(lastVoltGrid, d.voltGridAvg, 0.5f)) {
-    drawSemiGauge(14, 170, 46, d.voltGridAvg, 180.0f, 250.0f, "VOLT GRID", fmtF(d.voltGridAvg, 0), "V",
-                  valColor(d.voltGridAvg, 240, 250, 200, 180));
-    lastVoltGrid = d.voltGridAvg;
-  }
+  tft.setTextColor(C_DARK, C_PANEL);
+  tft.setTextSize(1);
+  tft.fillRect(120, 82, 90, 48, C_PANEL);
+  tft.setCursor(126, 85); tft.print("Freq Gen");
+  drawLinearBar(126, 104, 80, 10, d.freqAvg, 45, 55, fColor);
+  tft.setCursor(126, 119); tft.print(String(d.freqAvg, 2)); tft.print(" Hz");
 
-  if (changedFloat(lastFreqGrid, d.freqGridAvg, 0.02f)) {
-    drawSemiGauge(170, 170, 46, d.freqGridAvg, 45.0f, 55.0f, "FREQ GRID", fmtF(d.freqGridAvg, 2), "Hz",
-                  valColor(d.freqGridAvg, 51.0, 52.0, 49.0, 48.0));
-    lastFreqGrid = d.freqGridAvg;
-  }
+  tft.fillRect(364, 82, 90, 48, C_PANEL);
+  tft.setCursor(370, 85); tft.print("Freq Grid");
+  drawLinearBar(370, 104, 80, 10, d.freqGridAvg, 45, 55, fgColor);
+  tft.setCursor(370, 119); tft.print(String(d.freqGridAvg, 2)); tft.print(" Hz");
 
-  if (changedFloat(lastPhase, d.phaseAngleAvg, 0.1f)) {
-    drawValueBox(326, 62, 140, 82, "PHASE", fmtF(d.phaseAngleAvg, 1), "deg",
-                 abs(d.phaseAngleAvg) < 10 ? C_GREEN : abs(d.phaseAngleAvg) < 20 ? C_ORANGE : C_RED);
-    lastPhase = d.phaseAngleAvg;
-  }
+  tft.fillRect(25, 190, 420, 54, C_PANEL);
+  drawValueCard(28, 184, 120, 58, "PHASE", String(d.phaseAngleAvg, 1).c_str(), "deg", valColor(fabs(d.phaseAngleAvg), 20, 45));
+  drawValueCard(170, 184, 120, 58, "SYNC", d.synced ? "ON" : "OFF", "", d.synced ? C_GREEN : C_RED);
+  drawValueCard(312, 184, 120, 58, "SAMPLES", String(d.samples).c_str(), "", C_PRIMARY);
 
-  float deltaF = fabs(d.freqAvg - d.freqGridAvg);
-  float currentA = estimateGeneratorCurrentA(d.rpmAvg, d.tpsAvg, d.mapAvg, d.voltAvg);
-  float powerKW = estimateGeneratorPowerKW(d.voltAvg, currentA);
-
-  if (full || !initialized || d.synced != lastSynced || f.valid != lastFftValid ||
-      changedFloat(lastDeltaF, deltaF, 0.01f) ||
-      changedFloat(lastCurrentA, currentA, 0.1f) ||
-      changedFloat(lastPowerKW, powerKW, 0.02f)) {
-    drawPanel(326, 166, 140, 108, "OUTPUT");
-    uint16_t syncColor = d.synced ? C_GREEN : C_RED;
-
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(syncColor, C_WHITE);
-    tft.setTextSize(2);
-    tft.drawString(d.synced ? "ON-GRID" : "OFF-GRID", 396, 198);
-
-    tft.setTextColor(C_DARK, C_WHITE);
-    tft.setTextSize(1);
-    tft.drawString((String("I = ") + String(currentA, 1) + " A").c_str(), 396, 224);
-    tft.drawString((String("P = ") + String(powerKW, 2) + " kW").c_str(), 396, 241);
-
-    tft.setTextColor(C_MUTED, C_WHITE);
-    tft.drawString((String("dF ") + String(deltaF, 2) + " Hz").c_str(), 396, 258);
-    tft.setTextDatum(TL_DATUM);
-
-    lastSynced = d.synced;
-    lastFftValid = f.valid;
-    lastDeltaF = deltaF;
-    lastCurrentA = currentA;
-    lastPowerKW = powerKW;
-  }
+  drawNavBar();
 }
 
 void drawEnginePage(bool full) {
-  static bool initialized = false;
-  static float lastRpm = NAN, lastAfr = NAN, lastMap = NAN;
-  static float lastTps = NAN, lastFuel = NAN, lastClt = NAN, lastIat = NAN, lastBatt = NAN;
-
   AggregatedData d;
-
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     d = aggData;
     xSemaphoreGive(dataMutex);
   }
 
-  if (full || !initialized) {
+  if (full) {
     tft.fillScreen(C_BG);
-    drawHeader("ENGINE MONITOR");
-    drawBottomNav();
-    initialized = true;
-    lastRpm = lastAfr = lastMap = NAN;
-    lastTps = lastFuel = lastClt = lastIat = lastBatt = NAN;
-  } else {
-    drawHeaderStatusDots(false);
+    drawHeader("ENGINE MONITORING");
+    drawPanel(8, 52, 464, 98, "PRIMARY ENGINE PARAMETERS");
+    drawPanel(8, 158, 464, 108, "SUPPORT PARAMETERS");
+    drawNavBar();
   }
 
-  if (changedFloat(lastRpm, d.rpmAvg, 5.0f)) {
-    drawSemiGauge(14, 52, 46, d.rpmAvg, 0.0f, 6000.0f, "ENGINE RPM", fmtF(d.rpmAvg, 0), "rpm",
-                  valColor(d.rpmAvg, 4500, 5500, -1e9, -1e9));
-    lastRpm = d.rpmAvg;
-  }
+  drawGauge(75, 105, 36, d.rpmAvg, 0, 6000, "RPM", "rpm", valColor(d.rpmAvg, 4500, 5500));
+  drawGauge(240, 105, 36, d.afrAvg, 10, 18, "AFR", "", valColor(d.afrAvg, 16, 18, 12, 10));
+  drawGauge(405, 105, 36, d.tpsAvg, 0, 100, "TPS", "%", valColor(d.tpsAvg, 80, 95));
 
-  if (changedFloat(lastAfr, d.afrAvg, 0.05f)) {
-    drawSemiGauge(170, 52, 46, d.afrAvg, 10.0f, 20.0f, "AFR", fmtF(d.afrAvg, 1), "",
-                  valColor(d.afrAvg, 16.0, 18.0, 12.0, 10.5));
-    lastAfr = d.afrAvg;
-  }
+  int x = 34;
+  int y = 178;
+  int w = 170;
+  int gap = 42;
 
-  if (changedFloat(lastMap, d.mapAvg, 0.5f)) {
-    drawSemiGauge(326, 52, 46, d.mapAvg, 20.0f, 105.0f, "MAP", fmtF(d.mapAvg, 0), "kPa",
-                  valColor(d.mapAvg, 95, 105, -1e9, -1e9));
-    lastMap = d.mapAvg;
-  }
+  tft.fillRect(26, 174, 430, 82, C_PANEL);
 
-  bool leftPanel = changedFloat(lastTps, d.tpsAvg, 0.5f) || changedFloat(lastFuel, d.fuelAvg, 0.5f);
-  if (leftPanel) {
-    drawPanel(14, 172, 220, 102, "FUEL & THROTTLE");
-    drawLineBar(28, 214, 145, 12, d.tpsAvg, 0.0f, 100.0f, C_GREEN, "TPS");
-    drawLineBar(28, 253, 145, 12, d.fuelAvg, 0.0f, 100.0f,
-                d.fuelAvg > 30 ? C_GREEN : d.fuelAvg > 15 ? C_ORANGE : C_RED, "Fuel");
-    lastTps = d.tpsAvg;
-    lastFuel = d.fuelAvg;
-  }
+  tft.setTextColor(C_DARK, C_PANEL);
+  tft.setTextSize(1);
+  tft.setCursor(x, y); tft.print("Coolant "); tft.print(String(d.cltAvg, 1)); tft.print(" C");
+  drawLinearBar(x + 120, y + 2, w, 10, d.cltAvg, 40, 120, valColor(d.cltAvg, 95, 110));
 
-  bool rightPanel = changedFloat(lastBatt, d.battAvg, 0.05f) ||
-                    changedFloat(lastIat, d.iatAvg, 0.5f) ||
-                    changedFloat(lastClt, d.cltAvg, 0.5f);
-  if (rightPanel) {
-    drawPanel(246, 172, 220, 102, "THERMAL & POWER");
-    drawValueCard(256, 205, 62, 58, "Battery", fmtF(d.battAvg, 1), "V",
-                  valColor(d.battAvg, 14.5, 15.5, 11.5, 10.5));
-    drawValueCard(326, 205, 62, 58, "IAT", fmtF(d.iatAvg, 0), "C",
-                  valColor(d.iatAvg, 55, 70, -1e9, -1e9));
-    drawValueCard(396, 205, 62, 58, "Coolant", fmtF(d.cltAvg, 0), "C",
-                  valColor(d.cltAvg, 90, 105, -1e9, -1e9));
-    lastBatt = d.battAvg;
-    lastIat = d.iatAvg;
-    lastClt = d.cltAvg;
-  }
+  tft.setCursor(x, y + 20); tft.print("IAT     "); tft.print(String(d.iatAvg, 1)); tft.print(" C");
+  drawLinearBar(x + 120, y + 22, w, 10, d.iatAvg, 0, 80, valColor(d.iatAvg, 60, 75));
+
+  tft.setCursor(x, y + 40); tft.print("Batt    "); tft.print(String(d.battAvg, 2)); tft.print(" V");
+  drawLinearBar(x + 120, y + 42, w, 10, d.battAvg, 10, 16, valColor(d.battAvg, 14.8, 16, 11.8, 10));
+
+  tft.setCursor(x, y + 60); tft.print("Fuel    "); tft.print(String(d.fuelAvg, 1)); tft.print(" %");
+  drawLinearBar(x + 120, y + 62, w, 10, d.fuelAvg, 0, 100, valColor(d.fuelAvg, 101, 102, 20, 10));
+
+  drawNavBar();
 }
 
 void drawFFTPage(bool full) {
-  static bool initialized = false;
-  static uint8_t lastSource = 255;
-  static bool lastValid = false;
-  static float lastPeakHz = NAN, lastPeakMag = NAN, lastRms = NAN;
-
+  AggregatedData d;
   FFTData f;
 
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    d = aggData;
     f = fftData;
     xSemaphoreGive(dataMutex);
   }
 
-  bool needSpectrumRedraw = full || !initialized || fftSelectedSource != lastSource ||
-                            f.valid != lastValid ||
-                            changedFloat(lastPeakHz, f.peakHz, 0.05f) ||
-                            changedFloat(lastPeakMag, f.peakMagnitude, 0.002f) ||
-                            changedFloat(lastRms, f.rms, 0.002f);
-
-  if (full || !initialized) {
+  if (full) {
     tft.fillScreen(C_BG);
-    drawHeader("FFT EDGE MONITOR");
-    drawBottomNav();
-    initialized = true;
-  } else {
-    drawHeaderStatusDots(false);
+    drawHeader("EDGE FFT ANALYSIS");
+    drawPanel(8, 52, 464, 210, "FFT SPECTRUM");
+    drawNavBar();
   }
 
-  if (!needSpectrumRedraw) return;
-
-  drawPanel(14, 55, 452, 222, "FFT SPECTRUM - X:FREQUENCY, Y:MAGNITUDE");
-
-  int gx = 46;
-  int gy = 92;
-  int gw = 382;
-  int gh = 135;
-
-  tft.fillRect(gx, gy, gw, gh, C_WHITE);
-  tft.drawRect(gx, gy, gw, gh, C_BORDER);
-
-  for (int i = 0; i <= 4; i++) {
-    int yy = gy + i * gh / 4;
-    tft.drawLine(gx, yy, gx + gw, yy, C_GRID);
-  }
-
-  for (int i = 0; i <= 8; i++) {
-    int xx = gx + i * gw / 8;
-    tft.drawLine(xx, gy, xx, gy + gh, C_GRID);
-  }
+  int px = 30, py = 78, pw = 420, ph = 130;
+  tft.fillRect(px, py, pw, ph, C_WHITE);
+  tft.drawRect(px, py, pw, ph, C_BORDER);
 
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
-  tft.setCursor(gx + 132, gy + gh + 13);
-  tft.print("X: Frequency (Hz)");
-  tft.setCursor(16, gy + 55);
-  tft.print("Y: Mag");
+  tft.setCursor(px, py + ph + 6);
+  tft.print("Source: "); tft.print(getFFTSourceName());
+  tft.print(" | X=Hz | Y=Magnitude | Peak: ");
+  tft.print(String(f.peakHz, 2)); tft.print(" Hz");
 
   if (f.valid) {
     float maxMag = 0.001f;
-    for (uint16_t i = 1; i < FFT_BINS_TO_SEND; i++) {
+    for (uint16_t i = 0; i < FFT_BINS_TO_SEND; i++) {
       if (f.magBins[i] > maxMag) maxMag = f.magBins[i];
     }
-
-    int prevX = gx;
-    int prevY = gy + gh;
-
     for (uint16_t i = 1; i < FFT_BINS_TO_SEND; i++) {
-      int x = gx + map(i, 1, FFT_BINS_TO_SEND - 1, 0, gw);
-      int y = gy + gh - (int)((f.magBins[i] / maxMag) * (gh - 6));
-      if (y < gy) y = gy;
-
-      tft.drawLine(prevX, prevY, x, y, C_PRIMARY);
-      tft.fillCircle(x, y, 2, C_PRIMARY);
-      prevX = x;
-      prevY = y;
+      int x1 = px + (i - 1) * pw / (FFT_BINS_TO_SEND - 1);
+      int y1 = py + ph - (int)(f.magBins[i - 1] / maxMag * (ph - 12));
+      int x2 = px + i * pw / (FFT_BINS_TO_SEND - 1);
+      int y2 = py + ph - (int)(f.magBins[i] / maxMag * (ph - 12));
+      tft.drawLine(x1, y1, x2, y2, C_PRIMARY);
     }
-
-    tft.setTextColor(C_DARK, C_WHITE);
-    tft.setTextSize(1);
-    tft.setCursor(52, 248);
-    tft.print("SRC=");
-    tft.print(getFFTSourceName());
-    tft.print("  Peak X=");
-    tft.print(f.peakHz, 2);
-    tft.print("Hz  Y=");
-    tft.print(f.peakMagnitude, 4);
-    tft.print("  RMS=");
-    tft.print(f.rms, 3);
   } else {
-    tft.setTextColor(C_MUTED, C_WHITE);
-    tft.setTextSize(2);
-    tft.setCursor(130, 150);
-    tft.print("FFT BUFFERING...");
+    tft.setTextColor(C_RED, C_WHITE);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("WAITING 64 SAMPLES", px + pw / 2, py + ph / 2);
+    tft.setTextDatum(TL_DATUM);
   }
 
-  tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(52, 265);
-  tft.print("Serial: fft source voltgen | fft source voltgrid | fft source rpm");
+  drawValueCard(30, 228, 126, 34, "PEAK X", String(f.peakHz, 2).c_str(), "Hz", C_PRIMARY);
+  drawValueCard(178, 228, 126, 34, "PEAK Y", String(f.peakMagnitude, 4).c_str(), "", C_PRIMARY);
+  drawValueCard(326, 228, 126, 34, "RMS", String(f.rms, 3).c_str(), getFFTSourceUnitById(fftSelectedSource), C_PRIMARY);
 
-  lastSource = fftSelectedSource;
-  lastValid = f.valid;
-  lastPeakHz = f.peakHz;
-  lastPeakMag = f.peakMagnitude;
-  lastRms = f.rms;
+  drawNavBar();
 }
 
 void drawCurrentPage(bool full) {
-  // full=true hanya dipakai ketika ganti halaman / command redraw.
-  // Saat full=false, setiap page hanya menggambar komponen yang nilainya berubah
-  // berdasarkan cache lastX masing-masing page.
   uint32_t drawStart = micros();
-
-  if (activePage == PAGE_GENERATOR) {
-    drawGeneratorPage(full);
-  } else if (activePage == PAGE_ENGINE) {
-    drawEnginePage(full);
-  } else {
-    drawFFTPage(full);
-  }
-
+  if (activePage == PAGE_GENERATOR) drawGeneratorPage(full);
+  else if (activePage == PAGE_ENGINE) drawEnginePage(full);
+  else drawFFTPage(full);
   perfTftDrawUs = micros() - drawStart;
-  lastTftDrawMs = millis();
 }
 
 // ============================================================
 // TOUCH
 // ============================================================
-void readTouchMapped(int &x, int &y, int &rawX, int &rawY) {
-  TS_Point p = ts.getPoint();
-  rawX = p.x;
-  rawY = p.y;
-
-  // Mapping umum untuk FT6206 480x320 rotation landscape.
-  // Jika hasil terbalik, gunakan command "calibrate" untuk melihat raw X/Y,
-  // lalu sesuaikan rumus di bawah.
-  x = map(rawY, 0, 480, 0, 480);
-  y = map(rawX, 0, 320, 320, 0);
-
-  if (x < 0) x = 0;
-  if (x > SW) x = SW;
-  if (y < 0) y = 0;
-  if (y > SH) y = SH;
+TS_Point normalizeTouchPoint(TS_Point p) {
+  // FT6206 default orientation untuk landscape 480x320 sering tertukar.
+  // Mapping dibuat stabil untuk navigasi bawah.
+  int x = map(p.y, 0, 320, 0, SW);
+  int y = map(p.x, 0, 480, SH, 0);
+  x = constrain(x, 0, SW - 1);
+  y = constrain(y, 0, SH - 1);
+  return TS_Point(x, y, p.z);
 }
 
 void handleTouchNavigation() {
   if (!touchDetected) return;
   if (!ts.touched()) return;
 
-  int x, y, rawX, rawY;
-  readTouchMapped(x, y, rawX, rawY);
+  TS_Point raw = ts.getPoint();
+  TS_Point p = normalizeTouchPoint(raw);
 
-  if (serialTouchDebug || touchCalibrationMode) {
-    Serial.println();
-    Serial.println("════════════ TOUCH POINT ════════════");
-    Serial.print("Raw X : "); Serial.println(rawX);
-    Serial.print("Raw Y : "); Serial.println(rawY);
-    Serial.print("Map X : "); Serial.println(x);
-    Serial.print("Map Y : "); Serial.println(y);
-    Serial.println("═════════════════════════════════════");
+  if (serialTouchDebug) {
+    Serial.print("[TOUCH RAW] x="); Serial.print(raw.x);
+    Serial.print(" y="); Serial.print(raw.y);
+    Serial.print(" z="); Serial.println(raw.z);
+    Serial.print("[TOUCH MAP] x="); Serial.print(p.x);
+    Serial.print(" y="); Serial.println(p.y);
   }
 
   if (touchCalibrationMode) {
-    Serial.print("[CAL] ");
-    Serial.print(calPoints[calIndex].name);
-    Serial.print(" target=(");
-    Serial.print(calPoints[calIndex].sx);
-    Serial.print(",");
-    Serial.print(calPoints[calIndex].sy);
-    Serial.print(") raw=(");
-    Serial.print(rawX);
-    Serial.print(",");
-    Serial.print(rawY);
-    Serial.print(") map=(");
-    Serial.print(x);
-    Serial.print(",");
-    Serial.print(y);
+    Serial.print("[CAL] "); Serial.print(calPoints[calIndex].name);
+    Serial.print(" screen=("); Serial.print(calPoints[calIndex].sx);
+    Serial.print(","); Serial.print(calPoints[calIndex].sy);
+    Serial.print(") raw=("); Serial.print(raw.x);
+    Serial.print(","); Serial.print(raw.y);
+    Serial.print(") map=("); Serial.print(p.x);
+    Serial.print(","); Serial.print(p.y);
     Serial.println(")");
-
     calIndex++;
     if (calIndex >= sizeof(calPoints) / sizeof(calPoints[0])) {
-      Serial.println("[CAL] Calibration sampling selesai.");
-      Serial.println("[CAL] Sesuaikan fungsi readTouchMapped() jika koordinat ikon belum akurat.");
       touchCalibrationMode = false;
       calIndex = 0;
+      Serial.println("[CAL] selesai.");
     }
-
-    delay(400);
+    delay(500);
     return;
   }
 
-  if (y >= 285) {
-    if (x >= 10 && x <= 155) {
-      activePage = PAGE_GENERATOR;
-      needFullRedraw = true;
-    } else if (x >= 167 && x <= 312) {
-      activePage = PAGE_ENGINE;
-      needFullRedraw = true;
-    } else if (x >= 324 && x <= 469) {
-      activePage = PAGE_FFT;
-      needFullRedraw = true;
-    }
+  if (p.y >= 284) {
+    if (p.x < 160) activePage = PAGE_GENERATOR;
+    else if (p.x < 320) activePage = PAGE_ENGINE;
+    else activePage = PAGE_FFT;
+    needFullRedraw = true;
     delay(250);
   }
 }
 
 // ============================================================
-// SERIAL COMMAND CONSOLE
+// SERIAL REPORTS + COMMANDS
 // ============================================================
+void printLatestDataReport() {
+  AggregatedData d;
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    d = aggData;
+    xSemaphoreGive(dataMutex);
+  }
+
+  Serial.println();
+  Serial.println(F("================ LATEST / DATA ================"));
+  Serial.print(F("samples: ")); Serial.println(d.samples);
+  Serial.print(F("rpm    : ")); Serial.println(d.rpmAvg, 1);
+  Serial.print(F("tps    : ")); Serial.println(d.tpsAvg, 1);
+  Serial.print(F("map    : ")); Serial.println(d.mapAvg, 1);
+  Serial.print(F("iat    : ")); Serial.println(d.iatAvg, 1);
+  Serial.print(F("clt    : ")); Serial.println(d.cltAvg, 1);
+  Serial.print(F("afr    : ")); Serial.println(d.afrAvg, 2);
+  Serial.print(F("batt   : ")); Serial.println(d.battAvg, 2);
+  Serial.print(F("fuel   : ")); Serial.println(d.fuelAvg, 1);
+  Serial.print(F("freq   : ")); Serial.println(d.freqAvg, 3);
+  Serial.print(F("freqG  : ")); Serial.println(d.freqGridAvg, 3);
+  Serial.print(F("volt   : ")); Serial.println(d.voltAvg, 2);
+  Serial.print(F("voltG  : ")); Serial.println(d.voltGridAvg, 2);
+  Serial.print(F("current: ")); Serial.println(d.currentAvg, 2);
+  Serial.print(F("power  : ")); Serial.println(d.powerAvg, 3);
+  Serial.print(F("phase  : ")); Serial.println(d.phaseAngleAvg, 2);
+  Serial.print(F("synced : ")); Serial.println(d.synced ? F("YES") : F("NO"));
+  Serial.println(F("=============================================="));
+}
+
+void printDatabaseReport();
+void printPerformanceReport();
+void printFFTReport();
 void printSerialHelp() {
   Serial.println();
   Serial.println(F("GENSYS CMD: help | db | perf | fft | latest | page generator|engine|fft | redraw"));
   Serial.println(F("FFT CMD   : fft source voltgen | fft source voltgrid | fft source rpm"));
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | db reset | db reset confirm"));
+  Serial.println(F("CLOUD     : cloud sync | cloud state"));
 }
 
 String buildCloudEstimateRecordOnly() {
@@ -2365,8 +2568,8 @@ String buildCloudEstimateRecordOnly() {
     a = aggData;
     xSemaphoreGive(dataMutex);
   }
+
   String json = "{";
-  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   json += "\"timestamp\":\"" + getIsoTimestampWIBms() + "\",";
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
@@ -2375,15 +2578,12 @@ String buildCloudEstimateRecordOnly() {
   json += "\"clt\":" + String(a.cltAvg, 1) + ",";
   json += "\"afr\":" + String(a.afrAvg, 2) + ",";
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
-  float currentA = estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg);
-  float powerKW = estimateGeneratorPowerKW(a.voltAvg, currentA);
-
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
-  json += "\"amp\":" + String(currentA, 2) + ",";
-  json += "\"power\":" + String(powerKW, 3) + ",";
-  json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
+  json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
+  json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
+  json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
   json += "}";
   return json;
@@ -2402,34 +2602,38 @@ void printDatabaseReport() {
 
   Serial.println();
   Serial.println(F("================ GENSYS DATA MANAGEMENT ================"));
-  Serial.println(F("LOCAL SD / CSV"));
+  Serial.println(F("LOCAL SD"));
   Serial.print  (F("  status          : ")); Serial.println(sdOK ? F("READY") : F("NOT READY"));
   Serial.print  (F("  file            : ")); Serial.println(DB_FILE);
+  Serial.print  (F("  sync state      : ")); Serial.println(SYNC_STATE_FILE);
   Serial.print  (F("  card size       : ")); Serial.println(formatBytes(sdCachedCardSizeBytes));
   Serial.print  (F("  used/free       : ")); Serial.print(formatBytes(sdCachedUsedBytes)); Serial.print(F(" / ")); Serial.println(formatBytes(sdCachedFreeBytes));
   Serial.print  (F("  csv size        : ")); Serial.println(formatBytes(dbCachedFileSizeBytes));
   Serial.print  (F("  last row        : ")); Serial.print(dbLastLineBytes); Serial.println(F(" B/record"));
-  Serial.print  (F("  records/sec     : ")); Serial.println(STORAGE_BATCH_SIZE);
   Serial.print  (F("  write rate      : ")); Serial.println(formatBytes((uint64_t)sdBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 7 days     : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
+  Serial.print  (F("  local seq       : ")); Serial.println(localSeqCounter);
+  Serial.print  (F("  last saved seq  : ")); Serial.println(lastSavedLocalSeq);
 
-  Serial.println(F("LOCAL SD PARAMETERS"));
-  Serial.println(F("  timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms"));
-
-  Serial.println(F("CLOUD / MONGODB ESTIMATE (PARAMETER ONLY, FFT EXCLUDED)"));
+  Serial.println(F("CLOUD REALTIME / MQTT"));
   Serial.print  (F("  mqtt status     : ")); Serial.println(mqtt.connected() ? F("CONNECTED") : F("DISCONNECTED"));
-  Serial.print  (F("  topic           : ")); Serial.println(MQTT_TOPIC);
-  Serial.print  (F("  actual MQTT     : ")); Serial.print(mqttLastPayloadBytes); Serial.println(F(" B/publish"));
-  Serial.print  (F("  records/publish : ")); Serial.println(mqttLastRecordsSent);
-  Serial.print  (F("  param record    : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record"));
-  Serial.print  (F("  records/sec     : ")); Serial.println(STORAGE_BATCH_SIZE);
-  Serial.print  (F("  param rate      : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
-  Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
+  Serial.print  (F("  realtime topic  : ")); Serial.println(MQTT_REALTIME_TOPIC);
   Serial.print  (F("  pub OK/FAIL     : ")); Serial.print(mqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(mqttPublishFailCount);
-  Serial.println(F("CLOUD PARAMETERS"));
-  Serial.println(F("  deviceId,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced"));
-  Serial.println(F("NOTE: freqGrid dan voltGrid tetap dipakai untuk display/sinkronisasi, tetapi tidak disimpan ke database."));
+
+  Serial.println(F("CLOUD HISTORY / SD BACKUP SYNC"));
+  Serial.print  (F("  ingest url      : ")); Serial.println(CLOUD_INGEST_URL);
+  Serial.print  (F("  chunk size      : ")); Serial.println(CLOUD_CHUNK_SIZE);
+  Serial.print  (F("  last sent seq   : ")); Serial.println(lastCloudSentSeq);
+  Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(cloudSyncSuccessCount); Serial.print(F(" / ")); Serial.println(cloudSyncFailCount);
+  Serial.print  (F("  last http code  : ")); Serial.println(cloudLastHttpCode);
+  Serial.print  (F("  last chunk rec  : ")); Serial.println(cloudLastRecordsSent);
+  Serial.print  (F("  last payload    : ")); Serial.println(formatBytes(cloudLastPayloadBytes));
+  Serial.print  (F("  param record    : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record"));
+  Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
+
+  Serial.println(F("NOTE: SD card adalah backup lokal. Data historis dikirim ulang ke MongoDB melalui /api/ingest/batch."));
+  Serial.println(F("      Alert realtime tetap diproses dari MQTT gen/realtime, bukan dari data backup historis."));
   Serial.println(F("========================================================"));
 }
 
@@ -2440,49 +2644,32 @@ void printPerformanceReport() {
   Serial.println(F("================ GENSYS COMPUTE PERFORMANCE ================"));
   Serial.print(F("UART read      : ")); Serial.print(perfUartReadUs); Serial.println(F(" us"));
   Serial.print(F("CSV parse      : ")); Serial.print(perfCsvParseUs); Serial.println(F(" us"));
-  Serial.print(F("Aggregation    : ")); Serial.print(perfAggregationUs); Serial.println(F(" us / 1000 ms window"));
+  Serial.print(F("Aggregation    : ")); Serial.print(perfAggregationUs); Serial.println(F(" us"));
   Serial.print(F("FFT 3-source   : ")); Serial.print(perfFftComputeUs); Serial.println(F(" us"));
   Serial.print(F("JSON build     : ")); Serial.print(perfJsonBuildUs); Serial.println(F(" us"));
   Serial.print(F("MQTT publish   : ")); Serial.print(perfMqttPublishUs); Serial.println(F(" us"));
   Serial.print(F("SD append      : ")); Serial.print(perfSdSaveUs); Serial.println(F(" us"));
   Serial.print(F("TFT draw       : ")); Serial.print(perfTftDrawUs); Serial.println(F(" us"));
-  Serial.print(F("Sensor task    : ")); Serial.print(perfSensorTaskUs); Serial.print(F(" us = ")); Serial.print(taskPct, 1); Serial.println(F("% of 20 ms budget"));
+  Serial.print(F("Sensor task    : ")); Serial.print(perfSensorTaskUs); Serial.print(F(" us = "));
+  Serial.print(taskPct, 1); Serial.println(F(" % of 20ms budget"));
   Serial.print(F("Missed deadline: ")); Serial.println((uint32_t)sensorMissedDeadlines);
   Serial.print(F("RX OK/FAIL     : ")); Serial.print((uint32_t)parseOKCount); Serial.print(F(" / ")); Serial.println((uint32_t)parseFailCount);
-  Serial.print(F("Last RX age    : ")); Serial.print(perfLastRxAgeMs); Serial.println(F(" ms"));
-  Serial.println(F("============================================================="));
-}
-
-void printLatestDataReport() {
-  RawData r; AggregatedData a;
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    r = latestRaw; a = aggData; xSemaphoreGive(dataMutex);
-  }
-  Serial.println();
-  Serial.println(F("================ LATEST DATA ================"));
-  Serial.printf("RAW seq=%lu valid=%d rpm=%d tps=%d map=%d iat=%d clt=%d afr=%.2f batt=%.2f fuel=%.1f\n",
-                (unsigned long)r.seq, r.valid ? 1 : 0, r.rpm, r.tps, r.map, r.iat, r.clt, r.afr, r.batt, r.fuel);
-  Serial.printf("RAW freq=%.3f freqGrid=%.3f volt=%.2f voltGrid=%.2f phase=%.2f sync=%d\n",
-                r.freq, r.freqGrid, r.volt, r.voltGrid, r.phaseAngle, r.gridSync ? 1 : 0);
-  Serial.printf("AGG samples=%u rpm=%.1f map=%.1f freq=%.3f volt=%.2f synced=%d\n",
-                a.samples, a.rpmAvg, a.mapAvg, a.freqAvg, a.voltAvg, a.synced ? 1 : 0);
-  Serial.printf("DERIVED current=%.1f A power=%.2f kW\n",
-                estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg),
-                estimateGeneratorPowerKW(a.voltAvg, estimateGeneratorCurrentA(a.rpmAvg, a.tpsAvg, a.mapAvg, a.voltAvg)));
-  Serial.println(F("============================================="));
+  Serial.print(F("Last RX age    : ")); Serial.print((uint32_t)perfLastRxAgeMs); Serial.println(F(" ms"));
+  Serial.println(F("============================================================"));
 }
 
 void printFFTReport() {
   FFTData f[FFT_SOURCE_COUNT];
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) f[source] = fftMultiData[source];
+    for (uint8_t i = 0; i < FFT_SOURCE_COUNT; i++) f[i] = fftMultiData[i];
     xSemaphoreGive(dataMutex);
   }
+
   Serial.println();
-  Serial.println(F("================ FFT X-Y DATA ================"));
-  Serial.print(F("Active source: ")); Serial.println(getFFTSourceName());
+  Serial.println(F("================ FFT ALL SOURCES ================"));
   for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) {
-    Serial.print(F("SOURCE ")); Serial.print(getFFTSourceNameById(source));
+    Serial.print(F("SOURCE: ")); Serial.print(getFFTSourceNameById(source));
+    Serial.print(F(" | unit=")); Serial.print(getFFTSourceUnitById(source));
     Serial.print(F(" | valid=")); Serial.print(f[source].valid ? F("YES") : F("NO"));
     Serial.print(F(" | peakX=")); Serial.print(f[source].peakHz, 3);
     Serial.print(F(" Hz | peakY=")); Serial.println(f[source].peakMagnitude, 6);
@@ -2501,10 +2688,20 @@ void resetSDDatabase() {
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
     File f = SD.open(DB_FILE, FILE_WRITE);
     if (f) {
-      f.println(F("timestamp,batchSeq,slot,timestampMs,samples,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,amp,power,phaseAngle,synced,fftPeakHz,fftPeakMag,fftRms"));
+      f.println(F("recordId,localSeq,timestamp,deviceId,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phaseAngle,sync,status,synced"));
       f.close();
+
+      if (SD.exists(SYNC_STATE_FILE)) SD.remove(SYNC_STATE_FILE);
+      if (SD.exists(FAILED_SYNC_LOG_FILE)) SD.remove(FAILED_SYNC_LOG_FILE);
+
+      localSeqCounter = 0;
+      lastSavedLocalSeq = 0;
+      lastCloudSentSeq = 0;
+      writeSyncState(0);
+
       dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0;
-      Serial.println(F("[DB] database.csv reset OK."));
+      cloudSyncSuccessCount = 0; cloudSyncFailCount = 0; cloudLastRecordsSent = 0; cloudLastPayloadBytes = 0;
+      Serial.println(F("[DB] database.csv + sync_state reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
     }
@@ -2536,19 +2733,34 @@ void processSerialCommand(String cmd) {
   else if (cmd == "performance" || cmd == "perf") printPerformanceReport();
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "fft") printFFTReport();
-  else if (cmd == "fft source voltgen") { fftSelectedSource = FFT_SRC_VOLT_GEN; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GEN")); }
-  else if (cmd == "fft source voltgrid") { fftSelectedSource = FFT_SRC_VOLT_GRID; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GRID")); }
-  else if (cmd == "fft source rpm") { fftSelectedSource = FFT_SRC_RPM; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=RPM")); }
-  else if (cmd == "page generator") { activePage = PAGE_GENERATOR; needFullRedraw = true; Serial.println(F("[DISPLAY] generator")); }
-  else if (cmd == "page engine") { activePage = PAGE_ENGINE; needFullRedraw = true; Serial.println(F("[DISPLAY] engine")); }
-  else if (cmd == "page fft") { activePage = PAGE_FFT; needFullRedraw = true; Serial.println(F("[DISPLAY] fft")); }
-  else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
+  else if (cmd == "page generator") { activePage = PAGE_GENERATOR; needFullRedraw = true; Serial.println(F("[PAGE] generator")); }
+  else if (cmd == "page engine") { activePage = PAGE_ENGINE; needFullRedraw = true; Serial.println(F("[PAGE] engine")); }
+  else if (cmd == "page fft") { activePage = PAGE_FFT; needFullRedraw = true; Serial.println(F("[PAGE] fft")); }
+  else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[UI] redraw requested")); }
+  else if (cmd == "fft source voltgen") { fftSelectedSource = FFT_SRC_VOLT_GEN; needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GEN")); }
+  else if (cmd == "fft source voltgrid") { fftSelectedSource = FFT_SRC_VOLT_GRID; needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GRID")); }
+  else if (cmd == "fft source rpm") { fftSelectedSource = FFT_SRC_RPM; needFullRedraw = true; Serial.println(F("[FFT] source=RPM")); }
+  else if (cmd == "touch debug on") { serialTouchDebug = true; Serial.println(F("[TOUCH] debug on")); }
+  else if (cmd == "touch debug off") { serialTouchDebug = false; Serial.println(F("[TOUCH] debug off")); }
+  else if (cmd == "calibrate") { touchCalibrationMode = true; calIndex = 0; Serial.println(F("[CAL] Sentuh titik navigasi sesuai instruksi serial.")); }
   else if (cmd == "rx raw on") { runtimeDebugRxRaw = true; Serial.println(F("[RX] raw on")); }
   else if (cmd == "rx raw off") { runtimeDebugRxRaw = false; Serial.println(F("[RX] raw off")); }
   else if (cmd == "rx ok on") { runtimeDebugRxOK = true; Serial.println(F("[RX] ok on")); }
   else if (cmd == "rx ok off") { runtimeDebugRxOK = false; Serial.println(F("[RX] ok off")); }
   else if (cmd == "db ticker on") { dbSizeTickerEnabled = true; Serial.println(F("[DB] ticker on")); }
   else if (cmd == "db ticker off") { dbSizeTickerEnabled = false; Serial.println(F("[DB] ticker off")); }
+  else if (cmd == "cloud sync") { syncPendingDataFromSDOnce(true); }
+  else if (cmd == "cloud state") {
+    Serial.println(F("========== CLOUD SYNC STATE =========="));
+    Serial.print(F("lastCloudSentSeq: ")); Serial.println(lastCloudSentSeq);
+    Serial.print(F("localSeqCounter : ")); Serial.println(localSeqCounter);
+    Serial.print(F("lastSavedSeq    : ")); Serial.println(lastSavedLocalSeq);
+    Serial.print(F("success/fail    : ")); Serial.print(cloudSyncSuccessCount); Serial.print(F("/")); Serial.println(cloudSyncFailCount);
+    Serial.print(F("last http code  : ")); Serial.println(cloudLastHttpCode);
+    Serial.print(F("last records    : ")); Serial.println(cloudLastRecordsSent);
+    Serial.print(F("last payload B  : ")); Serial.println(cloudLastPayloadBytes);
+    Serial.println(F("======================================"));
+  }
   else if (cmd == "db reset") { sdResetPending = true; sdResetPendingMs = millis(); Serial.println(F("Type: db reset confirm")); }
   else if (cmd == "db reset confirm") { if (sdResetPending) resetSDDatabase(); sdResetPending = false; }
   else if (cmd == "test once") { testOnceMode = true; testOnceDone = false; Serial.println(F("[TEST] once on")); }
@@ -2644,7 +2856,7 @@ void setup() {
 
   drawBootSplashStep("Connecting MQTT broker...", 86);
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setBufferSize(4096);
+  mqtt.setBufferSize(8192);
 
   if (wifiOK) {
     reconnectMQTT();
@@ -2707,6 +2919,7 @@ void loop() {
   if (wifiOK) {
     reconnectMQTT();
     mqtt.loop();
+    handleCloudBackupSync();
   }
 
   if (!sdOK && millis() - lastSDRetry >= 5000) {
