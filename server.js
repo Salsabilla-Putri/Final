@@ -86,14 +86,36 @@ async function ensureDbReady() {
 
 // --- SCHEMAS ---
 const generatorDataSchema = new mongoose.Schema({
+    // recordId berasal dari ESP32 SD backup. Field ini menjadi kunci deduplikasi
+    // agar retry pengiriman backup tidak membuat data dobel di MongoDB.
+    recordId: { type: String, unique: true, sparse: true },
+    localSeq: Number,
+
     timestamp: { type: Date, default: Date.now },
     deviceId: { type: String, required: true },
-    rpm: Number, volt: Number, amp: Number, power: Number,
-    freq: Number, temp: Number, coolant: Number, fuel: Number,
-    sync: String, synced: Boolean, status: String,
-    iat: Number, map: Number, batt: Number, afr: Number, tps: Number,
+    rpm: Number,
+    volt: Number,
+    amp: Number,
+    power: Number,
+    freq: Number,
+    temp: Number,
+    coolant: Number,
+    fuel: Number,
+    sync: String,
+    synced: Boolean,
+    status: String,
+    iat: Number,
+    map: Number,
+    batt: Number,
+    afr: Number,
+    tps: Number,
     phaseAngle: Number
 }, { versionKey: false });
+
+generatorDataSchema.index({ recordId: 1 }, { unique: true, sparse: true });
+generatorDataSchema.index({ deviceId: 1, timestamp: -1 });
+generatorDataSchema.index({ deviceId: 1, localSeq: 1 });
+
 const GeneratorData = mongoose.model('GeneratorData', generatorDataSchema);
 
 async function cleanupGeneratorDataFieldsFromDB() {
@@ -438,7 +460,7 @@ const mqttClient = mqtt
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, phaseAngle: 0
+    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
@@ -678,6 +700,8 @@ mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
 
+// Auto-save ke DB setiap 1 detik dari snapshot gen/data.
+// ESP32 mengirim semua variabel sebagai satu JSON ke topik gen/data.
 // ============================================================
 // MONGODB BATCH SAVE
 // Realtime data tetap diterima setiap 1 detik dari MQTT,
@@ -702,17 +726,23 @@ function buildGeneratorDbDocument(data) {
     }
 
     const ts = snapshot.timestamp ? new Date(snapshot.timestamp) : new Date();
+    const localSeq = snapshot.localSeq !== undefined && snapshot.localSeq !== null && snapshot.localSeq !== ''
+        ? toNumber(snapshot.localSeq, 0)
+        : undefined;
 
     return {
+        recordId: snapshot.recordId || undefined,
+        localSeq,
+
         timestamp: Number.isNaN(ts.getTime()) ? new Date() : ts,
         deviceId: snapshot.deviceId || 'ESP32_GENERATOR_01',
         rpm: toNumber(snapshot.rpm, 0),
         volt: toNumber(snapshot.volt, 0),
-        amp: toNumber(snapshot.amp, 0),
-        power: toNumber(snapshot.power, 0),
+        amp: toNumber(snapshot.amp ?? snapshot.currentA, 0),
+        power: toNumber(snapshot.power ?? snapshot.powerKW, 0),
         freq: toNumber(snapshot.freq, 0),
         temp: toNumber(snapshot.temp, 0),
-        coolant: toNumber(snapshot.coolant, 0),
+        coolant: toNumber(snapshot.coolant ?? snapshot.clt, 0),
         fuel: toNumber(snapshot.fuel, 0),
         sync: snapshot.sync || 'OFF-GRID',
         synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
@@ -722,7 +752,7 @@ function buildGeneratorDbDocument(data) {
         batt: toNumber(snapshot.batt, 0),
         afr: toNumber(snapshot.afr, 0),
         tps: toNumber(snapshot.tps, 0),
-        phaseAngle: toNumber(snapshot.phaseAngle, 0)
+        phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0)
     };
 }
 
@@ -761,9 +791,6 @@ async function flushGeneratorBatch(reason = 'interval') {
 
     try {
         if (generatorBatch.length > 0) {
-            // Hanya simpan data historis.
-            // Alert dan active-time diproses realtime di handler MQTT gen/realtime,
-            // sehingga tidak dobel saat batch 5 menit disimpan.
             await GeneratorData.insertMany(generatorBatch, { ordered: false });
         }
 
@@ -867,6 +894,28 @@ async function checkAndSaveAlerts(data) {
         }
     }
 }
+// --- TAMBAHAN API UNTUK HALAMAN ALARM ---
+
+// 1. Acknowledge (Konfirmasi) Alarm - Mengubah Status jadi "Resolved"
+app.put('/api/alerts/:id/ack', async (req, res) => {
+    try {
+        await Alert.findByIdAndUpdate(req.params.id, { resolved: true });
+        res.json({ success: true, message: 'Alert Acknowledged' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 2. Hapus Alarm dari Database
+app.delete('/api/alerts/:id', async (req, res) => {
+    try {
+        await Alert.findByIdAndDelete(req.params.id);
+        res.json({ success: true, message: 'Alert Deleted' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 function toNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
@@ -975,7 +1024,9 @@ function normalizeGeneratorPayload(rawPayload) {
         batt: toNumber(payload.batt ?? payload.battery ?? payload.battVolt, latestData.batt),
         afr: toNumber(payload.afr, latestData.afr),
         tps: toNumber(payload.tps, latestData.tps),
-        phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle, latestData.phaseAngle ?? 0),
+        phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle ?? payload.phase_diff, latestData.phaseAngle ?? 0),
+        recordId: payload.recordId || latestData.recordId,
+        localSeq: payload.localSeq ?? latestData.localSeq,
         _realtime: true
     };
 
@@ -1020,6 +1071,93 @@ function normalizeFftPayload(rawPayload, fallbackDeviceId) {
     };
 }
 
+// ============================================================
+// BACKUP INGEST ENDPOINT
+// Data dari SD card ESP32 dikirim ke endpoint ini sebagai batch/chunk.
+// Endpoint ini hanya menyimpan data historis ke MongoDB, tidak menjalankan alert,
+// karena alert realtime diproses dari MQTT gen/realtime.
+// ============================================================
+app.post('/api/ingest/batch', async (req, res) => {
+    try {
+        if (!isDbReady()) {
+            await ensureDbReady();
+        }
+
+        const payload = req.body || {};
+        const records = Array.isArray(payload.records) ? payload.records : [];
+
+        if (!records.length) {
+            return res.status(400).json({
+                success: false,
+                error: 'records[] is required'
+            });
+        }
+
+        const docs = records
+            .filter((row) => row && typeof row === 'object')
+            .map((row) => {
+                const normalized = normalizeGeneratorPayload({
+                    ...row,
+                    deviceId: row.deviceId || payload.deviceId || latestData.deviceId,
+                    recordId: row.recordId,
+                    localSeq: row.localSeq
+                });
+
+                return buildGeneratorDbDocument({
+                    ...normalized,
+                    recordId: row.recordId,
+                    localSeq: row.localSeq
+                });
+            })
+            .filter((doc) => doc.recordId);
+
+        if (!docs.length) {
+            return res.status(400).json({
+                success: false,
+                error: 'No valid records with recordId'
+            });
+        }
+
+        const operations = docs.map((doc) => ({
+            updateOne: {
+                filter: { recordId: doc.recordId },
+                update: { $setOnInsert: doc },
+                upsert: true
+            }
+        }));
+
+        const result = await GeneratorData.bulkWrite(operations, { ordered: false });
+
+        const seqList = docs
+            .map((doc) => Number(doc.localSeq))
+            .filter(Number.isFinite);
+        const lastAcceptedSeq = seqList.length ? Math.max(...seqList) : null;
+
+        console.log(
+            `💾 SD backup ingest | device=${payload.deviceId || 'unknown'} | received=${records.length} | accepted=${docs.length} | inserted=${result.upsertedCount || 0} | duplicate=${result.matchedCount || 0} | lastSeq=${lastAcceptedSeq}`
+        );
+
+        return res.json({
+            success: true,
+            batchId: payload.batchId || null,
+            source: payload.source || 'esp32_sd_backup',
+            received: records.length,
+            accepted: docs.length,
+            inserted: result.upsertedCount || 0,
+            matchedExisting: result.matchedCount || 0,
+            duplicate: result.matchedCount || 0,
+            lastAcceptedSeq
+        });
+
+    } catch (error) {
+        console.error('Batch ingest error:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 mqttClient.on('message', async (topic, message) => {
     try {
         if (topic !== 'gen/realtime' && topic !== 'gen/data') return;
@@ -1034,8 +1172,7 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // Semua topic tetap memperbarui latestData agar dashboard tidak kosong
-        // meskipun salah satu topic terlambat atau belum aktif.
+        // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.
         latestData = normalizeGeneratorPayload(parsed);
 
         const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
@@ -1054,18 +1191,16 @@ mqttClient.on('message', async (topic, message) => {
             };
         }
 
-        // gen/realtime = jalur realtime untuk dashboard, alert, dan active-time.
-        // Tidak masuk ke buffer database agar tidak terjadi double record jika
-        // ESP32 juga mengirim data yang sama ke gen/data.
+        // gen/realtime: jalur dashboard + alert + active time.
+        // Alert tidak menunggu batch MongoDB.
         if (topic === 'gen/realtime') {
             await checkAndSaveAlerts(latestData);
             await syncActiveTimeHistory(latestData);
             return;
         }
 
-        // gen/data = jalur histori database.
-        // Data ditampung di buffer, lalu disimpan ke MongoDB menggunakan insertMany
-        // setiap 5 menit atau saat mencapai 300 record.
+        // gen/data: jalur historis legacy. Untuk skema SD backup baru, ESP32 lebih
+        // disarankan mengirim ke /api/ingest/batch agar mendapatkan ACK langsung.
         if (topic === 'gen/data') {
             addGeneratorDataToBatch(latestData);
             if (fftDoc) addFftDataToBatch(fftDoc);
@@ -1433,7 +1568,7 @@ app.get('/api/thresholds', (req, res) => {
 // 2. UPDATE Thresholds (Saat user klik Save di Frontend)
 app.post('/api/thresholds', async (req, res) => {
     try {
-        const newThresholds = req.body; // Expect { param: { min: x, max: y } }
+        const newThresholds = req.body; // Expect { param: { min: x, max: x } }
         
         // Merge dengan existing
         ACTIVE_THRESHOLDS = { ...ACTIVE_THRESHOLDS, ...newThresholds };
@@ -1700,11 +1835,8 @@ async function getCurrentMaintenanceDecision(deviceId) {
 
 app.get('/maintenance/suggestion', async (req, res) => {
     try {
-        const { deviceId } = req.query;
-        const decision = await getCurrentMaintenanceDecision(deviceId);
-        const latestSuggestion = await MaintenanceSuggestion.findOne({ source: 'system' }).sort({ createdAt: -1 }).lean();
-
-        res.json({ success: true, data: decision, suggestion: latestSuggestion || null });
+        const decision = await getCurrentMaintenanceDecision(req.query.deviceId);
+        res.json({ success: true, data: decision });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1712,30 +1844,41 @@ app.get('/maintenance/suggestion', async (req, res) => {
 
 app.get('/api/maintenance/suggestion', async (req, res) => {
     try {
-        const { deviceId } = req.query;
-        const decision = await getCurrentMaintenanceDecision(deviceId);
-        const latestSuggestion = await MaintenanceSuggestion.findOne({ source: 'system' }).sort({ createdAt: -1 }).lean();
-
-        res.json({ success: true, data: decision, suggestion: latestSuggestion || null });
+        const decision = await getCurrentMaintenanceDecision(req.query.deviceId);
+        res.json({ success: true, data: decision });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
+function normalizeMaintenanceSuggestionInput(body = {}) {
+    const status = String(body.decisionStatus || body.status || body.level || 'WASPADA').toUpperCase();
+    const message = body.message || body.reason || body.description || 'Maintenance suggestion generated by system';
+    const recommendation = body.recommendation || body.action || message;
+    const priority = String(body.priority || (status === 'BAHAYA' ? 'high' : status === 'WASPADA' ? 'medium' : 'low')).toLowerCase();
+    return {
+        source: body.source || 'system',
+        status: body.status === 'approved' ? 'approved' : 'pending',
+        decisionStatus: ['AMAN', 'WASPADA', 'BAHAYA'].includes(status) ? status : 'WASPADA',
+        message,
+        recommendation,
+        priority: ['low', 'medium', 'high'].includes(priority) ? priority : 'medium',
+        estimatedCost: Math.max(0, Number(body.estimatedCost ?? body.cost ?? 0) || 0),
+        suggestedDate: body.suggestedDate ? new Date(body.suggestedDate) : null,
+        approvedAt: body.status === 'approved' ? new Date() : undefined
+    };
+}
+
+async function saveMaintenanceSuggestion(body = {}) {
+    const payload = normalizeMaintenanceSuggestionInput(body);
+    const suggestion = await MaintenanceSuggestion.create(payload);
+    return suggestion;
+}
+
 app.post('/maintenance/suggestion', async (req, res) => {
     try {
-        const { action = 'approve', decision: clientDecision, deviceId } = req.body || {};
-        if (action !== 'approve') {
-            return res.status(400).json({ success: false, error: 'Unsupported action' });
-        }
-
-        const decision = clientDecision || await getCurrentMaintenanceDecision(deviceId);
-        const suggestionPayload = toSuggestionDocument(decision);
-        suggestionPayload.approvedAt = new Date();
-
-        const saved = await new MaintenanceSuggestion(suggestionPayload).save();
-
-        res.json({ success: true, data: saved });
+        const suggestion = await saveMaintenanceSuggestion(req.body || {});
+        res.json({ success: true, data: suggestion });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1743,784 +1886,243 @@ app.post('/maintenance/suggestion', async (req, res) => {
 
 app.post('/api/maintenance/suggestion', async (req, res) => {
     try {
-        const { action = 'approve', decision: clientDecision, deviceId } = req.body || {};
-        if (action !== 'approve') {
-            return res.status(400).json({ success: false, error: 'Unsupported action' });
-        }
-
-        const decision = clientDecision || await getCurrentMaintenanceDecision(deviceId);
-        const suggestionPayload = toSuggestionDocument(decision);
-        suggestionPayload.approvedAt = new Date();
-
-        const saved = await new MaintenanceSuggestion(suggestionPayload).save();
-
-        res.json({ success: true, data: saved });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.post('/api/reports/analysis', async (req, res) => {
-    try {
-        const { rows, sensor, maxPoints } = req.body || {};
-        const parsed = analyzeReportRows(
-            Array.isArray(rows) ? rows : [],
-            sensor || 'rpm',
-            Number.isFinite(Number(maxPoints)) ? Number(maxPoints) : 300
-        );
-
-        res.json({ success: parsed.ok !== false, data: parsed });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// ── Helper: build MongoDB aggregation stats (bySensor) ──────────────────────
-//  Runs a single $group pipeline over the given query and returns the same
-//  { totalMatched, bySensor } shape expected by the frontend.
-const SENSOR_KEYS_FOR_STATS = ['rpm','volt','amp','power','freq','temp','coolant','fuel','iat','map','afr','tps','batt'];
-
-async function buildSensorStats(collection, matchQuery) {
-    const groupStage = { _id: null, totalMatched: { $sum: 1 } };
-    SENSOR_KEYS_FOR_STATS.forEach((key) => {
-        groupStage[`${key}Count`] = { $sum: { $cond: [{ $ne: [`$${key}`, null] }, 1, 0] } };
-        groupStage[`${key}Avg`]   = { $avg: `$${key}` };
-        groupStage[`${key}Min`]   = { $min: `$${key}` };
-        groupStage[`${key}Max`]   = { $max: `$${key}` };
-    });
-
-    const [summary] = await collection.aggregate([
-        { $match: matchQuery },
-        { $group: groupStage }
-    ]).toArray();
-
-    if (!summary) return { totalMatched: 0, bySensor: {} };
-
-    const bySensor = {};
-    SENSOR_KEYS_FOR_STATS.forEach((key) => {
-        const avg = summary[`${key}Avg`];
-        const min = summary[`${key}Min`];
-        const max = summary[`${key}Max`];
-        if ([avg, min, max].some((v) => Number.isFinite(Number(v)))) {
-            bySensor[key] = {
-                count: Number(summary[`${key}Count`]) || 0,
-                avg:   Number.isFinite(Number(avg)) ? +Number(avg).toFixed(4)  : null,
-                min:   Number.isFinite(Number(min)) ? Number(min) : null,
-                max:   Number.isFinite(Number(max)) ? Number(max) : null
-            };
-        }
-    });
-
-    return { totalMatched: Number(summary.totalMatched) || 0, bySensor };
-}
-
-// API Endpoint untuk mengambil data report dari collection MongoDB yang ditetapkan
-app.get('/api/reports', async (req, res) => {
-    try {
-        // Tunggu DB siap; jika gagal, return JSON error (bukan diam-diam lanjut)
-        try { await ensureDbReady(); } catch (_) {}
-        if (!isDbReady()) {
-            return res.status(503).json({
-                success: false, error: 'Database not ready, please retry.',
-                data: [], count: 0, stats: { totalMatched: 0, bySensor: {} }
-            });
-        }
-        const parsedLimit = parseInt(req.query.limit, 10);
-        const limit = Number.isNaN(parsedLimit) ? 5000 : Math.max(1, Math.min(parsedLimit, 100000));
-        // ── FIX: extract deviceId so both data and stats are filtered per device
-        const { hours, startDate, endDate, deviceId } = req.query;
-
-        const normalizeNumeric = (value) => {
-            if (value === null || value === undefined || value === '') return null;
-            const parsed = Number(value);
-            return Number.isFinite(parsed) ? parsed : null;
-        };
-
-        const normalizeRow = (row) => {
-            const timestamp = row.timestamp || row.createdAt || row.date || row.waktu || null;
-            if (!timestamp) return null;
-
-            return {
-                ...row,
-                timestamp,
-                rpm:     normalizeNumeric(row.rpm),
-                volt:    normalizeNumeric(row.volt    ?? row.voltage),
-                amp:     normalizeNumeric(row.amp     ?? row.current),
-                power:   normalizeNumeric(row.power   ?? row.kw ?? row.kW),
-                freq:    normalizeNumeric(row.freq    ?? row.frequency),
-                temp:    normalizeNumeric(row.temp    ?? row.temperature),
-                coolant: normalizeNumeric(row.coolant ?? row.temp ?? row.temperature),
-                fuel:    normalizeNumeric(row.fuel),
-                iat:     normalizeNumeric(row.iat),
-                map:     normalizeNumeric(row.map ?? row.mapPressure ?? row.manifoldPressure),
-                batt:    normalizeNumeric(row.batt ?? row.battery ?? row.battVolt),
-                afr:     normalizeNumeric(row.afr),
-                tps:     normalizeNumeric(row.tps)
-            };
-        };
-
-        // ── FIX: parse dates dengan tepat.
-        // Frontend mengirim ISO string yang sudah digeser ke WIB, atau "YYYY-MM-DD".
-        // Jika string date-only, paksa ke WIB full-day range (+07:00).
-        const timeFilter = {};
-        if (startDate && endDate) {
-            let start = new Date(startDate);
-            let end   = new Date(endDate);
-            if (startDate.length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
-            if (endDate.length === 10)   end   = new Date(endDate   + 'T23:59:59.999+07:00');
-            if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-                timeFilter.$gte = start;
-                timeFilter.$lte = end;
-            }
-        } else if (hours) {
-            const h = Number(hours);
-            if (!Number.isNaN(h) && h > 0) {
-                timeFilter.$gte = new Date(Date.now() - h * 3600 * 1000);
-            }
-        }
-
-        // ── FIX: always include deviceId when provided
-        const buildMatchQuery = (timestampField = 'timestamp') => {
-            const q = {};
-            if (Object.keys(timeFilter).length) q[timestampField] = timeFilter;
-            if (deviceId) q.deviceId = deviceId;
-            return q;
-        };
-
-        const buildFieldCondition = (fieldName) =>
-            Object.keys(timeFilter).length ? { [fieldName]: timeFilter } : { [fieldName]: { $exists: true } };
-
-        const mergeUniqueRows = (rows) => {
-            const seen = new Set();
-            const out  = [];
-            for (const row of rows) {
-                const ts  = row.timestamp || row.createdAt || row.date || row.waktu || '';
-                const key = `${row._id || ''}|${ts}`;
-                if (seen.has(key)) continue;
-                seen.add(key);
-                out.push(row);
-            }
-            return out;
-        };
-
-        let reports     = [];
-        let statsResult = { totalMatched: 0, bySensor: {} };
-        let usedCollection = null;
-
-        const candidateCollections = ['reports', 'generatordatas', 'generator_data'];
-
-        if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
-            const existingCollections = await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray();
-            const existingNames = new Set(existingCollections.map((c) => c.name));
-
-            for (const collectionName of candidateCollections) {
-                if (!existingNames.has(collectionName)) continue;
-
-                const collection = mongoose.connection.db.collection(collectionName);
-
-                // Build $or with optional deviceId for raw find()
-                // SESUDAH (✅ sort & limit langsung di MongoDB)
-                const matchQuery = buildMatchQuery('timestamp');
-
-                const count = await collection.countDocuments(matchQuery);
-                if (!count) continue;
-
-                const docs = await collection
-                    .find(matchQuery)
-                    .sort({ timestamp: -1 })
-                    .limit(limit)
-                    .toArray();
-
-                if (docs.length) {
-                    reports = docs;
-                    usedCollection = collection;
-                    break;
-                }
-            }
-
-            // ── Run MongoDB aggregation on the same collection that provided data ──
-            if (usedCollection) {
-                const statsMatch = buildMatchQuery('timestamp');
-                statsResult = await buildSensorStats(usedCollection, statsMatch);
-            }
-        }
-
-        if (!reports.length && isDbReady()) {
-            const fallbackQuery = buildMatchQuery('timestamp');
-            reports = await GeneratorData.find(fallbackQuery)
-                .sort({ timestamp: -1, createdAt: -1, date: -1 })
-                .limit(limit)
-                .lean();
-
-            // Run aggregation via Mongoose model as fallback
-            if (reports.length) {
-                const rawCollection = mongoose.connection.db.collection('generatordatas');
-                statsResult = await buildSensorStats(rawCollection, fallbackQuery);
-            }
-        }
-
-        const normalizedReports = reports
-            .map(normalizeRow)
-            .filter(Boolean)
-            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-        res.json({
-            success: true,
-            count:   normalizedReports.length,
-            data:    normalizedReports,
-            // ── FIX: include MongoDB aggregation stats so frontend never needs
-            //    to recompute min/max/avg from a limited/cleaned subset ──
-            stats:   statsResult,
-            source:  isDbReady() ? 'database' : 'memory'
-        });
-    } catch (err) {
-        res.json({ success: true, count: 0, data: [], stats: { totalMatched: 0, bySensor: {} }, source: 'memory', warning: err.message });
-    }
-});
-
-// ── Dedicated stats-only endpoint (called in parallel by frontend) ──────────
-//  Same aggregation as above but returns only stats — no row data payload.
-//  This ensures the frontend always has authoritative MongoDB stats even when
-//  the main /api/reports response is slow or partially cached.
-app.get('/api/reports/stats', async (req, res) => {
-    try {
-        await ensureDbReady().catch(() => undefined);
-        const { hours, startDate, endDate, deviceId } = req.query;
-
-        const timeFilter = {};
-        if (startDate && endDate) {
-            let start = new Date(startDate);
-            let end   = new Date(endDate);
-            if (startDate.length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
-            if (endDate.length === 10)   end   = new Date(endDate   + 'T23:59:59.999+07:00');
-            if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-                timeFilter.$gte = start;
-                timeFilter.$lte = end;
-            }
-        } else if (hours) {
-            const h = Number(hours);
-            if (!Number.isNaN(h) && h > 0) timeFilter.$gte = new Date(Date.now() - h * 3600 * 1000);
-        }
-
-        const matchQuery = {};
-        if (Object.keys(timeFilter).length) matchQuery.timestamp = timeFilter;
-        if (deviceId) matchQuery.deviceId = deviceId;
-
-        if (!isDbReady()) {
-            return res.json({ success: false, error: 'Database not ready' });
-        }
-
-        // Use the same collection-discovery logic so stats always come from the
-        // same collection that /api/reports serves data from.
-        const candidateCollections = ['reports', 'generatordatas', 'generator_data'];
-        const existingCollections  = await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray();
-        const existingNames        = new Set(existingCollections.map((c) => c.name));
-
-        let statsResult = null;
-        for (const collectionName of candidateCollections) {
-            if (!existingNames.has(collectionName)) continue;
-            const collection = mongoose.connection.db.collection(collectionName);
-            // Quick check: does this collection have matching docs?
-            const sample = await collection.findOne(matchQuery);
-            if (!sample) continue;
-            statsResult = await buildSensorStats(collection, matchQuery);
-            break;
-        }
-
-        if (!statsResult) {
-            // Last resort: GeneratorData model
-            const rawCollection = mongoose.connection.db.collection('generatordatas');
-            statsResult = await buildSensorStats(rawCollection, matchQuery);
-        }
-
-        res.json({ success: true, stats: statsResult });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// const maintenanceSchema = new mongoose.Schema({
-//     task: { type: String, required: true },
-//     type: String,
-//     priority: String,
-//     status: { type: String, default: 'scheduled' },
-//     dueDate: Date,
-//     assignedTo: String,
-//     createdAt: { type: Date, default: Date.now },
-//     completedAt: Date
-// });
-// const Maintenance = mongoose.model('Maintenance', maintenanceSchema);
-
-// // --- 2. UPDATE API ENDPOINTS ---
-
-// // GET: Ambil semua data (Bisa filter lewat query)
-// app.get('/api/maintenance', async (req, res) => {
-//     try {
-//         const logs = await Maintenance.find().sort({ dueDate: 1 }); // Urutkan berdasarkan tenggat waktu
-//         res.json({ success: true, data: logs });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-// // POST: Tambah data baru dari halaman Maintenance
-// app.post('/api/maintenance', async (req, res) => {
-//     try {
-//         const newTask = new Maintenance(req.body);
-//         await newTask.save();
-//         res.json({ success: true, data: newTask });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-// // PUT: Update status (misal: Complete task)
-// app.put('/api/maintenance/:id', async (req, res) => {
-//     try {
-//         const updated = await Maintenance.findByIdAndUpdate(req.params.id, req.body, { new: true });
-//         res.json({ success: true, data: updated });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-// // DELETE: Hapus task
-// app.delete('/api/maintenance/:id', async (req, res) => {
-//     try {
-//         await Maintenance.findByIdAndDelete(req.params.id);
-//         res.json({ success: true });
-//     } catch (error) {
-//         res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        const email = String(req.body?.email || '').trim().toLowerCase();
-        const password = String(req.body?.password || '');
-
-        if (!email || !password) {
-            return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
-        }
-
-        const user = await User.findOne({ email }).lean();
-        if (!user) {
-            return res.status(404).json({ success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' });
-        }
-        if (user.password !== password) {
-            return res.status(401).json({ success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' });
-        }
-
-        const role = String(user.role || '').toLowerCase();
-        const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
-        const redirectTo = isMasyarakat ? 'public.html' : 'index.html';
-
-        return res.json({
-            success: true,
-            user: {
-                name: user.name || user.email.split('@')[0],
-                email: user.email,
-                role: user.role || (isMasyarakat ? 'Masyarakat' : 'Teknisi'),
-                redirectTo
-            }
-        });
-    } catch (error) {
-        return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
-    }
-});
-
-// Di server.js, tambahkan middleware untuk public.html
-app.get('/public.html', (req, res) => {
-    // Hanya serve file, autentikasi dilakukan di client-side
-    res.sendFile(path.join(__dirname, 'public', 'public.html'));
-});
-
-// Modifikasi login response untuk memastikan role 'warg' bisa akses
-// app.post('/api/auth/login', async (req, res) => {
-//     try {
-//         const email = String(req.body?.email || '').trim().toLowerCase();
-//         const password = String(req.body?.password || '');
-
-//         if (!email || !password) {
-//             return res.status(400).json({ success: false, message: 'Email dan password wajib diisi.' });
-//         }
-
-//         const user = await User.findOne({ email }).lean();
-//         if (!user) {
-//             return res.status(404).json({ success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' });
-//         }
-//         if (user.password !== password) {
-//             return res.status(401).json({ success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' });
-//         }
-
-//         const role = String(user.role || '').toLowerCase();
-//         // Allow both 'masyarakat' and 'warg' to access public.html
-//         const isPublic = role === 'masyarakat' || role === 'warg' || role === 'user' || role === 'viewer';
-//         const redirectTo = isPublic ? 'public.html' : 'index.html';
-
-//         return res.json({
-//             success: true,
-//             user: {
-//                 name: user.name || user.email.split('@')[0],
-//                 email: user.email,
-//                 role: user.role,
-//                 redirectTo
-//             }
-//         });
-//     } catch (error) {
-//         return res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server login.', error: error.message });
-//     }
-// });
-
-
-
-
-
-app.post('/api/auth/register', async (req, res) => {
-    try {
-        const name = String(req.body?.name || '').trim();
-        const email = String(req.body?.email || '').trim().toLowerCase();
-        const password = String(req.body?.password || '');
-        const productToken = String(req.body?.productToken || '').trim();
-
-        if (!name || !email || !password || !productToken) {
-            return res.status(400).json({ success: false, message: 'Nama, email, password, dan token produk wajib diisi.' });
-        }
-
-        const expectedToken = 'TA252601020';
-        if (productToken !== expectedToken) {
-            return res.status(403).json({ success: false, message: 'Token produk tidak valid.' });
-        }
-
-        const existingUser = await User.findOne({ email }).lean();
-        if (existingUser) {
-            return res.status(409).json({ success: false, message: 'Email sudah terdaftar. Silakan login.' });
-        }
-
-        const newUser = await User.create({ name, email, password, role: 'warga' });
-        return res.status(201).json({
-            success: true,
-            message: 'Registrasi berhasil. Silakan login.',
-            user: { name: newUser.name, email: newUser.email, role: newUser.role }
-        });
-    } catch (error) {
-        return res.status(500).json({ success: false, message: 'Terjadi kesalahan saat registrasi.', error: error.message });
-    }
-});
-
-app.get('/api/health', (req, res) => res.json({ status: 'healthy', mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
-app.get('/favicon.ico', (req, res) => res.status(204).end());
-
-/**
- * ================================================================
- * TAMBAHAN UNTUK server.js — CBM Endpoints
- * ================================================================
- *
- * LANGKAH INTEGRASI:
- *
- * 1. Di BAGIAN PALING ATAS server.js, tambahkan setelah baris
- *    require('./maintenance_decision'):
- *
- *       const { analyzeCBM } = require('./lib_cbm_analysis');
- *
- * 2. Paste seluruh kode di bawah ini ke server.js SEBELUM baris:
- *       app.use('/api', (req, res) => { ... });   // ← catch-all /api
- *
- * ================================================================
- */
-
-// ─── HELPER: Total Jam Operasi ────────────────────────────────────────────────
-async function getTotalOperatingHours(deviceId) {
-    const query = {};
-    if (deviceId) query.deviceId = deviceId;
-
-    const agg = await ActiveTimeHistory.aggregate([
-        { $match: query },
-        { $group: { _id: null, totalMs: { $sum: '$durationMs' } } }
-    ]);
-
-    return agg[0] ? agg[0].totalMs / 3_600_000 : 0;
-}
-
-// ─── CBM ANALYSIS  (GET) ──────────────────────────────────────────────────────
-// Dipanggil oleh cbm_panel.js sebagai fallback jika POST gagal
-app.get('/api/cbm/analysis', async (req, res) => {
-    try {
-        await ensureDbReady().catch(() => undefined);
-        if (!isDbReady()) {
-            return res.status(503).json({ success: false, error: 'Database not ready' });
-        }
-
-        const { deviceId, hours, startDate, endDate } = req.query;
-        const effectiveDeviceId = deviceId
-            || process.env.DEFAULT_REPORT_DEVICE_ID
-            || null;
-
-        const timeQuery = {};
-        if (startDate && endDate) {
-            let start = new Date(startDate);
-            let end   = new Date(endDate);
-            if (startDate.length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
-            if (endDate.length   === 10) end   = new Date(endDate   + 'T23:59:59.999+07:00');
-            if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())) {
-                timeQuery.timestamp = { $gte: start, $lte: end };
-            }
-        } else {
-            const h = parseInt(hours || '168', 10);
-            timeQuery.timestamp = { $gte: new Date(Date.now() - h * 3_600_000) };
-        }
-
-        const matchQuery = { ...timeQuery };
-        if (effectiveDeviceId) matchQuery.deviceId = effectiveDeviceId;
-
-        const historicalRows = await GeneratorData.find(matchQuery)
-            .sort({ timestamp: -1 }).limit(10_000).lean();
-
-        const totalOpHours = await getTotalOperatingHours(effectiveDeviceId);
-
-        const result = analyzeCBM(
-            historicalRows,
-            ACTIVE_THRESHOLDS,
-            totalOpHours
-        );
-
-        res.json({ success: true, data: result });
-    } catch (error) {
-        console.error('CBM GET Error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// ─── CBM ANALYSIS  (POST) ─────────────────────────────────────────────────────
-// Menerima { deviceId, hours, startDate, endDate, fftPeaks, rpmMean }
-// fftPeaks dikirim dari cbm_panel.js tombol "+ FFT Peaks"
-app.post('/api/cbm/analysis', async (req, res) => {
-    try {
-        await ensureDbReady().catch(() => undefined);
-        if (!isDbReady()) {
-            return res.status(503).json({ success: false, error: 'Database not ready' });
-        }
-
-        const {
-            deviceId,
-            hours    = 168,
-            startDate,
-            endDate,
-            fftPeaks = [],
-            rpmMean  = 0
-        } = req.body || {};
-
-        const effectiveDeviceId = deviceId
-            || process.env.DEFAULT_REPORT_DEVICE_ID
-            || null;
-
-        const matchQuery = {};
-        if (startDate && endDate) {
-            let start = new Date(startDate);
-            let end   = new Date(endDate);
-            if (String(startDate).length === 10) start = new Date(startDate + 'T00:00:00.000+07:00');
-            if (String(endDate).length   === 10) end   = new Date(endDate   + 'T23:59:59.999+07:00');
-            if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())) {
-                matchQuery.timestamp = { $gte: start, $lte: end };
-            }
-        } else {
-            const h = parseInt(hours, 10) || 168;
-            matchQuery.timestamp = { $gte: new Date(Date.now() - h * 3_600_000) };
-        }
-        if (effectiveDeviceId) matchQuery.deviceId = effectiveDeviceId;
-
-        const historicalRows = await GeneratorData.find(matchQuery)
-            .sort({ timestamp: -1 }).limit(10_000).lean();
-
-        const totalOpHours = await getTotalOperatingHours(effectiveDeviceId);
-
-        const result = analyzeCBM(
-            historicalRows,
-            ACTIVE_THRESHOLDS,
-            totalOpHours,
-            Array.isArray(fftPeaks) ? fftPeaks : [],
-            Number(rpmMean) || 0
-        );
-
-        res.json({ success: true, data: result });
-    } catch (error) {
-        console.error('CBM POST Error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// ─── CBM CONVERT TO TASK ─────────────────────────────────────────────────────
-// Dipanggil saat user klik "+ Buat Task" di panel CBM
-// Body: { finding: { action, details, priority, type, component }, dueDate? }
-app.post('/api/cbm/convert-to-task', async (req, res) => {
-    try {
-        const { finding, dueDate, assignedTo } = req.body || {};
-        if (!finding?.action) {
-            return res.status(400).json({ success: false, error: 'finding.action is required' });
-        }
-
-        const task = await new Maintenance({
-            task:       finding.action,
-            type:       finding.type     || 'Corrective',
-            priority:   finding.priority || 'medium',
-            status:     'scheduled',
-            source:     'cbm',
-            dueDate:    dueDate ? new Date(dueDate) : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-            assignedTo: assignedTo || null
-        }).save();
-
-        console.log(`🔧 CBM Task created: ${task.task}`);
-        res.json({ success: true, data: task });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Letakkan setelah blok “TAMBAHAN UNTUK server.js — CBM Endpoints”
-// di dalam server.js (sebelum app.use('/api', ...) catch‑all)
-
-app.post('/api/cbm/suggestion', async (req, res) => {
-    try {
-        const { finding, dueDate } = req.body || {};
-        if (!finding?.action) {
-            return res.status(400).json({ success: false, error: 'finding.action diperlukan' });
-        }
-
-        // Konversi level CBM ke decisionStatus
-        const level = finding.level || 'watch';
-        let decisionStatus = 'WASPADA';
-        if (level === 'critical') decisionStatus = 'BAHAYA';
-        else if (level === 'ok') decisionStatus = 'AMAN';
-
-        const suggestion = await new MaintenanceSuggestion({
-            source: 'cbm',
-            status: 'pending',
-            decisionStatus,
-            message: finding.details || finding.action,
-            recommendation: finding.action,
-            priority: finding.priority || 'medium',
-            estimatedCost: finding.estimatedCost || 0,
-            suggestedDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 3 * 24 * 3600000),
-            createdAt: new Date()
-        }).save();
-
+        const suggestion = await saveMaintenanceSuggestion(req.body || {});
         res.json({ success: true, data: suggestion });
     } catch (error) {
-        console.error('CBM Suggestion Error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-app.get('/api/maintenance/cost-summary', async (req, res) => {
-    try {
-        const { deviceId } = req.query;
-        const match = deviceId ? { deviceId } : {};
-        const summary = await Maintenance.aggregate([
-            { $match: { ...match, status: { $ne: 'cancelled' } } },
-            { $group: { _id: '$deviceId', totalCost: { $sum: '$cost' }, count: { $sum: 1 } } }
-        ]);
-        res.json({ success: true, data: summary });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-app.get('/api/alerts/count', async (req, res) => {
-    try {
-        const { deviceId, startDate, endDate, resolved } = req.query;
-        let query = {};
-        
-        if (deviceId) query.deviceId = deviceId;
-        
-        // Filter berdasarkan status resolved jika dikirim frontend
-        if (resolved !== undefined) {
-            query.resolved = resolved === 'true'; 
-        }
-
-        if (startDate && endDate) {
-            query.timestamp = { $gte: new Date(startDate), $lte: new Date(endDate) };
-        }
-
-        // Gunakan countDocuments agar lebih ringan dibanding mengambil datanya
-        const count = await Alert.countDocuments(query);
-        res.json({ success: true, count });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-// --- API UNTUK PROFIL USER ---
-
-// Ambil data profil berdasarkan nama/username (karena session menyimpan username)
-app.get('/api/users/profile', async (req, res) => {
-    try {
-        const { username } = req.query;
-        const user = await User.findOne({ name: username }).lean();
-        if (!user) return res.status(404).json({ success: false, message: 'User tidak ditemukan' });
-        
-        // Asumsi Device ID default jika tidak diikat spesifik ke user
-        const deviceId = process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
-        
-        res.json({ success: true, data: { name: user.name, email: user.email, role: user.role, deviceId } });
-    } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// Update data profil (Nama, Email, Password)
-// server.js - API Update Profil dengan Verifikasi Password
-app.put('/api/users/profile', async (req, res) => {
+app.post('/api/maintenance/suggestion/:id/approve', async (req, res) => {
     try {
-        const { currentName, name, email, oldPassword, newPassword } = req.body;
-        
-        if (!currentName) return res.status(400).json({ success: false, message: 'Identitas saat ini diperlukan.' });
+        const suggestion = await MaintenanceSuggestion.findById(req.params.id);
+        if (!suggestion) return res.status(404).json({ success: false, error: 'Suggestion not found' });
 
-        const user = await User.findOne({ name: currentName });
-        if (!user) return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
+        suggestion.status = 'approved';
+        suggestion.approvedAt = new Date();
+        await suggestion.save();
 
-        // VERIFIKASI KEAMANAN (Jika user ingin ganti password)
-        if (newPassword) {
-            if (!oldPassword) {
-                return res.status(400).json({ success: false, message: 'Password lama wajib diisi untuk verifikasi keamanan.' });
-            }
-            // Bandingkan password lama dengan yang di DB
-            if (user.password !== oldPassword) {
-                return res.status(401).json({ success: false, message: 'Password lama salah.' });
-            }
-            user.password = newPassword;
-        }
-
-        // Update data lainnya
-        if (name) user.name = name;
-        if (email) user.email = email;
-
-        await user.save();
-        res.json({ 
-            success: true, 
-            message: 'Profil diperbarui.', 
-            user: { name: user.name, email: user.email, role: user.role } 
+        const task = await Maintenance.create({
+            task: suggestion.recommendation,
+            type: suggestion.decisionStatus === 'BAHAYA' ? 'Corrective' : 'Preventive',
+            priority: suggestion.priority,
+            cost: suggestion.estimatedCost || 0,
+            status: 'scheduled',
+            dueDate: suggestion.suggestedDate || new Date(),
+            assignedTo: req.body?.assignedTo || 'Operator',
+            source: suggestion.source,
+            suggestionId: String(suggestion._id)
         });
+
+        suggestion.status = 'scheduled';
+        await suggestion.save();
+
+        res.json({ success: true, data: { suggestion, task } });
     } catch (error) {
-        if (error.code === 11000) {
-            return res.status(400).json({ success: false, message: 'Email sudah digunakan akun lain.' });
-        }
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// ── CRITICAL: Semua /api/* yang tidak cocok harus return JSON, BUKAN HTML.
-// Tanpa ini, catch-all di bawah mengembalikan login.html → error "Unexpected token '<'"
-app.use('/api', (req, res) => {
-    res.status(404).json({ success: false, error: `API endpoint not found: ${req.method} ${req.path}` });
+app.get('/api/reports/monthly', async (req, res) => {
+    try {
+        const month = parseInt(req.query.month, 10) || (new Date().getMonth() + 1);
+        const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+        const start = new Date(year, month - 1, 1);
+        const end = new Date(year, month, 1);
+        const rows = await GeneratorData.find({ timestamp: { $gte: start, $lt: end } }).sort({ timestamp: 1 }).lean();
+        const analysis = analyzeReportRows(rows, { month, year });
+        res.json({ success: true, count: rows.length, data: analysis });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
-// Catch-all untuk halaman frontend — HARUS di bawah semua route API
-app.get(/(.*)/, (req, res) => { res.sendFile(path.join(__dirname, 'public', 'login.html')); });
 
-const PORT = process.env.PORT || 3000;
+// =========================
+// AUTH ROUTES
+// =========================
+app.post('/register', async (req, res) => {
+    try {
+        const { name, email, password, role } = req.body;
+        const existingUser = await User.findOne({ email });
+        if (existingUser) return res.status(400).json({ message: 'Email sudah terdaftar' });
+        const user = new User({ name, email, password, role: role || 'Masyarakat' });
+        await user.save();
+        res.status(201).json({ message: 'Registrasi berhasil', user: { name: user.name, email: user.email, role: user.role } });
+    } catch (error) { res.status(500).json({ message: 'Server error', error: error.message }); }
+});
 
-if (require.main === module) {
-    app.listen(PORT, () => {
-        console.log(`🚀 Server running: http://localhost:${PORT}`);
-    });
+app.post('/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await User.findOne({ email, password });
+        if (!user) return res.status(401).json({ message: 'Email atau password salah' });
+        res.json({ message: 'Login berhasil', user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+    } catch (error) { res.status(500).json({ message: 'Server error', error: error.message }); }
+});
+
+app.post('/api/alerts/:id/email', async (req, res) => {
+    try {
+        const alert = await Alert.findById(req.params.id).lean();
+        if (!alert) return res.status(404).json({ success: false, error: 'Alert not found' });
+        const latest = await GeneratorData.findOne({ deviceId: alert.deviceId }).sort({ timestamp: -1 }).lean();
+        await sendCriticalAlertEmail([alert], latest || { deviceId: alert.deviceId }, req.body?.email);
+        res.json({ success: true, message: 'Alert email sent' });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ============================================================
+// RECOMMENDATION + REPORT WORKERS
+// ============================================================
+const workerStateSchema = new mongoose.Schema({
+    key: { type: String, unique: true },
+    value: Object,
+    updatedAt: { type: Date, default: Date.now }
+});
+const WorkerState = mongoose.models.WorkerState || mongoose.model('WorkerState', workerStateSchema, 'workerstates');
+
+function startMaintenanceSuggestionWorker() {
+    const intervalMs = parseInt(process.env.MAINTENANCE_WORKER_INTERVAL_MS || '3600000', 10);
+    const staleMs = parseInt(process.env.MAINTENANCE_SUGGESTION_STALE_MS || String(24 * 60 * 60 * 1000), 10);
+
+    async function runOnce() {
+        try {
+            if (!isDbReady()) return;
+            const latest = await GeneratorData.findOne().sort({ timestamp: -1 }).lean();
+            if (!latest) return;
+            const existing = await MaintenanceSuggestion.findOne({ status: { $in: ['pending', 'approved'] } }).sort({ createdAt: -1 }).lean();
+            if (existing && Date.now() - new Date(existing.createdAt).getTime() < staleMs) return;
+
+            const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const recentAlerts = await Alert.find({ timestamp: { $gte: cutoff } }).sort({ timestamp: -1 }).limit(100).lean();
+            const decision = generateMaintenanceDecision(latest, recentAlerts);
+            if (!decision || decision.status === 'AMAN') return;
+
+            await MaintenanceSuggestion.create(toSuggestionDocument(decision));
+            console.log('🔧 Maintenance suggestion generated:', decision.status);
+        } catch (error) {
+            console.error('Maintenance worker error:', error.message);
+        }
+    }
+
+    setInterval(runOnce, intervalMs);
+    setTimeout(runOnce, 30000);
 }
 
-module.exports = app;
+function startMonthlyReportWorker() {
+    const intervalMs = parseInt(process.env.REPORT_WORKER_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
+    async function runOnce() {
+        try {
+            if (!isDbReady()) return;
+            const now = new Date();
+            const month = now.getMonth() + 1;
+            const year = now.getFullYear();
+            const key = `monthly-report-${year}-${String(month).padStart(2, '0')}`;
+            const existing = await WorkerState.findOne({ key }).lean();
+            const todayKey = now.toISOString().slice(0, 10);
+            if (existing?.value?.lastRunDate === todayKey) return;
+
+            const start = new Date(year, month - 1, 1);
+            const end = new Date(year, month, 1);
+            const rows = await GeneratorData.find({ timestamp: { $gte: start, $lt: end } }).sort({ timestamp: 1 }).lean();
+            const analysis = analyzeReportRows(rows, { month, year });
+            await WorkerState.findOneAndUpdate(
+                { key },
+                { value: { month, year, lastRunDate: todayKey, analysis }, updatedAt: new Date() },
+                { upsert: true, new: true }
+            );
+            console.log(`📄 Monthly report worker updated ${key} (${rows.length} rows)`);
+        } catch (error) {
+            console.error('Monthly report worker error:', error.message);
+        }
+    }
+    setInterval(runOnce, intervalMs);
+    setTimeout(runOnce, 45000);
+}
+
+// ============================================================
+// CBM WORKER + API
+// ============================================================
+const cbmAnalysisSchema = new mongoose.Schema({
+    timestamp: { type: Date, default: Date.now, index: true },
+    deviceId: { type: String, index: true },
+    status: String,
+    healthIndex: Number,
+    riskScore: Number,
+    recommendations: [String],
+    indicators: Object,
+    sourceData: Object
+});
+const CBMAnalysis = mongoose.models.CBMAnalysis || mongoose.model('CBMAnalysis', cbmAnalysisSchema, 'cbmanalyses');
+
+async function runCbmAnalysisOnce() {
+    if (!isDbReady()) return null;
+    const latest = await GeneratorData.findOne().sort({ timestamp: -1 }).lean();
+    if (!latest) return null;
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentAlerts = await Alert.find({ deviceId: latest.deviceId, timestamp: { $gte: cutoff } })
+        .sort({ timestamp: -1 })
+        .limit(100)
+        .lean();
+    const analysis = analyzeCBM(latest, recentAlerts);
+    const doc = await CBMAnalysis.create({
+        deviceId: latest.deviceId,
+        ...analysis,
+        sourceData: {
+            rpm: latest.rpm,
+            volt: latest.volt,
+            freq: latest.freq,
+            coolant: latest.coolant,
+            fuel: latest.fuel,
+            amp: latest.amp,
+            batt: latest.batt,
+            map: latest.map
+        }
+    });
+    return doc;
+}
+
+function startCbmWorker() {
+    const intervalMs = parseInt(process.env.CBM_WORKER_INTERVAL_MS || '3600000', 10);
+    async function run() {
+        try {
+            const doc = await runCbmAnalysisOnce();
+            if (doc) console.log('🧠 CBM worker saved analysis:', doc.status, doc.healthIndex);
+        } catch (error) {
+            console.error('CBM worker error:', error.message);
+        }
+    }
+    setInterval(run, intervalMs);
+    setTimeout(run, 60000);
+}
+
+app.get('/api/cbm/latest', async (req, res) => {
+    try {
+        const query = req.query.deviceId ? { deviceId: req.query.deviceId } : {};
+        const latest = await CBMAnalysis.findOne(query).sort({ timestamp: -1 }).lean();
+        res.json({ success: true, data: latest });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/cbm/run', async (req, res) => {
+    try {
+        const doc = await runCbmAnalysisOnce();
+        res.json({ success: true, data: doc });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =========================
+// START SERVER
+// =========================
+const PORT = process.env.PORT || 3023;
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+    startMaintenanceSuggestionWorker();
+    startMonthlyReportWorker();
+    startCbmWorker();
+});
