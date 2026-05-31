@@ -465,13 +465,25 @@
   </div>
 
   <script>
+    async function parseJsonResponse(response, fallbackMessage) {
+      const contentType = response.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const payload = isJson ? await response.json() : null;
+
+      if (!response.ok) {
+        return payload || { success: false, message: fallbackMessage || `Server mengembalikan status ${response.status}.` };
+      }
+
+      return payload || { success: false, message: fallbackMessage || 'Respons server tidak valid.' };
+    }
+
     async function loginWithDatabase(email, password) {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
-      return await response.json();
+      return await parseJsonResponse(response, 'Endpoint login tidak tersedia. Pastikan server memakai rute /api/auth/login.');
     }
 
     async function registerWithDatabase(payload) {
@@ -480,7 +492,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      return await response.json();
+      return await parseJsonResponse(response, 'Endpoint registrasi tidak tersedia. Pastikan server memakai rute /api/auth/register.');
     }
 
     function switchMode(mode) {

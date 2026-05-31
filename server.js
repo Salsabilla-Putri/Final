@@ -186,6 +186,87 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
+function normalizeEmail(email) {
+    return String(email || '').trim().toLowerCase();
+}
+
+function getAuthRedirect(role) {
+    const normalizedRole = String(role || '').trim().toLowerCase();
+    const isCitizenRole = ['warga', 'masyarakat', 'user', 'viewer'].includes(normalizedRole);
+    return isCitizenRole ? 'public.html' : 'index.html';
+}
+
+function serializeAuthUser(user) {
+    const email = user.email || '';
+    return {
+        name: user.name || email.split('@')[0],
+        email,
+        role: user.role || 'Masyarakat',
+        redirectTo: getAuthRedirect(user.role)
+    };
+}
+
+async function loginUserByEmailPassword(email, password) {
+    if (!email || !password) {
+        return { status: 400, body: { success: false, message: 'Email dan password wajib diisi.' } };
+    }
+
+    await ensureDbReady();
+
+    const user = await User.findOne({ email }).lean();
+    if (!user) {
+        return {
+            status: 404,
+            body: { success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' }
+        };
+    }
+
+    if (user.password !== password) {
+        return {
+            status: 401,
+            body: { success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' }
+        };
+    }
+
+    return { status: 200, body: { success: true, user: serializeAuthUser(user) } };
+}
+
+async function registerUser({ name, email, password, productToken, role, requireProductToken = false }) {
+    if (!name || !email || !password || (requireProductToken && !productToken)) {
+        return {
+            status: 400,
+            body: {
+                success: false,
+                message: requireProductToken
+                    ? 'Nama, email, password, dan token produk wajib diisi.'
+                    : 'Nama, email, dan password wajib diisi.'
+            }
+        };
+    }
+
+    const expectedToken = process.env.PRODUCT_TOKEN || 'TA252601020';
+    if (requireProductToken && productToken !== expectedToken) {
+        return { status: 403, body: { success: false, message: 'Token produk tidak valid.' } };
+    }
+
+    await ensureDbReady();
+
+    const existingUser = await User.findOne({ email }).lean();
+    if (existingUser) {
+        return { status: 409, body: { success: false, message: 'Email sudah terdaftar. Silakan login.' } };
+    }
+
+    const user = await User.create({ name, email, password, role: role || 'warga' });
+    return {
+        status: 201,
+        body: {
+            success: true,
+            message: 'Registrasi berhasil. Silakan login.',
+            user: { name: user.name, email: user.email, role: user.role }
+        }
+    };
+}
+
 const activeTimeHistorySchema = new mongoose.Schema({
     deviceId: { type: String, required: true, index: true },
     startedAt: { type: Date, required: true, index: true },
@@ -1941,24 +2022,73 @@ app.get('/api/reports/monthly', async (req, res) => {
 // =========================
 // AUTH ROUTES
 // =========================
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const email = normalizeEmail(req.body?.email);
+        const password = String(req.body?.password || '');
+        const result = await loginUserByEmailPassword(email, password);
+        return res.status(result.status).json(result.body);
+    } catch (error) {
+        console.error('Login API error:', error.message);
+        return res.status(503).json({
+            success: false,
+            message: 'Server login belum siap atau database tidak dapat dihubungi.',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const result = await registerUser({
+            name: String(req.body?.name || '').trim(),
+            email: normalizeEmail(req.body?.email),
+            password: String(req.body?.password || ''),
+            productToken: String(req.body?.productToken || '').trim(),
+            role: 'warga',
+            requireProductToken: true
+        });
+        return res.status(result.status).json(result.body);
+    } catch (error) {
+        console.error('Register API error:', error.message);
+        return res.status(503).json({
+            success: false,
+            message: 'Server registrasi belum siap atau database tidak dapat dihubungi.',
+            error: error.message
+        });
+    }
+});
+
 app.post('/register', async (req, res) => {
     try {
-        const { name, email, password, role } = req.body;
-        const existingUser = await User.findOne({ email });
-        if (existingUser) return res.status(400).json({ message: 'Email sudah terdaftar' });
-        const user = new User({ name, email, password, role: role || 'Masyarakat' });
-        await user.save();
-        res.status(201).json({ message: 'Registrasi berhasil', user: { name: user.name, email: user.email, role: user.role } });
-    } catch (error) { res.status(500).json({ message: 'Server error', error: error.message }); }
+        const result = await registerUser({
+            name: String(req.body?.name || '').trim(),
+            email: normalizeEmail(req.body?.email),
+            password: String(req.body?.password || ''),
+            role: req.body?.role || 'Masyarakat',
+            requireProductToken: false
+        });
+        return res.status(result.status).json(result.body);
+    } catch (error) {
+        return res.status(503).json({ success: false, message: 'Server error', error: error.message });
+    }
 });
 
 app.post('/login', async (req, res) => {
     try {
-        const { email, password } = req.body;
-        const user = await User.findOne({ email, password });
-        if (!user) return res.status(401).json({ message: 'Email atau password salah' });
-        res.json({ message: 'Login berhasil', user: { id: user._id, name: user.name, email: user.email, role: user.role } });
-    } catch (error) { res.status(500).json({ message: 'Server error', error: error.message }); }
+        const email = normalizeEmail(req.body?.email);
+        const password = String(req.body?.password || '');
+        const result = await loginUserByEmailPassword(email, password);
+        if (!result.body.success) return res.status(result.status).json(result.body);
+
+        return res.json({
+            success: true,
+            message: 'Login berhasil',
+            user: result.body.user
+        });
+    } catch (error) {
+        return res.status(503).json({ success: false, message: 'Server error', error: error.message });
+    }
 });
 
 app.post('/api/alerts/:id/email', async (req, res) => {
@@ -2055,16 +2185,75 @@ const cbmAnalysisSchema = new mongoose.Schema({
 });
 const CBMAnalysis = mongoose.models.CBMAnalysis || mongoose.model('CBMAnalysis', cbmAnalysisSchema, 'cbmanalyses');
 
+
+function normalizeCbmNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function buildCbmDateFilter({ hours, startDate, endDate } = {}) {
+    const timestamp = {};
+
+    if (startDate || endDate) {
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
+        if (start && !Number.isNaN(start.getTime())) timestamp.$gte = start;
+        if (end && !Number.isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            timestamp.$lte = end;
+        }
+    } else {
+        const parsedHours = normalizeCbmNumber(hours, 168);
+        const safeHours = Math.max(1, Math.min(parsedHours, 24 * 365));
+        timestamp.$gte = new Date(Date.now() - safeHours * 60 * 60 * 1000);
+    }
+
+    return Object.keys(timestamp).length ? timestamp : null;
+}
+
+async function getTotalOperatingHours(deviceId) {
+    const match = {};
+    if (deviceId) match.deviceId = deviceId;
+
+    const [summary] = await ActiveTimeHistory.aggregate([
+        { $match: match },
+        { $group: { _id: null, totalMs: { $sum: '$durationMs' } } }
+    ]);
+
+    return ((summary?.totalMs || 0) / 3600000);
+}
+
+async function createCbmAnalysisPayload(options = {}) {
+    await ensureDbReady();
+
+    const deviceId = options.deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || null;
+    const query = {};
+    if (deviceId) query.deviceId = deviceId;
+
+    const dateFilter = buildCbmDateFilter(options);
+    if (dateFilter) query.timestamp = dateFilter;
+
+    let rows = await GeneratorData.find(query).sort({ timestamp: 1 }).limit(10000).lean();
+
+    // Jika filter device/date terlalu sempit, tetap berikan hasil dari data terbaru
+    // agar panel CBM tidak kosong total.
+    if (!rows.length) {
+        const fallbackQuery = deviceId ? { deviceId } : {};
+        rows = await GeneratorData.find(fallbackQuery).sort({ timestamp: -1 }).limit(1000).lean();
+        rows.reverse();
+    }
+
+    const totalOperatingHours = await getTotalOperatingHours(deviceId);
+    const fftPeaks = Array.isArray(options.fftPeaks) ? options.fftPeaks : [];
+    const rpmMean = normalizeCbmNumber(options.rpmMean, 0);
+    return analyzeCBM(rows, ACTIVE_THRESHOLDS, totalOperatingHours, fftPeaks, rpmMean);
+}
+
 async function runCbmAnalysisOnce() {
     if (!isDbReady()) return null;
     const latest = await GeneratorData.findOne().sort({ timestamp: -1 }).lean();
     if (!latest) return null;
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recentAlerts = await Alert.find({ deviceId: latest.deviceId, timestamp: { $gte: cutoff } })
-        .sort({ timestamp: -1 })
-        .limit(100)
-        .lean();
-    const analysis = analyzeCBM(latest, recentAlerts);
+    const analysis = await createCbmAnalysisPayload({ deviceId: latest.deviceId, hours: 168 });
     const doc = await CBMAnalysis.create({
         deviceId: latest.deviceId,
         ...analysis,
@@ -2095,6 +2284,49 @@ function startCbmWorker() {
     setInterval(run, intervalMs);
     setTimeout(run, 60000);
 }
+
+
+app.all('/api/cbm/analysis', async (req, res) => {
+    try {
+        if (!['GET', 'POST'].includes(req.method)) {
+            return res.status(405).json({ success: false, error: 'Method not allowed' });
+        }
+        const options = req.method === 'POST' ? (req.body || {}) : (req.query || {});
+        const data = await createCbmAnalysisPayload(options);
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error('CBM analysis error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/cbm/suggestion', async (req, res) => {
+    try {
+        await ensureDbReady();
+        const finding = req.body?.finding || req.body || {};
+        const level = String(finding.level || finding.priority || '').toLowerCase();
+        const decisionStatus = level === 'critical' || level === 'high'
+            ? 'BAHAYA'
+            : level === 'warn' || level === 'medium'
+                ? 'WASPADA'
+                : 'AMAN';
+
+        const suggestion = await saveMaintenanceSuggestion({
+            source: 'cbm',
+            decisionStatus,
+            message: finding.details || finding.message || finding.action || 'Saran dari analisis CBM',
+            recommendation: finding.action || finding.recommendation || finding.details || 'Lakukan inspeksi berdasarkan rekomendasi CBM',
+            priority: decisionStatus === 'BAHAYA' ? 'high' : decisionStatus === 'WASPADA' ? 'medium' : 'low',
+            estimatedCost: finding.estimatedCost || finding.cost || 0,
+            suggestedDate: finding.suggestedDate || null
+        });
+
+        res.json({ success: true, data: suggestion });
+    } catch (error) {
+        console.error('CBM suggestion error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 app.get('/api/cbm/latest', async (req, res) => {
     try {
