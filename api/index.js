@@ -529,7 +529,7 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         const role = String(user.role || '').toLowerCase();
-        const isMasyarakat = role === 'masyarakat' || role === 'user' || role === 'viewer';
+        const isMasyarakat = ['warga', 'masyarakat', 'user', 'viewer'].includes(role);
         const redirectTo = isMasyarakat ? 'public.html' : 'index.html';
 
         return res.json({
@@ -559,7 +559,7 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Nama, email, password, dan token produk wajib diisi.' });
         }
 
-        const expectedToken = 'TA252601020';
+        const expectedToken = process.env.PRODUCT_TOKEN || 'TA252601020';
         if (productToken !== expectedToken) {
             return res.status(403).json({ success: false, message: 'Token produk tidak valid.' });
         }
