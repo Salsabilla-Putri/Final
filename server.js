@@ -2185,16 +2185,75 @@ const cbmAnalysisSchema = new mongoose.Schema({
 });
 const CBMAnalysis = mongoose.models.CBMAnalysis || mongoose.model('CBMAnalysis', cbmAnalysisSchema, 'cbmanalyses');
 
+
+function normalizeCbmNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function buildCbmDateFilter({ hours, startDate, endDate } = {}) {
+    const timestamp = {};
+
+    if (startDate || endDate) {
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
+        if (start && !Number.isNaN(start.getTime())) timestamp.$gte = start;
+        if (end && !Number.isNaN(end.getTime())) {
+            end.setHours(23, 59, 59, 999);
+            timestamp.$lte = end;
+        }
+    } else {
+        const parsedHours = normalizeCbmNumber(hours, 168);
+        const safeHours = Math.max(1, Math.min(parsedHours, 24 * 365));
+        timestamp.$gte = new Date(Date.now() - safeHours * 60 * 60 * 1000);
+    }
+
+    return Object.keys(timestamp).length ? timestamp : null;
+}
+
+async function getTotalOperatingHours(deviceId) {
+    const match = {};
+    if (deviceId) match.deviceId = deviceId;
+
+    const [summary] = await ActiveTimeHistory.aggregate([
+        { $match: match },
+        { $group: { _id: null, totalMs: { $sum: '$durationMs' } } }
+    ]);
+
+    return ((summary?.totalMs || 0) / 3600000);
+}
+
+async function createCbmAnalysisPayload(options = {}) {
+    await ensureDbReady();
+
+    const deviceId = options.deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || null;
+    const query = {};
+    if (deviceId) query.deviceId = deviceId;
+
+    const dateFilter = buildCbmDateFilter(options);
+    if (dateFilter) query.timestamp = dateFilter;
+
+    let rows = await GeneratorData.find(query).sort({ timestamp: 1 }).limit(10000).lean();
+
+    // Jika filter device/date terlalu sempit, tetap berikan hasil dari data terbaru
+    // agar panel CBM tidak kosong total.
+    if (!rows.length) {
+        const fallbackQuery = deviceId ? { deviceId } : {};
+        rows = await GeneratorData.find(fallbackQuery).sort({ timestamp: -1 }).limit(1000).lean();
+        rows.reverse();
+    }
+
+    const totalOperatingHours = await getTotalOperatingHours(deviceId);
+    const fftPeaks = Array.isArray(options.fftPeaks) ? options.fftPeaks : [];
+    const rpmMean = normalizeCbmNumber(options.rpmMean, 0);
+    return analyzeCBM(rows, ACTIVE_THRESHOLDS, totalOperatingHours, fftPeaks, rpmMean);
+}
+
 async function runCbmAnalysisOnce() {
     if (!isDbReady()) return null;
     const latest = await GeneratorData.findOne().sort({ timestamp: -1 }).lean();
     if (!latest) return null;
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recentAlerts = await Alert.find({ deviceId: latest.deviceId, timestamp: { $gte: cutoff } })
-        .sort({ timestamp: -1 })
-        .limit(100)
-        .lean();
-    const analysis = analyzeCBM(latest, recentAlerts);
+    const analysis = await createCbmAnalysisPayload({ deviceId: latest.deviceId, hours: 168 });
     const doc = await CBMAnalysis.create({
         deviceId: latest.deviceId,
         ...analysis,
@@ -2225,6 +2284,49 @@ function startCbmWorker() {
     setInterval(run, intervalMs);
     setTimeout(run, 60000);
 }
+
+
+app.all('/api/cbm/analysis', async (req, res) => {
+    try {
+        if (!['GET', 'POST'].includes(req.method)) {
+            return res.status(405).json({ success: false, error: 'Method not allowed' });
+        }
+        const options = req.method === 'POST' ? (req.body || {}) : (req.query || {});
+        const data = await createCbmAnalysisPayload(options);
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error('CBM analysis error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/cbm/suggestion', async (req, res) => {
+    try {
+        await ensureDbReady();
+        const finding = req.body?.finding || req.body || {};
+        const level = String(finding.level || finding.priority || '').toLowerCase();
+        const decisionStatus = level === 'critical' || level === 'high'
+            ? 'BAHAYA'
+            : level === 'warn' || level === 'medium'
+                ? 'WASPADA'
+                : 'AMAN';
+
+        const suggestion = await saveMaintenanceSuggestion({
+            source: 'cbm',
+            decisionStatus,
+            message: finding.details || finding.message || finding.action || 'Saran dari analisis CBM',
+            recommendation: finding.action || finding.recommendation || finding.details || 'Lakukan inspeksi berdasarkan rekomendasi CBM',
+            priority: decisionStatus === 'BAHAYA' ? 'high' : decisionStatus === 'WASPADA' ? 'medium' : 'low',
+            estimatedCost: finding.estimatedCost || finding.cost || 0,
+            suggestedDate: finding.suggestedDate || null
+        });
+
+        res.json({ success: true, data: suggestion });
+    } catch (error) {
+        console.error('CBM suggestion error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 app.get('/api/cbm/latest', async (req, res) => {
     try {
