@@ -29,6 +29,7 @@
 #include <HardwareSerial.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <HTTPClient.h>
 #include "esp_wifi.h"
 
 #ifndef ESP_ARDUINO_VERSION_MAJOR
@@ -133,6 +134,17 @@
 #define MQTT_TOPIC "gen/data"
 #endif
 
+#ifndef MQTT_REALTIME_TOPIC
+#define MQTT_REALTIME_TOPIC "gen/realtime"
+#endif
+
+// Endpoint HTTP server Node.js untuk sinkronisasi ulang data backup dari SD card.
+// Ganti saat build/deploy, contoh:
+//   -D CLOUD_INGEST_URL=\"https://domain-server-anda/api/ingest/batch\"
+#ifndef CLOUD_INGEST_URL
+#define CLOUD_INGEST_URL "http://localhost:3000/api/ingest/batch"
+#endif
+
 // NTP WIB.
 const char* NTP_SERVER_1 = "pool.ntp.org";
 const char* NTP_SERVER_2 = "time.google.com";
@@ -202,6 +214,8 @@ SemaphoreHandle_t sdMutex = NULL;
 SemaphoreHandle_t dataMutex = NULL;
 
 const char* DB_FILE = "/database.csv";
+const char* SD_SYNC_FILE = "/sync_queue.jsonl";
+const char* SD_SYNC_TMP_FILE = "/sync_queue.tmp";
 
 // ============================================================
 // TIMING
@@ -210,6 +224,8 @@ const char* DB_FILE = "/database.csv";
 #define SENSOR_SAMPLE_INTERVAL_MS 20
 #define AGGREGATION_INTERVAL_MS   1000
 #define STORAGE_BATCH_SIZE        1
+#define SD_SYNC_INTERVAL_MS        30000UL
+#define SD_SYNC_BATCH_SIZE         20
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
@@ -331,6 +347,8 @@ struct StorageRecord {
   bool valid = false;
   uint32_t batchSeq = 0;
   uint8_t slotIndex = 0;
+  uint32_t localSeq = 0;
+  String recordId = "";
   String timestamp = "";
   uint32_t timestampMs = 0;
   AggregatedData agg;
@@ -403,6 +421,7 @@ uint8_t calIndex = 0;
 unsigned long lastPublish = 0;
 unsigned long lastDraw = 0;
 unsigned long lastLocalSave = 0;
+unsigned long lastSdSync = 0;
 unsigned long lastReconnect = 0;
 unsigned long lastWifiCheck = 0;
 unsigned long lastLinkFrameMs = 0;
@@ -411,9 +430,12 @@ unsigned long lastDBStorageReport = 0;
 
 uint32_t storageBatchSeq = 0;
 uint8_t storageBatchCount = 0;
+uint32_t localRecordSeq = 0;
 
 unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
+unsigned long sdSyncSuccessCount = 0;
+unsigned long sdSyncFailCount = 0;
 uint64_t dbTotalWrittenBytes = 0;
 uint32_t dbLastLineBytes = 0;
 uint64_t dbCachedFileSizeBytes = 0;
@@ -899,8 +921,10 @@ void pushStorageRecord(const AggregatedData &a) {
   rec.valid = true;
   rec.batchSeq = storageBatchSeq;
   rec.slotIndex = storageBatchCount;
+  rec.localSeq = ++localRecordSeq;
   rec.timestamp = getIsoTimestampWIBms();
   rec.timestampMs = millis();
+  rec.recordId = String(DEVICE_ID) + "-" + String(rec.localSeq) + "-" + String(rec.timestampMs);
   rec.agg = a;
 
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -1153,6 +1177,9 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   // Database cloud dihitung hanya dari parameter utama generator/mesin.
   // Tidak memasukkan FFT, freqGrid, voltGrid, metadata batch, atau timestampMs.
   String json = "{";
+  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  json += "\"recordId\":\"" + r.recordId + "\",";
+  json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
@@ -1191,6 +1218,9 @@ String buildJsonRecord(const StorageRecord &r) {
   const FFTData &f = r.fft;
 
   String json = "{";
+  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  json += "\"recordId\":\"" + r.recordId + "\",";
+  json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
@@ -1274,7 +1304,9 @@ void publishRealtimeData() {
   mqttLastRecordsSent = recordsInPayload;
 
   uint32_t pubStart = micros();
-  bool ok = mqtt.publish(MQTT_TOPIC, payload.c_str());
+  bool realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, payload.c_str());
+  bool historyOk = mqtt.publish(MQTT_TOPIC, payload.c_str());
+  bool ok = realtimeOk && historyOk;
   perfMqttPublishUs = micros() - pubStart;
 
   mqttOK = ok;
@@ -1292,6 +1324,115 @@ void publishRealtimeData() {
 // ============================================================
 // SD CARD
 // ============================================================
+
+void appendRecordToSdSyncQueue(const StorageRecord &r) {
+  File queue = SD.open(SD_SYNC_FILE, FILE_APPEND);
+  if (!queue) {
+    sdSyncFailCount++;
+    return;
+  }
+
+  queue.println(buildJsonRecordParametersOnly(r));
+  queue.close();
+}
+
+bool rewriteSdSyncQueueAfterAck(uint16_t ackedLines) {
+  File source = SD.open(SD_SYNC_FILE, FILE_READ);
+  if (!source) return true;
+
+  File tmp = SD.open(SD_SYNC_TMP_FILE, FILE_WRITE);
+  if (!tmp) {
+    source.close();
+    return false;
+  }
+
+  uint16_t lineNo = 0;
+  while (source.available()) {
+    String line = source.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) continue;
+    lineNo++;
+    if (lineNo <= ackedLines) continue;
+    tmp.println(line);
+  }
+
+  source.close();
+  tmp.close();
+
+  SD.remove(SD_SYNC_FILE);
+  if (!SD.rename(SD_SYNC_TMP_FILE, SD_SYNC_FILE)) {
+    return false;
+  }
+
+  return true;
+}
+
+void syncSdQueueToMongoDB() {
+  if (!sdOK || !wifiOK) return;
+  if (String(CLOUD_INGEST_URL).indexOf("localhost") >= 0) return;
+  if (!SD.exists(SD_SYNC_FILE)) return;
+
+  String recordsJson = "";
+  uint16_t recordsCount = 0;
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
+
+  deselectAllSPI();
+  File queue = SD.open(SD_SYNC_FILE, FILE_READ);
+  if (!queue) {
+    xSemaphoreGive(sdMutex);
+    return;
+  }
+
+  while (queue.available() && recordsCount < SD_SYNC_BATCH_SIZE) {
+    String line = queue.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) continue;
+    if (recordsCount > 0) recordsJson += ",";
+    recordsJson += line;
+    recordsCount++;
+  }
+  queue.close();
+  xSemaphoreGive(sdMutex);
+
+  if (!recordsCount) return;
+
+  String payload = "{";
+  payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  payload += "\"source\":\"esp32_sd_backup\",";
+  payload += "\"records\":[" + recordsJson + "]";
+  payload += "}";
+
+  HTTPClient http;
+  http.setTimeout(10000);
+  if (!http.begin(CLOUD_INGEST_URL)) {
+    sdSyncFailCount++;
+    return;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(payload);
+  http.end();
+
+  if (code < 200 || code >= 300) {
+    sdSyncFailCount++;
+    return;
+  }
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+    bool rewritten = rewriteSdSyncQueueAfterAck(recordsCount);
+    xSemaphoreGive(sdMutex);
+
+    if (rewritten) {
+      sdSyncSuccessCount += recordsCount;
+    } else {
+      sdSyncFailCount++;
+    }
+  } else {
+    sdSyncFailCount++;
+  }
+}
+
 void updateStorageCache() {
   if (!sdOK) return;
 
@@ -1333,7 +1474,7 @@ void initSDCard() {
   if (!SD.exists(DB_FILE)) {
     File f = SD.open(DB_FILE, FILE_WRITE);
     if (f) {
-      f.println("timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced");
+      f.println("recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced");
       f.close();
     }
   }
@@ -1346,7 +1487,10 @@ String buildCsvLine(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
 
   String line = "";
-  line += getCsvTimestampWIBms(); line += ",";
+  line += r.recordId; line += ",";
+  line += String(r.localSeq); line += ",";
+  String csvTimestamp = r.timestamp.length() ? r.timestamp : getCsvTimestampWIBms();
+  line += csvTimestamp; line += ",";
   line += String(a.rpmAvg, 1); line += ",";
   line += String(a.tpsAvg, 1); line += ",";
   line += String(a.mapAvg, 1); line += ",";
@@ -1398,6 +1542,14 @@ void saveSnapshotToSD() {
     }
 
     file.close();
+
+    // Outbox terpisah: record tetap ada di SD sampai server memberi ACK HTTP.
+    // Ini membuat MongoDB bisa disusulkan lagi saat WiFi/server kembali stabil.
+    for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
+      if (!storageBatch[i].valid) continue;
+      appendRecordToSdSyncQueue(storageBatch[i]);
+    }
+
     sdSaveSuccessCount++;
     if (testOnceMode && !testOnceDone) {
       testOnceDone = true;
@@ -1667,7 +1819,8 @@ void reconnectMQTT() {
   Serial.print("[MQTT] Port  : "); Serial.println(MQTT_PORT);
   Serial.print("[MQTT] User  : "); Serial.println(MQTT_USER);
   Serial.println("[MQTT] Pass  : ********");
-  Serial.print("[MQTT] Topic : "); Serial.println(MQTT_TOPIC);
+  Serial.print("[MQTT] Realtime Topic : "); Serial.println(MQTT_REALTIME_TOPIC);
+  Serial.print("[MQTT] History Topic  : "); Serial.println(MQTT_TOPIC);
   Serial.print("[MQTT] Client: "); Serial.println(clientId);
   Serial.print("[MQTT] Connecting... ");
 
@@ -2397,13 +2550,15 @@ void printDatabaseReport() {
   Serial.print  (F("  write rate      : ")); Serial.println(formatBytes((uint64_t)sdBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 7 days     : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
+  Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
 
   Serial.println(F("LOCAL SD PARAMETERS"));
-  Serial.println(F("  timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
+  Serial.println(F("  recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
 
   Serial.println(F("CLOUD / MONGODB ESTIMATE (MAIN DATABASE FIELDS ONLY)"));
   Serial.print  (F("  mqtt status     : ")); Serial.println(mqtt.connected() ? F("CONNECTED") : F("DISCONNECTED"));
-  Serial.print  (F("  topic           : ")); Serial.println(MQTT_TOPIC);
+  Serial.print  (F("  realtime topic  : ")); Serial.println(MQTT_REALTIME_TOPIC);
+  Serial.print  (F("  history topic   : ")); Serial.println(MQTT_TOPIC);
   Serial.print  (F("  actual MQTT     : ")); Serial.print(mqttLastPayloadBytes); Serial.println(F(" B/publish"));
   Serial.print  (F("  records/publish : ")); Serial.println(mqttLastRecordsSent);
   Serial.print  (F("  param record    : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record"));
@@ -2412,7 +2567,7 @@ void printDatabaseReport() {
   Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
   Serial.print  (F("  pub OK/FAIL     : ")); Serial.print(mqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(mqttPublishFailCount);
   Serial.println(F("CLOUD PARAMETERS"));
-  Serial.println(F("  timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
+  Serial.println(F("  recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
   Serial.println(F("NOTE: estimasi database hanya menghitung field utama."));
   Serial.println(F("      Payload MQTT tetap mengirim FFT untuk web dashboard, tetapi FFT tidak dihitung sebagai storage DB."));
   Serial.println(F("========================================================"));
@@ -2484,11 +2639,13 @@ void resetSDDatabase() {
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
     deselectAllSPI();
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
+    if (SD.exists(SD_SYNC_FILE)) SD.remove(SD_SYNC_FILE);
+    if (SD.exists(SD_SYNC_TMP_FILE)) SD.remove(SD_SYNC_TMP_FILE);
     File f = SD.open(DB_FILE, FILE_WRITE);
     if (f) {
-      f.println(F("timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
+      f.println(F("recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
       f.close();
-      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0;
+      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0;
       Serial.println(F("[DB] database.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
@@ -2709,6 +2866,11 @@ void loop() {
   if (millis() - lastLocalSave >= localSaveInterval) {
     lastLocalSave = millis();
     saveSnapshotToSD();
+  }
+
+  if (millis() - lastSdSync >= SD_SYNC_INTERVAL_MS) {
+    lastSdSync = millis();
+    syncSdQueueToMongoDB();
   }
 
   handleTouchNavigation();

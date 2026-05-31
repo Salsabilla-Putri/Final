@@ -781,8 +781,8 @@ mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
 
-// Auto-save ke DB setiap 1 detik dari snapshot gen/data.
-// ESP32 mengirim semua variabel sebagai satu JSON ke topik gen/data.
+// gen/realtime memperbarui dashboard/alert secara langsung.
+// gen/data masuk ke buffer server dan baru di-flush ke MongoDB secara batch.
 // ============================================================
 // MONGODB BATCH SAVE
 // Realtime data tetap diterima setiap 1 detik dari MQTT,
@@ -872,7 +872,21 @@ async function flushGeneratorBatch(reason = 'interval') {
 
     try {
         if (generatorBatch.length > 0) {
-            await GeneratorData.insertMany(generatorBatch, { ordered: false });
+            const operations = generatorBatch.map((doc) => {
+                if (doc.recordId) {
+                    return {
+                        updateOne: {
+                            filter: { recordId: doc.recordId },
+                            update: { $setOnInsert: doc },
+                            upsert: true
+                        }
+                    };
+                }
+
+                return { insertOne: { document: doc } };
+            });
+
+            await GeneratorData.bulkWrite(operations, { ordered: false });
         }
 
         if (fftBatch.length > 0) {
