@@ -781,16 +781,16 @@ mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
 
-// Auto-save ke DB setiap 1 detik dari snapshot gen/data.
-// ESP32 mengirim semua variabel sebagai satu JSON ke topik gen/data.
+// gen/realtime memperbarui dashboard/alert secara langsung.
+// gen/data masuk ke buffer server dan baru di-flush ke MongoDB secara batch.
 // ============================================================
 // MONGODB BATCH SAVE
 // Realtime data tetap diterima setiap 1 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
-// setiap 5 menit atau saat buffer mencapai 300 record.
+// setiap 10 menit atau saat buffer mencapai 300 record.
 // ============================================================
 
-const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '300000', 10); // 5 menit
+const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
 const DB_BATCH_MAX_RECORDS = parseInt(process.env.DB_BATCH_MAX_RECORDS || '300', 10);
 
 let generatorBatchBuffer = [];
@@ -872,7 +872,21 @@ async function flushGeneratorBatch(reason = 'interval') {
 
     try {
         if (generatorBatch.length > 0) {
-            await GeneratorData.insertMany(generatorBatch, { ordered: false });
+            const operations = generatorBatch.map((doc) => {
+                if (doc.recordId) {
+                    return {
+                        updateOne: {
+                            filter: { recordId: doc.recordId },
+                            update: { $setOnInsert: doc },
+                            upsert: true
+                        }
+                    };
+                }
+
+                return { insertOne: { document: doc } };
+            });
+
+            await GeneratorData.bulkWrite(operations, { ordered: false });
         }
 
         if (fftBatch.length > 0) {
@@ -894,7 +908,7 @@ async function flushGeneratorBatch(reason = 'interval') {
 }
 
 setInterval(() => {
-    flushGeneratorBatch('interval-5min').catch((err) => {
+    flushGeneratorBatch('interval-10min').catch((err) => {
         console.error('❌ Scheduled batch flush error:', err.message);
     });
 }, DB_BATCH_INTERVAL_MS);
@@ -1151,6 +1165,20 @@ function normalizeFftPayload(rawPayload, fallbackDeviceId) {
         magBins: magBins.slice(0, len)
     };
 }
+
+
+app.get('/api/ingest/status', (req, res) => {
+    res.json({
+        success: true,
+        dbReady: isDbReady(),
+        dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
+        dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
+        dbBatchMaxRecords: DB_BATCH_MAX_RECORDS,
+        bufferedGeneratorRecords: generatorBatchBuffer.length,
+        bufferedFftRecords: fftBatchBuffer.length,
+        isFlushingGeneratorBatch
+    });
+});
 
 // ============================================================
 // BACKUP INGEST ENDPOINT
