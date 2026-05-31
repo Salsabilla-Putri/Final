@@ -515,6 +515,7 @@ FFTData fftData;
 FFTData fftMultiData[FFT_SOURCE_COUNT];
 StorageRecord storageBatch[STORAGE_BATCH_SIZE];
 SemaphoreHandle_t fftMutex = NULL;
+SemaphoreHandle_t sdSyncRequestSemaphore = NULL;
 
 float fftBuffers[FFT_SOURCE_COUNT][FFT_SAMPLES];
 uint16_t fftIndexes[FFT_SOURCE_COUNT] = {0, 0, 0};
@@ -583,6 +584,8 @@ unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
 unsigned long sdSyncSuccessCount = 0;
 unsigned long sdSyncFailCount = 0;
+volatile bool sdSyncBusy = false;
+volatile unsigned long sdSyncQueuedCount = 0;
 int sdSyncLastHttpCode = 0;
 uint16_t sdSyncLastAckedRecords = 0;
 unsigned long sdSyncLastAttemptMs = 0;
@@ -1644,6 +1647,37 @@ void syncSdQueueToMongoDB() {
     }
   } else {
     sdSyncFailCount++;
+  }
+}
+
+bool requestSdSyncToMongoDB() {
+  if (sdSyncRequestSemaphore == NULL) return false;
+
+  BaseType_t queued = xSemaphoreGive(sdSyncRequestSemaphore);
+  if (queued == pdTRUE) {
+    sdSyncQueuedCount++;
+    return true;
+  }
+
+  // Semaphore sudah berisi request: task sync sedang berjalan atau sudah antre.
+  return false;
+}
+
+void SdSyncTask(void *pvParameters) {
+  (void)pvParameters;
+
+  while (true) {
+    if (sdSyncRequestSemaphore == NULL) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+
+    if (xSemaphoreTake(sdSyncRequestSemaphore, portMAX_DELAY) == pdTRUE) {
+      sdSyncBusy = true;
+      syncSdQueueToMongoDB();
+      sdSyncBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
   }
 }
 
@@ -2755,6 +2789,8 @@ void printSdSyncStatus() {
   Serial.print  (F("  sync interval   : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print  (F("  batch size      : ")); Serial.println(SD_SYNC_BATCH_SIZE);
   Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  sync busy       : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
+  Serial.print  (F("  sync queued     : ")); Serial.println(sdSyncQueuedCount);
   Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
   Serial.print  (F("  last ACK records: ")); Serial.println(sdSyncLastAckedRecords);
   Serial.print  (F("  last attempt age: "));
@@ -3045,7 +3081,11 @@ void processSerialCommand(String cmd) {
   if (cmd == "help") printSerialHelp();
   else if (cmd == "database" || cmd == "db") printDatabaseReport();
   else if (cmd == "sync" || cmd == "sync status") printSdSyncStatus();
-  else if (cmd == "sync now") { syncSdQueueToMongoDB(); printSdSyncStatus(); }
+  else if (cmd == "sync now") {
+    if (requestSdSyncToMongoDB()) Serial.println(F("[SYNC] request queued. HTTP upload berjalan di background task."));
+    else Serial.println(F("[SYNC] request sudah antre/masih berjalan. Serial dan display tetap responsif."));
+    printSdSyncStatus();
+  }
   else if (cmd == "spec" || cmd == "acq" || cmd == "compute") printAcquisitionSpecReport();
   else if (cmd == "performance" || cmd == "perf") printPerformanceReport();
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
@@ -3118,10 +3158,12 @@ void setup() {
   dataMutex = xSemaphoreCreateMutex();
   sdMutex = xSemaphoreCreateMutex();
   fftMutex = xSemaphoreCreateMutex();
+  sdSyncRequestSemaphore = xSemaphoreCreateBinary();
 
   if (dataMutex == NULL) Serial.println("[ERROR] dataMutex gagal dibuat.");
   if (sdMutex == NULL) Serial.println("[ERROR] sdMutex gagal dibuat.");
   if (fftMutex == NULL) Serial.println("[ERROR] fftMutex gagal dibuat.");
+  if (sdSyncRequestSemaphore == NULL) Serial.println("[ERROR] sdSyncRequestSemaphore gagal dibuat.");
 
   deselectAllSPI();
 
@@ -3188,6 +3230,16 @@ void setup() {
     0
   );
 
+  xTaskCreatePinnedToCore(
+    SdSyncTask,
+    "SdSyncTask",
+    10000,
+    NULL,
+    1,
+    NULL,
+    0
+  );
+
   drawBootSplashStep("GENSYS ready", 100);
   delay(600);
 
@@ -3245,7 +3297,7 @@ void loop() {
 
   if (millis() - lastSdSync >= SD_SYNC_INTERVAL_MS) {
     lastSdSync = millis();
-    syncSdQueueToMongoDB();
+    requestSdSyncToMongoDB();
   }
 
   handleTouchNavigation();
