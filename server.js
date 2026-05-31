@@ -787,10 +787,10 @@ mqttClient.on('error', (error) => {
 // MONGODB BATCH SAVE
 // Realtime data tetap diterima setiap 1 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
-// setiap 5 menit atau saat buffer mencapai 300 record.
+// setiap 10 menit atau saat buffer mencapai 300 record.
 // ============================================================
 
-const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '300000', 10); // 5 menit
+const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
 const DB_BATCH_MAX_RECORDS = parseInt(process.env.DB_BATCH_MAX_RECORDS || '300', 10);
 
 let generatorBatchBuffer = [];
@@ -908,7 +908,7 @@ async function flushGeneratorBatch(reason = 'interval') {
 }
 
 setInterval(() => {
-    flushGeneratorBatch('interval-5min').catch((err) => {
+    flushGeneratorBatch('interval-10min').catch((err) => {
         console.error('❌ Scheduled batch flush error:', err.message);
     });
 }, DB_BATCH_INTERVAL_MS);
@@ -1165,6 +1165,20 @@ function normalizeFftPayload(rawPayload, fallbackDeviceId) {
         magBins: magBins.slice(0, len)
     };
 }
+
+
+app.get('/api/ingest/status', (req, res) => {
+    res.json({
+        success: true,
+        dbReady: isDbReady(),
+        dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
+        dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
+        dbBatchMaxRecords: DB_BATCH_MAX_RECORDS,
+        bufferedGeneratorRecords: generatorBatchBuffer.length,
+        bufferedFftRecords: fftBatchBuffer.length,
+        isFlushingGeneratorBatch
+    });
+});
 
 // ============================================================
 // BACKUP INGEST ENDPOINT

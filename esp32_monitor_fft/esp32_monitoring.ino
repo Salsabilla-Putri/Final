@@ -436,6 +436,9 @@ unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
 unsigned long sdSyncSuccessCount = 0;
 unsigned long sdSyncFailCount = 0;
+int sdSyncLastHttpCode = 0;
+uint16_t sdSyncLastAckedRecords = 0;
+unsigned long sdSyncLastAttemptMs = 0;
 uint64_t dbTotalWrittenBytes = 0;
 uint32_t dbLastLineBytes = 0;
 uint64_t dbCachedFileSizeBytes = 0;
@@ -1325,6 +1328,27 @@ void publishRealtimeData() {
 // SD CARD
 // ============================================================
 
+uint32_t countSdSyncPendingRecords() {
+  if (!sdOK || !SD.exists(SD_SYNC_FILE)) return 0;
+
+  uint32_t count = 0;
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    deselectAllSPI();
+    File queue = SD.open(SD_SYNC_FILE, FILE_READ);
+    if (queue) {
+      while (queue.available()) {
+        String line = queue.readStringUntil('\n');
+        line.trim();
+        if (line.length()) count++;
+      }
+      queue.close();
+    }
+    xSemaphoreGive(sdMutex);
+  }
+
+  return count;
+}
+
 void appendRecordToSdSyncQueue(const StorageRecord &r) {
   File queue = SD.open(SD_SYNC_FILE, FILE_APPEND);
   if (!queue) {
@@ -1368,8 +1392,14 @@ bool rewriteSdSyncQueueAfterAck(uint16_t ackedLines) {
 }
 
 void syncSdQueueToMongoDB() {
+  sdSyncLastAttemptMs = millis();
+  sdSyncLastAckedRecords = 0;
+
   if (!sdOK || !wifiOK) return;
-  if (String(CLOUD_INGEST_URL).indexOf("localhost") >= 0) return;
+  if (String(CLOUD_INGEST_URL).indexOf("localhost") >= 0) {
+    sdSyncLastHttpCode = -2;
+    return;
+  }
   if (!SD.exists(SD_SYNC_FILE)) return;
 
   String recordsJson = "";
@@ -1406,12 +1436,14 @@ void syncSdQueueToMongoDB() {
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(CLOUD_INGEST_URL)) {
+    sdSyncLastHttpCode = -1;
     sdSyncFailCount++;
     return;
   }
 
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(payload);
+  sdSyncLastHttpCode = code;
   http.end();
 
   if (code < 200 || code >= 300) {
@@ -1425,6 +1457,7 @@ void syncSdQueueToMongoDB() {
 
     if (rewritten) {
       sdSyncSuccessCount += recordsCount;
+      sdSyncLastAckedRecords = recordsCount;
     } else {
       sdSyncFailCount++;
     }
@@ -2493,7 +2526,7 @@ void handleTouchNavigation() {
 // ============================================================
 void printSerialHelp() {
   Serial.println();
-  Serial.println(F("GENSYS CMD: help | db | perf | fft | latest | page generator|engine|fft | redraw"));
+  Serial.println(F("GENSYS CMD: help | db | sync | sync now | perf | fft | latest | page generator|engine|fft | redraw"));
   Serial.println(F("FFT CMD   : fft source voltgen | fft source voltgrid | fft source rpm"));
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | db reset | db reset confirm"));
 }
@@ -2526,6 +2559,27 @@ String buildCloudEstimateRecordOnly() {
 }
 
 
+void printSdSyncStatus() {
+  uint32_t pending = countSdSyncPendingRecords();
+
+  Serial.println();
+  Serial.println(F("================ SD -> MONGODB SYNC ================"));
+  Serial.print  (F("  queue file      : ")); Serial.println(SD_SYNC_FILE);
+  Serial.print  (F("  ingest url      : ")); Serial.println(CLOUD_INGEST_URL);
+  Serial.print  (F("  pending records : ")); Serial.println(pending);
+  Serial.print  (F("  sync interval   : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
+  Serial.print  (F("  batch size      : ")); Serial.println(SD_SYNC_BATCH_SIZE);
+  Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("  last ACK records: ")); Serial.println(sdSyncLastAckedRecords);
+  Serial.print  (F("  last attempt age: "));
+  if (sdSyncLastAttemptMs == 0) Serial.println(F("never"));
+  else { Serial.print((millis() - sdSyncLastAttemptMs) / 1000UL); Serial.println(F(" s ago")); }
+  Serial.println(F("STATUS: pending=0 dan last HTTP code 2xx berarti SD sudah sinkron."));
+  Serial.println(F("NOTE  : HTTP code -2 berarti CLOUD_INGEST_URL masih localhost/default."));
+  Serial.println(F("===================================================="));
+}
+
 void printDatabaseReport() {
   updateStorageCache();
   String cloudParamOnly = buildCloudEstimateRecordOnly();
@@ -2551,6 +2605,8 @@ void printDatabaseReport() {
   Serial.print  (F("  est. 7 days     : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
   Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  sync pending    : ")); Serial.println(countSdSyncPendingRecords());
+  Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
 
   Serial.println(F("LOCAL SD PARAMETERS"));
   Serial.println(F("  recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
@@ -2645,7 +2701,7 @@ void resetSDDatabase() {
     if (f) {
       f.println(F("recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
       f.close();
-      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0;
+      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0; sdSyncLastHttpCode = 0; sdSyncLastAckedRecords = 0; sdSyncLastAttemptMs = 0;
       Serial.println(F("[DB] database.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
@@ -2675,6 +2731,8 @@ void processSerialCommand(String cmd) {
 
   if (cmd == "help") printSerialHelp();
   else if (cmd == "database" || cmd == "db") printDatabaseReport();
+  else if (cmd == "sync" || cmd == "sync status") printSdSyncStatus();
+  else if (cmd == "sync now") { syncSdQueueToMongoDB(); printSdSyncStatus(); }
   else if (cmd == "performance" || cmd == "perf") printPerformanceReport();
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "fft") printFFTReport();
