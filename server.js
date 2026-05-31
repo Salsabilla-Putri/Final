@@ -186,6 +186,87 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
+function normalizeEmail(email) {
+    return String(email || '').trim().toLowerCase();
+}
+
+function getAuthRedirect(role) {
+    const normalizedRole = String(role || '').trim().toLowerCase();
+    const isCitizenRole = ['warga', 'masyarakat', 'user', 'viewer'].includes(normalizedRole);
+    return isCitizenRole ? 'public.html' : 'index.html';
+}
+
+function serializeAuthUser(user) {
+    const email = user.email || '';
+    return {
+        name: user.name || email.split('@')[0],
+        email,
+        role: user.role || 'Masyarakat',
+        redirectTo: getAuthRedirect(user.role)
+    };
+}
+
+async function loginUserByEmailPassword(email, password) {
+    if (!email || !password) {
+        return { status: 400, body: { success: false, message: 'Email dan password wajib diisi.' } };
+    }
+
+    await ensureDbReady();
+
+    const user = await User.findOne({ email }).lean();
+    if (!user) {
+        return {
+            status: 404,
+            body: { success: false, code: 'USER_NOT_FOUND', message: 'User belum terdaftar. Silakan register terlebih dahulu.' }
+        };
+    }
+
+    if (user.password !== password) {
+        return {
+            status: 401,
+            body: { success: false, code: 'INVALID_PASSWORD', message: 'Email atau password tidak valid.' }
+        };
+    }
+
+    return { status: 200, body: { success: true, user: serializeAuthUser(user) } };
+}
+
+async function registerUser({ name, email, password, productToken, role, requireProductToken = false }) {
+    if (!name || !email || !password || (requireProductToken && !productToken)) {
+        return {
+            status: 400,
+            body: {
+                success: false,
+                message: requireProductToken
+                    ? 'Nama, email, password, dan token produk wajib diisi.'
+                    : 'Nama, email, dan password wajib diisi.'
+            }
+        };
+    }
+
+    const expectedToken = process.env.PRODUCT_TOKEN || 'TA252601020';
+    if (requireProductToken && productToken !== expectedToken) {
+        return { status: 403, body: { success: false, message: 'Token produk tidak valid.' } };
+    }
+
+    await ensureDbReady();
+
+    const existingUser = await User.findOne({ email }).lean();
+    if (existingUser) {
+        return { status: 409, body: { success: false, message: 'Email sudah terdaftar. Silakan login.' } };
+    }
+
+    const user = await User.create({ name, email, password, role: role || 'warga' });
+    return {
+        status: 201,
+        body: {
+            success: true,
+            message: 'Registrasi berhasil. Silakan login.',
+            user: { name: user.name, email: user.email, role: user.role }
+        }
+    };
+}
+
 const activeTimeHistorySchema = new mongoose.Schema({
     deviceId: { type: String, required: true, index: true },
     startedAt: { type: Date, required: true, index: true },
@@ -1941,24 +2022,73 @@ app.get('/api/reports/monthly', async (req, res) => {
 // =========================
 // AUTH ROUTES
 // =========================
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const email = normalizeEmail(req.body?.email);
+        const password = String(req.body?.password || '');
+        const result = await loginUserByEmailPassword(email, password);
+        return res.status(result.status).json(result.body);
+    } catch (error) {
+        console.error('Login API error:', error.message);
+        return res.status(503).json({
+            success: false,
+            message: 'Server login belum siap atau database tidak dapat dihubungi.',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const result = await registerUser({
+            name: String(req.body?.name || '').trim(),
+            email: normalizeEmail(req.body?.email),
+            password: String(req.body?.password || ''),
+            productToken: String(req.body?.productToken || '').trim(),
+            role: 'warga',
+            requireProductToken: true
+        });
+        return res.status(result.status).json(result.body);
+    } catch (error) {
+        console.error('Register API error:', error.message);
+        return res.status(503).json({
+            success: false,
+            message: 'Server registrasi belum siap atau database tidak dapat dihubungi.',
+            error: error.message
+        });
+    }
+});
+
 app.post('/register', async (req, res) => {
     try {
-        const { name, email, password, role } = req.body;
-        const existingUser = await User.findOne({ email });
-        if (existingUser) return res.status(400).json({ message: 'Email sudah terdaftar' });
-        const user = new User({ name, email, password, role: role || 'Masyarakat' });
-        await user.save();
-        res.status(201).json({ message: 'Registrasi berhasil', user: { name: user.name, email: user.email, role: user.role } });
-    } catch (error) { res.status(500).json({ message: 'Server error', error: error.message }); }
+        const result = await registerUser({
+            name: String(req.body?.name || '').trim(),
+            email: normalizeEmail(req.body?.email),
+            password: String(req.body?.password || ''),
+            role: req.body?.role || 'Masyarakat',
+            requireProductToken: false
+        });
+        return res.status(result.status).json(result.body);
+    } catch (error) {
+        return res.status(503).json({ success: false, message: 'Server error', error: error.message });
+    }
 });
 
 app.post('/login', async (req, res) => {
     try {
-        const { email, password } = req.body;
-        const user = await User.findOne({ email, password });
-        if (!user) return res.status(401).json({ message: 'Email atau password salah' });
-        res.json({ message: 'Login berhasil', user: { id: user._id, name: user.name, email: user.email, role: user.role } });
-    } catch (error) { res.status(500).json({ message: 'Server error', error: error.message }); }
+        const email = normalizeEmail(req.body?.email);
+        const password = String(req.body?.password || '');
+        const result = await loginUserByEmailPassword(email, password);
+        if (!result.body.success) return res.status(result.status).json(result.body);
+
+        return res.json({
+            success: true,
+            message: 'Login berhasil',
+            user: result.body.user
+        });
+    } catch (error) {
+        return res.status(503).json({ success: false, message: 'Server error', error: error.message });
+    }
 });
 
 app.post('/api/alerts/:id/email', async (req, res) => {
