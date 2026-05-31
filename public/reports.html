@@ -14,87 +14,6 @@
     <link rel="stylesheet" href="css/reports.css">
     <link rel="stylesheet" href="css/typography.css">
 
-    <!-- CBM Panel Styles (inline supaya tidak perlu file CSS baru) -->
-    <style>
-        .data-source-notice {
-            display: none;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            border-radius: 8px;
-            font-size: 13px;
-            margin-bottom: 12px;
-            background: #f0f9ff;
-            color: #0369a1;
-            border: 1px solid #bae6fd;
-        }
-        .data-source-notice.notice-success  { background:#f0fdf4; color:#15803d; border-color:#bbf7d0; }
-        .data-source-notice.notice-warning  { background:#fffbeb; color:#b45309; border-color:#fde68a; }
-
-        #chartDescription {
-            font-size: 12px;
-            color: #64748b;
-            padding: 6px 0 2px;
-            min-height: 18px;
-        }
-
-        /* ── CBM Panel ── */
-        #cbmPanel {
-            font-family: inherit;
-        }
-        #cbmPanel .cbm-card {
-            background: #fff;
-            border-radius: 12px;
-            padding: 18px 20px;
-            border: 1px solid #f1f5f9;
-            box-shadow: 0 1px 6px rgba(0,0,0,.05);
-        }
-        #cbmPanel .cbm-sec-label {
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: .08em;
-            color: #64748b;
-            text-transform: uppercase;
-            margin-bottom: 12px;
-        }
-        #cbmPanel .cbm-tag {
-            display: inline-block;
-            padding: 2px 9px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 700;
-        }
-        #cbmPanel .cbm-btn {
-            padding: 7px 14px;
-            border: none;
-            border-radius: 7px;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 700;
-            color: #fff;
-            transition: opacity .15s;
-        }
-        #cbmPanel .cbm-btn:hover { opacity: .88; }
-        #cbmPanel .cbm-btn:disabled { opacity: .5; cursor: default; }
-        #cbmPanel table.cbm-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-        #cbmPanel table.cbm-tbl th {
-            padding: 8px 10px;
-            font-size: 11px;
-            color: #64748b;
-            font-weight: 600;
-            text-align: left;
-            border-bottom: 1px solid #f1f5f9;
-        }
-        #cbmPanel table.cbm-tbl td {
-            padding: 9px 10px;
-            border-top: 1px solid #f1f5f9;
-            color: #374151;
-        }
-        .cbm-finding-card { border-radius: 10px; padding: 13px 15px; margin-bottom: 9px; }
-        .cbm-mini-stat { background: #fff; border-radius: 7px; padding: 6px 8px; border: 1px solid #f1f5f9; }
-        .cbm-bar-track { background: #e2e8f0; border-radius: 4px; height: 4px; margin-top: 4px; width: 80px; margin: 4px auto 0; }
-        .cbm-bar-fill  { height: 4px; border-radius: 4px; }
-    </style>
 </head>
 <body>
 
@@ -234,7 +153,7 @@
             </div>
 
         <!-- ══════════════════════════════════════════════════════════════
-             CBM PANEL — diisi oleh public/js/cbm_panel.js secara otomatis
+             CBM PANEL — dirender langsung oleh public/js/reports.js
              ══════════════════════════════════════════════════════════════ -->
         <div class="executive-summary" style="margin-top: 20px; padding: 0;">
             <div id="cbmPanelContainer"></div>
@@ -244,7 +163,5 @@
 
     <script src="js/sidebar.js"></script>
     <script src="js/reports.js"></script>
-    <!-- CBM Panel — harus setelah reports.js supaya currentData & selectedSensors tersedia -->
-    <script src="js/cbm_panel.js"></script>
 </body>
 </html>
