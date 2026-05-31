@@ -251,6 +251,7 @@ const unsigned long drawInterval      = 500;
 // ============================================================
 // DATA STRUCT
 // ============================================================
+
 struct RawData {
   uint32_t seq = 0;
   uint32_t timestampMs = 0;
@@ -354,6 +355,139 @@ struct StorageRecord {
   AggregatedData agg;
   FFTData fft;
 };
+
+// ============================================================
+// ACQUISITION + COMPUTE PERFORMANCE MONITOR
+// ============================================================
+// Target spesifikasi:
+// - Akuisisi parameter real-time: 0.1 s sampai 1.0 s
+// - Task sampling internal ESP32-2: 20 ms
+// - Record monitoring lokal/SD: 1 s
+// - Target database online sesuai dokumen pengujian: 10 menit
+#define SPEC_ACQ_MIN_INTERVAL_MS       100UL
+#define SPEC_ACQ_MAX_INTERVAL_MS       1000UL
+#define SPEC_DATABASE_TARGET_MS        600000UL
+#define PERF_U32_MAX_VALUE             0xFFFFFFFFUL
+
+struct PerfMinMax {
+  uint32_t count = 0;
+  uint32_t minVal = PERF_U32_MAX_VALUE;
+  uint32_t maxVal = 0;
+  uint64_t sumVal = 0;
+};
+
+struct AcquisitionMonitorStats {
+  uint32_t startMs = 0;
+
+  PerfMinMax sensorIntervalMs;
+  PerfMinMax uartFrameIntervalMs;
+  PerfMinMax uartReadUs;
+  PerfMinMax csvParseUs;
+  PerfMinMax aggregationUs;
+  PerfMinMax sensorTaskUs;
+  PerfMinMax fftComputeUs;
+  PerfMinMax mqttPublishUs;
+  PerfMinMax sdSaveUs;
+  PerfMinMax tftDrawUs;
+
+  bool hasSensorTick = false;
+  uint32_t lastSensorTickMs = 0;
+  bool hasUartFrameTick = false;
+  uint32_t lastUartFrameTickMs = 0;
+
+  bool hasLastSeq = false;
+  uint32_t lastSeq = 0;
+
+  uint32_t frameReceived = 0;
+  uint32_t frameValid = 0;
+  uint32_t frameParseFailed = 0;
+  uint32_t lostFrame = 0;
+  uint32_t duplicateFrame = 0;
+  uint32_t newSeqSamples = 0;
+  uint32_t noDataCycles = 0;
+
+  uint64_t rxBytes = 0;
+  uint32_t lastRawFrameBytes = 0;
+  uint32_t maxRawFrameBytes = 0;
+};
+
+AcquisitionMonitorStats acqMon;
+
+void perfResetStat(PerfMinMax &s) {
+  s.count = 0;
+  s.minVal = PERF_U32_MAX_VALUE;
+  s.maxVal = 0;
+  s.sumVal = 0;
+}
+
+void perfUpdateStat(PerfMinMax &s, uint32_t value) {
+  if (value < s.minVal) s.minVal = value;
+  if (value > s.maxVal) s.maxVal = value;
+  s.sumVal += value;
+  s.count++;
+}
+
+float perfAvgStat(const PerfMinMax &s) {
+  if (s.count == 0) return 0.0f;
+  return (float)s.sumVal / (float)s.count;
+}
+
+uint32_t perfMinStat(const PerfMinMax &s) {
+  return s.count == 0 ? 0 : s.minVal;
+}
+
+const char* passFailText(bool ok) {
+  return ok ? "PASS" : "FAIL";
+}
+
+void resetAcquisitionMonitorStats() {
+  acqMon = AcquisitionMonitorStats();
+  acqMon.startMs = millis();
+}
+
+void recordSensorIntervalTick() {
+  uint32_t nowMs = millis();
+  if (acqMon.hasSensorTick) {
+    perfUpdateStat(acqMon.sensorIntervalMs, nowMs - acqMon.lastSensorTickMs);
+  }
+  acqMon.lastSensorTickMs = nowMs;
+  acqMon.hasSensorTick = true;
+}
+
+void recordUartFrameMonitor(const String &line, bool ok, const RawData &parsed) {
+  uint32_t nowMs = millis();
+
+  acqMon.frameReceived++;
+  acqMon.lastRawFrameBytes = line.length() + 1; // + newline
+  acqMon.rxBytes += acqMon.lastRawFrameBytes;
+  if (acqMon.lastRawFrameBytes > acqMon.maxRawFrameBytes) {
+    acqMon.maxRawFrameBytes = acqMon.lastRawFrameBytes;
+  }
+
+  if (acqMon.hasUartFrameTick) {
+    perfUpdateStat(acqMon.uartFrameIntervalMs, nowMs - acqMon.lastUartFrameTickMs);
+  }
+  acqMon.lastUartFrameTickMs = nowMs;
+  acqMon.hasUartFrameTick = true;
+
+  if (ok) {
+    acqMon.frameValid++;
+
+    if (acqMon.hasLastSeq) {
+      if (parsed.seq == acqMon.lastSeq) {
+        acqMon.duplicateFrame++;
+      } else if (parsed.seq > acqMon.lastSeq + 1) {
+        acqMon.lostFrame += parsed.seq - acqMon.lastSeq - 1;
+      }
+    }
+
+    acqMon.lastSeq = parsed.seq;
+    acqMon.hasLastSeq = true;
+  } else {
+    acqMon.frameParseFailed++;
+  }
+}
+
 
 // ============================================================
 // GLOBAL STATE
@@ -793,6 +927,8 @@ void handleCompleteRxLine(String line) {
   uint32_t parseStart = micros();
   bool ok = parseBridgeCsv(line, parsed);
   perfCsvParseUs = micros() - parseStart;
+  perfUpdateStat(acqMon.csvParseUs, perfCsvParseUs);
+  recordUartFrameMonitor(line, ok, parsed);
 
   if (ok) {
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
@@ -849,6 +985,7 @@ void readLinkSerialManual() {
   }
 
   perfUartReadUs = micros() - readStart;
+  perfUpdateStat(acqMon.uartReadUs, perfUartReadUs);
 }
 
 // ============================================================
@@ -973,6 +1110,7 @@ void finalizeFastAggregate() {
 
   resetAccumulator();
   perfAggregationUs = micros() - aggStart;
+  perfUpdateStat(acqMon.aggregationUs, perfAggregationUs);
 }
 
 // ============================================================
@@ -1099,6 +1237,7 @@ void computeFFTIfReady() {
   }
 
   perfFftComputeUs = micros() - fftStart;
+  perfUpdateStat(acqMon.fftComputeUs, perfFftComputeUs);
 #endif
 }
 
@@ -1125,6 +1264,7 @@ void SensorTask50Hz(void *pvParameters) {
   resetAccumulator();
 
   while (true) {
+    recordSensorIntervalTick();
     uint32_t taskStart = micros();
 
     readLinkSerialManual();
@@ -1145,7 +1285,10 @@ void SensorTask50Hz(void *pvParameters) {
     if (hasSample && sample.seq != lastAggregatedSeq) {
       addSampleToAccumulator(sample);
       addSampleToFFTBuffer(sample);
+      acqMon.newSeqSamples++;
       lastAggregatedSeq = sample.seq;
+    } else if (!hasSample) {
+      acqMon.noDataCycles++;
     }
 
     if (millis() - lastAggMs >= AGGREGATION_INTERVAL_MS) {
@@ -1162,6 +1305,7 @@ void SensorTask50Hz(void *pvParameters) {
     perfLastRxAgeMs = lastUartReceiveMs > 0 ? millis() - lastUartReceiveMs : 999999;
     sensorExecutions++;
     perfSensorTaskUs = micros() - taskStart;
+    perfUpdateStat(acqMon.sensorTaskUs, perfSensorTaskUs);
 
     if (perfSensorTaskUs > SENSOR_SAMPLE_INTERVAL_MS * 1000UL) {
       sensorMissedDeadlines++;
@@ -1311,6 +1455,7 @@ void publishRealtimeData() {
   bool historyOk = mqtt.publish(MQTT_TOPIC, payload.c_str());
   bool ok = realtimeOk && historyOk;
   perfMqttPublishUs = micros() - pubStart;
+  perfUpdateStat(acqMon.mqttPublishUs, perfMqttPublishUs);
 
   mqttOK = ok;
   if (ok) {
@@ -1601,6 +1746,7 @@ void saveSnapshotToSD() {
   }
 
   perfSdSaveUs = micros() - saveStart;
+  perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
 
   if (millis() - lastDBStorageReport > 10000) {
     lastDBStorageReport = millis();
@@ -2437,6 +2583,7 @@ void drawCurrentPage(bool full) {
   }
 
   perfTftDrawUs = micros() - drawStart;
+  perfUpdateStat(acqMon.tftDrawUs, perfTftDrawUs);
   lastTftDrawMs = millis();
 }
 
@@ -2526,9 +2673,11 @@ void handleTouchNavigation() {
 // ============================================================
 void printSerialHelp() {
   Serial.println();
-  Serial.println(F("GENSYS CMD: help | db | sync | sync now | perf | fft | latest | page generator|engine|fft | redraw"));
+  Serial.println(F("GENSYS CMD: help | spec/acq | db | sync | sync now | perf | fft | latest | page generator|engine|fft | redraw"));
+  Serial.println(F("TEST CMD  : perf reset | log acq on | log performance on | log latest on | log off"));
   Serial.println(F("FFT CMD   : fft source voltgen | fft source voltgrid | fft source rpm"));
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | db reset | db reset confirm"));
+  Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 5-10 menit, lalu ketik 'spec'."));
 }
 
 String buildCloudEstimateRecordOnly() {
@@ -2629,6 +2778,132 @@ void printDatabaseReport() {
   Serial.println(F("========================================================"));
 }
 
+void printAcquisitionSpecReport() {
+  RawData r;
+  AggregatedData a;
+
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    r = latestRaw;
+    a = aggData;
+    xSemaphoreGive(dataMutex);
+  }
+
+  const float runtimeSec = max(1.0f, (millis() - acqMon.startMs) / 1000.0f);
+  const float frameRateHz = acqMon.frameReceived / runtimeSec;
+  const float rxBytesPerSec = acqMon.rxBytes / runtimeSec;
+  const float frameSuccessRate = acqMon.frameReceived > 0 ? (acqMon.frameValid * 100.0f / acqMon.frameReceived) : 0.0f;
+
+  const float sensorAvgMs = perfAvgStat(acqMon.sensorIntervalMs);
+  const float frameAvgMs  = perfAvgStat(acqMon.uartFrameIntervalMs);
+  const float taskAvgUs   = perfAvgStat(acqMon.sensorTaskUs);
+  const float taskMaxUs   = (float)acqMon.sensorTaskUs.maxVal;
+  const float taskBudgetUs = SENSOR_SAMPLE_INTERVAL_MS * 1000.0f;
+
+  const float cpuAvgPct = taskBudgetUs > 0 ? taskAvgUs * 100.0f / taskBudgetUs : 0.0f;
+  const float cpuMaxPct = taskBudgetUs > 0 ? taskMaxUs * 100.0f / taskBudgetUs : 0.0f;
+
+  const bool uartIntervalPass =
+    acqMon.uartFrameIntervalMs.count > 0 &&
+    frameAvgMs >= SPEC_ACQ_MIN_INTERVAL_MS &&
+    frameAvgMs <= SPEC_ACQ_MAX_INTERVAL_MS;
+
+  const bool recordIntervalPass =
+    lastFastAggIntervalMs >= SPEC_ACQ_MIN_INTERVAL_MS &&
+    lastFastAggIntervalMs <= SPEC_ACQ_MAX_INTERVAL_MS;
+
+  const bool deadlinePass = sensorMissedDeadlines == 0;
+  const bool qualityPass = frameSuccessRate >= 99.0f && acqMon.lostFrame == 0;
+  const bool realtimePass = uartIntervalPass && recordIntervalPass && deadlinePass && qualityPass;
+
+  const bool localSavePass =
+    localSaveInterval >= SPEC_ACQ_MIN_INTERVAL_MS &&
+    localSaveInterval <= SPEC_ACQ_MAX_INTERVAL_MS;
+
+  const bool databaseTargetPass =
+    publishInterval == SPEC_DATABASE_TARGET_MS ||
+    SD_SYNC_INTERVAL_MS == SPEC_DATABASE_TARGET_MS;
+
+  Serial.println();
+  Serial.println(F("╔════════════════ GENSYS SPEC & ACQUISITION TEST ════════════════╗"));
+
+  Serial.println(F("║ [1] SPESIFIKASI YANG DIUJI                                      ║"));
+  Serial.print  (F("║ Akuisisi real-time target     : "));
+  Serial.print(SPEC_ACQ_MIN_INTERVAL_MS); Serial.print(F("-")); Serial.print(SPEC_ACQ_MAX_INTERVAL_MS); Serial.println(F(" ms"));
+  Serial.print  (F("║ SensorTask internal target    : ")); Serial.print(SENSOR_SAMPLE_INTERVAL_MS); Serial.println(F(" ms"));
+  Serial.print  (F("║ UART ESP32-1 expected         : ")); Serial.print(LINK_EXPECTED_FRAME_INTERVAL_MS); Serial.println(F(" ms"));
+  Serial.print  (F("║ Record lokal/SD interval      : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
+  Serial.print  (F("║ Target database online        : ")); Serial.print(SPEC_DATABASE_TARGET_MS / 60000UL); Serial.println(F(" menit"));
+  Serial.print  (F("║ MQTT publish saat ini         : ")); Serial.print(publishInterval); Serial.println(F(" ms"));
+  Serial.print  (F("║ SD backup sync saat ini       : ")); Serial.print(SD_SYNC_INTERVAL_MS); Serial.println(F(" ms"));
+
+  Serial.println(F("║ [2] PARAMETER MONITORING TERSEDIA                               ║"));
+  Serial.print  (F("║ Kelistrikan : V=")); Serial.print(r.volt, 2);
+  Serial.print  (F(" V | I=")); Serial.print(r.currentA, 2);
+  Serial.print  (F(" A | P=")); Serial.print(r.powerKW, 3);
+  Serial.print  (F(" kW | f=")); Serial.print(r.freq, 3);
+  Serial.print  (F(" Hz | phase=")); Serial.print(r.phaseAngle, 2); Serial.println(F(" deg"));
+  Serial.print  (F("║ Mesin       : RPM=")); Serial.print(r.rpm);
+  Serial.print  (F(" | CLT=")); Serial.print(r.clt);
+  Serial.print  (F(" C | IAT=")); Serial.print(r.iat);
+  Serial.print  (F(" C | MAP=")); Serial.print(r.map);
+  Serial.print  (F(" kPa | AFR=")); Serial.println(r.afr, 2);
+
+  Serial.println(F("║ [3] TIMING AKUISISI                                              ║"));
+  Serial.print  (F("║ Sensor interval avg/min/max : "));
+  Serial.print(sensorAvgMs, 2); Serial.print(F(" / "));
+  Serial.print(perfMinStat(acqMon.sensorIntervalMs)); Serial.print(F(" / "));
+  Serial.print(acqMon.sensorIntervalMs.maxVal); Serial.println(F(" ms"));
+  Serial.print  (F("║ UART frame avg/min/max      : "));
+  Serial.print(frameAvgMs, 2); Serial.print(F(" / "));
+  Serial.print(perfMinStat(acqMon.uartFrameIntervalMs)); Serial.print(F(" / "));
+  Serial.print(acqMon.uartFrameIntervalMs.maxVal); Serial.println(F(" ms"));
+  Serial.print  (F("║ UART jitter                 : "));
+  Serial.print(acqMon.uartFrameIntervalMs.count ? (acqMon.uartFrameIntervalMs.maxVal - perfMinStat(acqMon.uartFrameIntervalMs)) : 0);
+  Serial.println(F(" ms"));
+  Serial.print  (F("║ Last 1s aggregation interval: ")); Serial.print(lastFastAggIntervalMs); Serial.println(F(" ms"));
+  Serial.print  (F("║ Last 1s aggregation samples : ")); Serial.print(lastFastAggSamples); Serial.println(F(" sample"));
+
+  Serial.println(F("║ [4] WAKTU EKSEKUSI KOMPUTASI                                     ║"));
+  Serial.print  (F("║ UART read avg/max           : ")); Serial.print(perfAvgStat(acqMon.uartReadUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.uartReadUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ CSV parse avg/max           : ")); Serial.print(perfAvgStat(acqMon.csvParseUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.csvParseUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ Aggregation avg/max         : ")); Serial.print(perfAvgStat(acqMon.aggregationUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.aggregationUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ FFT compute avg/max         : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.fftComputeUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ SensorTask total avg/max    : ")); Serial.print(taskAvgUs, 1); Serial.print(F(" / ")); Serial.print(taskMaxUs, 0); Serial.println(F(" us"));
+  Serial.print  (F("║ CPU usage est. avg/max      : ")); Serial.print(cpuAvgPct, 2); Serial.print(F(" / ")); Serial.print(cpuMaxPct, 2); Serial.println(F(" %"));
+
+  Serial.println(F("║ [5] DATA QUALITY & THROUGHPUT                                     ║"));
+  Serial.print  (F("║ Frame RX valid/fail         : ")); Serial.print(acqMon.frameValid); Serial.print(F(" / ")); Serial.println(acqMon.frameParseFailed);
+  Serial.print  (F("║ Frame received total        : ")); Serial.println(acqMon.frameReceived);
+  Serial.print  (F("║ Lost / duplicate frame      : ")); Serial.print(acqMon.lostFrame); Serial.print(F(" / ")); Serial.println(acqMon.duplicateFrame);
+  Serial.print  (F("║ Success rate                : ")); Serial.print(frameSuccessRate, 2); Serial.println(F(" %"));
+  Serial.print  (F("║ RX throughput               : ")); Serial.print(frameRateHz, 2); Serial.print(F(" frame/s | ")); Serial.print(rxBytesPerSec, 1); Serial.println(F(" B/s"));
+  Serial.print  (F("║ Raw frame last/max          : ")); Serial.print(acqMon.lastRawFrameBytes); Serial.print(F(" / ")); Serial.print(acqMon.maxRawFrameBytes); Serial.println(F(" B"));
+
+  Serial.println(F("║ [6] MONITORING, STORAGE, DAN DATABASE                             ║"));
+  Serial.print  (F("║ TFT draw avg/max            : ")); Serial.print(perfAvgStat(acqMon.tftDrawUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.tftDrawUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ SD append avg/max           : ")); Serial.print(perfAvgStat(acqMon.sdSaveUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.sdSaveUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ MQTT publish avg/max        : ")); Serial.print(perfAvgStat(acqMon.mqttPublishUs), 1); Serial.print(F(" / ")); Serial.print(acqMon.mqttPublishUs.maxVal); Serial.println(F(" us"));
+  Serial.print  (F("║ SD row size / file size     : ")); Serial.print(dbLastLineBytes); Serial.print(F(" B / ")); Serial.println(formatBytes(dbCachedFileSizeBytes));
+  Serial.print  (F("║ MQTT payload last           : ")); Serial.print(mqttLastPayloadBytes); Serial.print(F(" B, records=")); Serial.println(mqttLastRecordsSent);
+
+  Serial.println(F("║ [7] HASIL KETERCAPAIAN                                            ║"));
+  Serial.print  (F("║ Akuisisi UART 0.1-1 s       : ")); Serial.println(passFailText(uartIntervalPass));
+  Serial.print  (F("║ Record monitoring 0.1-1 s   : ")); Serial.println(passFailText(recordIntervalPass));
+  Serial.print  (F("║ Deadline SensorTask 20 ms   : ")); Serial.println(passFailText(deadlinePass));
+  Serial.print  (F("║ Kualitas data UART          : ")); Serial.println(passFailText(qualityPass));
+  Serial.print  (F("║ Penyimpanan lokal 7 hari    : ")); Serial.println(passFailText(localSavePass && sdOK));
+  Serial.print  (F("║ Interval database 10 menit  : ")); Serial.println(passFailText(databaseTargetPass));
+  Serial.print  (F("║ OVERALL REAL-TIME MONITOR   : ")); Serial.println(passFailText(realtimePass));
+
+  if (!databaseTargetPass) {
+    Serial.println(F("║ CATATAN: publishInterval/SD_SYNC_INTERVAL_MS belum 10 menit.       ║"));
+    Serial.println(F("║         Jika spesifikasi database wajib 10 menit, ubah intervalnya. ║"));
+  }
+
+  Serial.println(F("╚═════════════════════════════════════════════════════════════════════╝"));
+}
+
+
 void printPerformanceReport() {
   const float budgetUs = SENSOR_SAMPLE_INTERVAL_MS * 1000.0f;
   const float taskPct = budgetUs > 0 ? (perfSensorTaskUs * 100.0f / budgetUs) : 0.0f;
@@ -2717,6 +2992,7 @@ void handlePeriodicSerialLog() {
   lastSerialLogMs = millis();
   if (serialLogDatabaseEnabled) printDatabaseReport();
   if (serialLogPerformanceEnabled) printPerformanceReport();
+  if (serialLogSensorEnabled) printAcquisitionSpecReport();
   if (serialLogFFTEnabled) printFFTReport();
   if (serialLogLatestEnabled) printLatestDataReport();
 }
@@ -2733,7 +3009,9 @@ void processSerialCommand(String cmd) {
   else if (cmd == "database" || cmd == "db") printDatabaseReport();
   else if (cmd == "sync" || cmd == "sync status") printSdSyncStatus();
   else if (cmd == "sync now") { syncSdQueueToMongoDB(); printSdSyncStatus(); }
+  else if (cmd == "spec" || cmd == "acq" || cmd == "compute") printAcquisitionSpecReport();
   else if (cmd == "performance" || cmd == "perf") printPerformanceReport();
+  else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "fft") printFFTReport();
   else if (cmd == "fft source voltgen") { fftSelectedSource = FFT_SRC_VOLT_GEN; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GEN")); }
@@ -2756,6 +3034,7 @@ void processSerialCommand(String cmd) {
   else if (cmd == "log off") { serialLogEnabled = false; Serial.println(F("[LOG] off")); }
   else if (cmd == "log database on") { serialLogEnabled = true; serialLogDatabaseEnabled = true; Serial.println(F("[LOG] database on")); }
   else if (cmd == "log performance on") { serialLogEnabled = true; serialLogPerformanceEnabled = true; Serial.println(F("[LOG] performance on")); }
+  else if (cmd == "log acq on" || cmd == "log spec on") { serialLogEnabled = true; serialLogSensorEnabled = true; Serial.println(F("[LOG] acquisition/spec on")); }
   else if (cmd == "log fft on") { serialLogEnabled = true; serialLogFFTEnabled = true; Serial.println(F("[LOG] fft on")); }
   else if (cmd == "log latest on") { serialLogEnabled = true; serialLogLatestEnabled = true; Serial.println(F("[LOG] latest on")); }
   else Serial.println(F("[CMD] unknown. Type help."));
@@ -2795,6 +3074,7 @@ void setup() {
   memset(&fftData, 0, sizeof(fftData));
   memset(&fftMultiData, 0, sizeof(fftMultiData));
   memset(&fftBuffers, 0, sizeof(fftBuffers));
+  resetAcquisitionMonitorStats();
   strlcpy(latestRaw.syncText, "OFF-GRID", sizeof(latestRaw.syncText));
   strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
 
