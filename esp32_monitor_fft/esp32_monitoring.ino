@@ -30,6 +30,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include "esp_wifi.h"
 
 #ifndef ESP_ARDUINO_VERSION_MAJOR
@@ -139,10 +140,22 @@
 #endif
 
 // Endpoint HTTP server Node.js untuk sinkronisasi ulang data backup dari SD card.
-// Ganti saat build/deploy, contoh:
-//   -D CLOUD_INGEST_URL=\"https://domain-server-anda/api/ingest/batch\"
+// Default diarahkan ke server Render production. Jika nama service/domain Render berubah,
+// override saat build, contoh:
+//   -D CLOUD_INGEST_URL=\"https://nama-service-anda.onrender.com/api/ingest/batch\"
 #ifndef CLOUD_INGEST_URL
-#define CLOUD_INGEST_URL "http://localhost:3000/api/ingest/batch"
+#define CLOUD_INGEST_URL "https://generator-monitoring-system.onrender.com/api/ingest/batch"
+#endif
+
+// Render memakai HTTPS. ESP32 tidak selalu punya root CA terbaru, jadi koneksi TLS
+// dibuat permissive agar sync tidak gagal karena sertifikat. Set ke 0 jika Anda
+// menambahkan CA certificate sendiri dan ingin verifikasi TLS penuh.
+#ifndef CLOUD_INGEST_ALLOW_INSECURE_TLS
+#define CLOUD_INGEST_ALLOW_INSECURE_TLS 1
+#endif
+
+#ifndef CLOUD_INGEST_TIMEOUT_MS
+#define CLOUD_INGEST_TIMEOUT_MS 30000UL
 #endif
 
 // NTP WIB.
@@ -1579,17 +1592,40 @@ void syncSdQueueToMongoDB() {
   payload += "}";
 
   HTTPClient http;
-  http.setTimeout(10000);
-  if (!http.begin(CLOUD_INGEST_URL)) {
+  http.setTimeout(CLOUD_INGEST_TIMEOUT_MS);
+
+  String ingestUrl = String(CLOUD_INGEST_URL);
+  bool httpStarted = false;
+  int code = -1;
+
+  if (ingestUrl.startsWith("https://")) {
+    WiFiClientSecure secureClient;
+#if CLOUD_INGEST_ALLOW_INSECURE_TLS
+    secureClient.setInsecure();
+#endif
+    httpStarted = http.begin(secureClient, ingestUrl);
+    if (httpStarted) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.POST(payload);
+      http.end();
+    }
+  } else {
+    WiFiClient plainClient;
+    httpStarted = http.begin(plainClient, ingestUrl);
+    if (httpStarted) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.POST(payload);
+      http.end();
+    }
+  }
+
+  if (!httpStarted) {
     sdSyncLastHttpCode = -1;
     sdSyncFailCount++;
     return;
   }
 
-  http.addHeader("Content-Type", "application/json");
-  int code = http.POST(payload);
   sdSyncLastHttpCode = code;
-  http.end();
 
   if (code < 200 || code >= 300) {
     sdSyncFailCount++;
@@ -2726,6 +2762,7 @@ void printSdSyncStatus() {
   else { Serial.print((millis() - sdSyncLastAttemptMs) / 1000UL); Serial.println(F(" s ago")); }
   Serial.println(F("STATUS: pending=0 dan last HTTP code 2xx berarti SD sudah sinkron."));
   Serial.println(F("NOTE  : HTTP code -2 berarti CLOUD_INGEST_URL masih localhost/default."));
+  Serial.println(F("TIP   : Default CLOUD_INGEST_URL memakai server Render production."));
   Serial.println(F("===================================================="));
 }
 
