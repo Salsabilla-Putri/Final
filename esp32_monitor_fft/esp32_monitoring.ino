@@ -30,6 +30,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include "esp_wifi.h"
 
 #ifndef ESP_ARDUINO_VERSION_MAJOR
@@ -139,10 +140,22 @@
 #endif
 
 // Endpoint HTTP server Node.js untuk sinkronisasi ulang data backup dari SD card.
-// Ganti saat build/deploy, contoh:
-//   -D CLOUD_INGEST_URL=\"https://domain-server-anda/api/ingest/batch\"
+// Default diarahkan ke server Render production. Jika nama service/domain Render berubah,
+// override saat build, contoh:
+//   -D CLOUD_INGEST_URL=\"https://nama-service-anda.onrender.com/api/ingest/batch\"
 #ifndef CLOUD_INGEST_URL
-#define CLOUD_INGEST_URL "http://localhost:3000/api/ingest/batch"
+#define CLOUD_INGEST_URL "https://generator-monitoring-system.onrender.com/api/ingest/batch"
+#endif
+
+// Render memakai HTTPS. ESP32 tidak selalu punya root CA terbaru, jadi koneksi TLS
+// dibuat permissive agar sync tidak gagal karena sertifikat. Set ke 0 jika Anda
+// menambahkan CA certificate sendiri dan ingin verifikasi TLS penuh.
+#ifndef CLOUD_INGEST_ALLOW_INSECURE_TLS
+#define CLOUD_INGEST_ALLOW_INSECURE_TLS 1
+#endif
+
+#ifndef CLOUD_INGEST_TIMEOUT_MS
+#define CLOUD_INGEST_TIMEOUT_MS 30000UL
 #endif
 
 // NTP WIB.
@@ -502,6 +515,7 @@ FFTData fftData;
 FFTData fftMultiData[FFT_SOURCE_COUNT];
 StorageRecord storageBatch[STORAGE_BATCH_SIZE];
 SemaphoreHandle_t fftMutex = NULL;
+SemaphoreHandle_t sdSyncRequestSemaphore = NULL;
 
 float fftBuffers[FFT_SOURCE_COUNT][FFT_SAMPLES];
 uint16_t fftIndexes[FFT_SOURCE_COUNT] = {0, 0, 0};
@@ -570,6 +584,8 @@ unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
 unsigned long sdSyncSuccessCount = 0;
 unsigned long sdSyncFailCount = 0;
+volatile bool sdSyncBusy = false;
+volatile unsigned long sdSyncQueuedCount = 0;
 int sdSyncLastHttpCode = 0;
 uint16_t sdSyncLastAckedRecords = 0;
 unsigned long sdSyncLastAttemptMs = 0;
@@ -1579,17 +1595,40 @@ void syncSdQueueToMongoDB() {
   payload += "}";
 
   HTTPClient http;
-  http.setTimeout(10000);
-  if (!http.begin(CLOUD_INGEST_URL)) {
+  http.setTimeout(CLOUD_INGEST_TIMEOUT_MS);
+
+  String ingestUrl = String(CLOUD_INGEST_URL);
+  bool httpStarted = false;
+  int code = -1;
+
+  if (ingestUrl.startsWith("https://")) {
+    WiFiClientSecure secureClient;
+#if CLOUD_INGEST_ALLOW_INSECURE_TLS
+    secureClient.setInsecure();
+#endif
+    httpStarted = http.begin(secureClient, ingestUrl);
+    if (httpStarted) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.POST(payload);
+      http.end();
+    }
+  } else {
+    WiFiClient plainClient;
+    httpStarted = http.begin(plainClient, ingestUrl);
+    if (httpStarted) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.POST(payload);
+      http.end();
+    }
+  }
+
+  if (!httpStarted) {
     sdSyncLastHttpCode = -1;
     sdSyncFailCount++;
     return;
   }
 
-  http.addHeader("Content-Type", "application/json");
-  int code = http.POST(payload);
   sdSyncLastHttpCode = code;
-  http.end();
 
   if (code < 200 || code >= 300) {
     sdSyncFailCount++;
@@ -1608,6 +1647,37 @@ void syncSdQueueToMongoDB() {
     }
   } else {
     sdSyncFailCount++;
+  }
+}
+
+bool requestSdSyncToMongoDB() {
+  if (sdSyncRequestSemaphore == NULL) return false;
+
+  BaseType_t queued = xSemaphoreGive(sdSyncRequestSemaphore);
+  if (queued == pdTRUE) {
+    sdSyncQueuedCount++;
+    return true;
+  }
+
+  // Semaphore sudah berisi request: task sync sedang berjalan atau sudah antre.
+  return false;
+}
+
+void SdSyncTask(void *pvParameters) {
+  (void)pvParameters;
+
+  while (true) {
+    if (sdSyncRequestSemaphore == NULL) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+
+    if (xSemaphoreTake(sdSyncRequestSemaphore, portMAX_DELAY) == pdTRUE) {
+      sdSyncBusy = true;
+      syncSdQueueToMongoDB();
+      sdSyncBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
   }
 }
 
@@ -2719,6 +2789,8 @@ void printSdSyncStatus() {
   Serial.print  (F("  sync interval   : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print  (F("  batch size      : ")); Serial.println(SD_SYNC_BATCH_SIZE);
   Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  sync busy       : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
+  Serial.print  (F("  sync queued     : ")); Serial.println(sdSyncQueuedCount);
   Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
   Serial.print  (F("  last ACK records: ")); Serial.println(sdSyncLastAckedRecords);
   Serial.print  (F("  last attempt age: "));
@@ -2726,6 +2798,7 @@ void printSdSyncStatus() {
   else { Serial.print((millis() - sdSyncLastAttemptMs) / 1000UL); Serial.println(F(" s ago")); }
   Serial.println(F("STATUS: pending=0 dan last HTTP code 2xx berarti SD sudah sinkron."));
   Serial.println(F("NOTE  : HTTP code -2 berarti CLOUD_INGEST_URL masih localhost/default."));
+  Serial.println(F("TIP   : Default CLOUD_INGEST_URL memakai server Render production."));
   Serial.println(F("===================================================="));
 }
 
@@ -3008,7 +3081,11 @@ void processSerialCommand(String cmd) {
   if (cmd == "help") printSerialHelp();
   else if (cmd == "database" || cmd == "db") printDatabaseReport();
   else if (cmd == "sync" || cmd == "sync status") printSdSyncStatus();
-  else if (cmd == "sync now") { syncSdQueueToMongoDB(); printSdSyncStatus(); }
+  else if (cmd == "sync now") {
+    if (requestSdSyncToMongoDB()) Serial.println(F("[SYNC] request queued. HTTP upload berjalan di background task."));
+    else Serial.println(F("[SYNC] request sudah antre/masih berjalan. Serial dan display tetap responsif."));
+    printSdSyncStatus();
+  }
   else if (cmd == "spec" || cmd == "acq" || cmd == "compute") printAcquisitionSpecReport();
   else if (cmd == "performance" || cmd == "perf") printPerformanceReport();
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
@@ -3081,10 +3158,12 @@ void setup() {
   dataMutex = xSemaphoreCreateMutex();
   sdMutex = xSemaphoreCreateMutex();
   fftMutex = xSemaphoreCreateMutex();
+  sdSyncRequestSemaphore = xSemaphoreCreateBinary();
 
   if (dataMutex == NULL) Serial.println("[ERROR] dataMutex gagal dibuat.");
   if (sdMutex == NULL) Serial.println("[ERROR] sdMutex gagal dibuat.");
   if (fftMutex == NULL) Serial.println("[ERROR] fftMutex gagal dibuat.");
+  if (sdSyncRequestSemaphore == NULL) Serial.println("[ERROR] sdSyncRequestSemaphore gagal dibuat.");
 
   deselectAllSPI();
 
@@ -3151,6 +3230,16 @@ void setup() {
     0
   );
 
+  xTaskCreatePinnedToCore(
+    SdSyncTask,
+    "SdSyncTask",
+    10000,
+    NULL,
+    1,
+    NULL,
+    0
+  );
+
   drawBootSplashStep("GENSYS ready", 100);
   delay(600);
 
@@ -3208,7 +3297,7 @@ void loop() {
 
   if (millis() - lastSdSync >= SD_SYNC_INTERVAL_MS) {
     lastSdSync = millis();
-    syncSdQueueToMongoDB();
+    requestSdSyncToMongoDB();
   }
 
   handleTouchNavigation();
