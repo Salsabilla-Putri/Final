@@ -23,6 +23,7 @@
 // Serial command:
 // help, database, performance, sensor, network, touch, calibrate,
 // page generator, page engine, page fft
+// test once, test once reset, test once last
 // ============================================================
 
 #include <Arduino.h>
@@ -601,10 +602,35 @@ unsigned long dbCachedAtMs = 0;
 bool     dbSizeTickerEnabled  = false;
 unsigned long lastDbSizeTickMs = 0;
 
-// ── Test-once mode (kirim 1x ke SD + MQTT lalu stop) ──────────
-bool     testOnceMode        = false;
-bool     testOnceDone        = false;
+// ── Test-once mode untuk pengujian end-to-end ─────────────────
+// Alur sekali uji:
+// 1) Terima 1 frame UART valid dari ESP32-1.
+// 2) Bekukan RX agar data berikutnya tidak ikut masuk.
+// 3) Agregasi 1 record monitoring.
+// 4) Simpan 1 record ke SD/local database.
+// 5) Publish 1 payload ke MQTT/cloud database.
+// 6) Render 1 kali ke TFT, lalu monitoring berhenti pada data tersebut.
+bool     testOnceMode          = false;
+bool     testOnceDone          = false;
+bool     testOnceRxDone        = false;
+bool     testOnceAggDone       = false;
+bool     testOnceSdDone        = false;
+bool     testOnceMqttDone      = false;
+bool     testOnceDisplayDone   = false;
+uint32_t testOnceSeq           = 0;
+uint32_t testOnceLocalSeq      = 0;
 unsigned long testOnceTriggeredMs = 0;
+
+// ── Cache RX terakhir untuk mode test-once ───────────────────
+// Tujuan:
+// - Setelah 1 frame valid diterima, data dibekukan.
+// - Serial Monitor dapat menampilkan ulang raw RX + parameter terakhir.
+// - seq dan timestampMs tidak berubah sampai command "test once reset".
+bool     hasLastRxReport       = false;
+String   lastRxRawLineCache    = "";
+RawData  lastRxDataCache;
+bool     lastRxParseOkCache    = false;
+uint32_t lastRxCachedAtMs      = 0;
 
 // ── Konfirmasi reset SD database ──────────────────────────────
 bool     sdResetPending      = false;
@@ -930,13 +956,99 @@ bool parseBridgeCsv(const String &line, RawData &out) {
   return true;
 }
 
+void printRxParameterReport(const String &rawLine, const RawData &d, bool parseOk) {
+  Serial.println();
+  Serial.println(F("║----------------UART RX PARAMETER MONITOR--------------------║"));
+  Serial.println();
+  Serial.print(F("║ RAW UART      : "));
+  Serial.println(rawLine);
+
+  Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
+  Serial.print(F("║ Parse Status  : "));
+  Serial.println(parseOk ? F("OK") : F("FAILED"));
+
+  if (!parseOk) {
+    Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println(F("╟─────────────────── FRAME METADATA ────────────────────────╢"));
+  Serial.printf("║ %-14s: %lu\n", "seq", (unsigned long)d.seq);
+  Serial.printf("║ %-14s: %lu ms\n", "timestampMs", (unsigned long)d.timestampMs);
+
+  Serial.println(F("╟─────────────────── ENGINE PARAMETER ──────────────────────╢"));
+  Serial.printf("║ %-14s: %d rpm\n", "rpm", d.rpm);
+  Serial.printf("║ %-14s: %d %%\n", "tps", d.tps);
+  Serial.printf("║ %-14s: %d kPa\n", "map", d.map);
+  Serial.printf("║ %-14s: %d C\n", "iat", d.iat);
+  Serial.printf("║ %-14s: %d C\n", "clt", d.clt);
+  Serial.printf("║ %-14s: %.2f\n", "afr", d.afr);
+  Serial.printf("║ %-14s: %.2f V\n", "batt", d.batt);
+  Serial.printf("║ %-14s: %.1f %%\n", "fuel", d.fuel);
+
+  Serial.println(F("╟──────────────── ELECTRICAL PARAMETER ─────────────────────╢"));
+  Serial.printf("║ %-14s: %.3f Hz\n", "freq", d.freq);
+  Serial.printf("║ %-14s: %.3f Hz\n", "freqGrid", d.freqGrid);
+  Serial.printf("║ %-14s: %.2f V\n", "volt", d.volt);
+  Serial.printf("║ %-14s: %.2f V\n", "voltGrid", d.voltGrid);
+  Serial.printf("║ %-14s: %.2f A\n", "currentA", d.currentA);
+  Serial.printf("║ %-14s: %.3f kW\n", "powerKW", d.powerKW);
+  Serial.printf("║ %-14s: %.2f deg\n", "phaseAngle", d.phaseAngle);
+
+  Serial.println(F("╟──────────────────── STATUS PARAMETER ─────────────────────╢"));
+  Serial.printf("║ %-14s: %d\n", "engineSync", d.speeduinoSync ? 1 : 0);
+  Serial.printf("║ %-14s: %d\n", "gridSync", d.gridSync ? 1 : 0);
+  Serial.printf("║ %-14s: %d\n", "valid", d.valid ? 1 : 0);
+  Serial.printf("║ %-14s: %s\n", "syncText", d.syncText);
+  Serial.printf("║ %-14s: %s\n", "statusText", d.statusText);
+
+  Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
+}
+
+void cacheLastRxReport(const String &rawLine, const RawData &d, bool parseOk) {
+  lastRxRawLineCache = rawLine;
+  lastRxDataCache = d;
+  lastRxParseOkCache = parseOk;
+  lastRxCachedAtMs = millis();
+  hasLastRxReport = true;
+}
+
+void printLastRxReportFromCache() {
+  if (!hasLastRxReport) {
+    Serial.println();
+    Serial.println(F("╔════════════ LAST UART RX CACHE ════════════╗"));
+    Serial.println(F("║ Belum ada frame RX valid yang tersimpan.   ║"));
+    Serial.println(F("║ Gunakan: test once                         ║"));
+    Serial.println(F("║ atau:    test once reset                   ║"));
+    Serial.println(F("╚════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println();
+  Serial.println(F("╔════════════ LAST UART RX FRAME ════════════╗"));
+  Serial.println(F("║ Menampilkan data RX terakhir dari cache.   ║"));
+  Serial.println(F("║ Data ini dibekukan pada mode test-once.    ║"));
+  Serial.println(F("║ seq dan timestampMs tidak berubah sampai   ║"));
+  Serial.println(F("║ command: test once reset.                  ║"));
+  Serial.printf("[CACHE] cachedAge=%lu ms\n", (unsigned long)(millis() - lastRxCachedAtMs));
+  Serial.println(F("╚════════════════════════════════════════════╝"));
+
+  printRxParameterReport(lastRxRawLineCache, lastRxDataCache, lastRxParseOkCache);
+}
+
 void handleCompleteRxLine(String line) {
   line.trim();
   if (line.length() == 0) return;
 
-  if (runtimeDebugRxRaw) {
-    Serial.print("[RX RAW] ");
-    Serial.println(line);
+  // Dalam mode test-once, hanya frame UART valid pertama yang diproses.
+  // Frame berikutnya diabaikan agar data pengujian tidak berubah.
+  // latestRaw, seq, timestampMs, agregasi, SD, MQTT, dan TFT tetap menggunakan
+  // data terakhir yang sudah tersimpan di cache sampai "test once reset".
+  if (testOnceMode && testOnceRxDone) {
+    if (runtimeDebugRxOK || runtimeDebugRxRaw) {
+      printLastRxReportFromCache();
+    }
+    return;
   }
 
   RawData parsed;
@@ -947,6 +1059,8 @@ void handleCompleteRxLine(String line) {
   recordUartFrameMonitor(line, ok, parsed);
 
   if (ok) {
+    cacheLastRxReport(line, parsed, true);
+
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
       latestRaw = parsed;
       xSemaphoreGive(dataMutex);
@@ -957,21 +1071,44 @@ void handleCompleteRxLine(String line) {
     linkOK = true;
     parseOKCount++;
 
-    if (runtimeDebugRxOK) {
-      Serial.printf("[RX OK] seq=%lu rpm=%d tps=%d map=%d freq=%.2f volt=%.1f phase=%.2f gridSync=%d valid=%d\n",
-                    (unsigned long)parsed.seq, parsed.rpm, parsed.tps, parsed.map,
-                    parsed.freq, parsed.volt, parsed.phaseAngle,
-                    parsed.gridSync ? 1 : 0, parsed.valid ? 1 : 0);
+    if (testOnceMode && !testOnceRxDone) {
+      testOnceRxDone = true;
+      testOnceSeq = parsed.seq;
+      Serial.println();
+      Serial.println(F("╔════════════ TEST-ONCE RX UART ════════════╗"));
+      Serial.printf("[TEST] Frame UART valid diterima. seq=%lu\n", (unsigned long)testOnceSeq);
+      Serial.println(F("[TEST] RX dibekukan. Menunggu agregasi 1 record, SD, MQTT, dan TFT."));
+      Serial.println(F("╚════════════════════════════════════════════╝"));
+      printRxParameterReport(line, parsed, true);
+    } else if (runtimeDebugRxOK) {
+      printRxParameterReport(line, parsed, true);
+    } else if (runtimeDebugRxRaw) {
+      Serial.print(F("[RX RAW] "));
+      Serial.println(line);
     }
   } else {
     parseFailCount++;
-    Serial.print("[RX CSV FAIL] ");
-    Serial.println(line);
+
+    if (runtimeDebugRxOK) {
+      printRxParameterReport(line, parsed, false);
+    } else {
+      Serial.print(F("[RX CSV FAIL] "));
+      Serial.println(line);
+    }
   }
 }
 
 void readLinkSerialManual() {
   uint32_t readStart = micros();
+
+  // Mode test-once: setelah 1 frame valid diterima, kosongkan UART buffer
+  // supaya frame baru tidak mengubah latestRaw/aggregate pengujian.
+  if (testOnceMode && testOnceRxDone) {
+    while (LinkSerial.available()) LinkSerial.read();
+    perfUartReadUs = micros() - readStart;
+    perfUpdateStat(acqMon.uartReadUs, perfUartReadUs);
+    return;
+  }
 
   while (LinkSerial.available()) {
     char c = (char)LinkSerial.read();
@@ -1009,6 +1146,171 @@ void readLinkSerialManual() {
 // ============================================================
 void resetAccumulator() {
   acc = AggAccumulator();
+}
+
+void clearStorageBatchForTestOnce() {
+  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
+    storageBatch[i] = StorageRecord();
+  }
+  storageBatchCount = 0;
+}
+
+void printTestOnceStatus() {
+  Serial.println();
+  Serial.println(F("================ TEST-ONCE STATUS ================"));
+  Serial.print  (F("  mode            : ")); Serial.println(testOnceMode ? F("ON") : F("OFF"));
+  Serial.print  (F("  overall done    : ")); Serial.println(testOnceDone ? F("YES") : F("NO"));
+  Serial.print  (F("  UART RX         : ")); Serial.println(testOnceRxDone ? F("DONE") : F("WAITING"));
+  Serial.print  (F("  aggregation     : ")); Serial.println(testOnceAggDone ? F("DONE") : F("WAITING"));
+  Serial.print  (F("  local SD DB     : ")); Serial.println(testOnceSdDone ? F("DONE") : F("WAITING"));
+  Serial.print  (F("  MQTT/cloud DB   : ")); Serial.println(testOnceMqttDone ? F("DONE") : F("WAITING"));
+  Serial.print  (F("  TFT monitoring  : ")); Serial.println(testOnceDisplayDone ? F("DONE") : F("WAITING"));
+  Serial.print  (F("  frozen seq      : ")); Serial.println(testOnceSeq);
+  Serial.print  (F("  localSeq record : ")); Serial.println(testOnceLocalSeq);
+  Serial.print  (F("  has RX cache    : ")); Serial.println(hasLastRxReport ? F("YES") : F("NO"));
+  if (hasLastRxReport) {
+    Serial.print(F("  cached seq      : ")); Serial.println(lastRxDataCache.seq);
+    Serial.print(F("  cached timestamp: ")); Serial.print(lastRxDataCache.timestampMs); Serial.println(F(" ms"));
+  }
+  Serial.println(F("=================================================="));
+}
+
+void updateTestOnceCompletion() {
+  if (!testOnceMode || testOnceDone) return;
+
+  if (testOnceRxDone && testOnceAggDone && testOnceSdDone && testOnceMqttDone && testOnceDisplayDone) {
+    testOnceDone = true;
+    Serial.println();
+    Serial.println(F("╔════════════ TEST-ONCE COMPLETE ════════════╗"));
+    Serial.println(F("║ 1 frame UART diterima dan dibekukan.       ║"));
+    Serial.println(F("║ 1 record monitoring berhasil diagregasi.   ║"));
+    Serial.println(F("║ 1 record tersimpan ke SD/local database.   ║"));
+    Serial.println(F("║ 1 payload terkirim ke MQTT/cloud database. ║"));
+    Serial.println(F("║ 1 tampilan monitoring sudah dirender.      ║"));
+    Serial.println(F("╚════════════════════════════════════════════╝"));
+    printTestOnceStatus();
+  }
+}
+
+void startTestOnceMode() {
+  // Jika test-once sudah pernah menerima/memproses frame, jangan membuat data baru.
+  // Command "test once" setelah selesai hanya menampilkan data terakhir yang dibekukan.
+  // Data baru hanya dibuat dengan command "test once reset".
+  if (testOnceMode && (testOnceRxDone || testOnceDone || hasLastRxReport)) {
+    Serial.println();
+    Serial.println(F("╔════════════ TEST-ONCE HOLD LAST DATA ════════════╗"));
+    Serial.println(F("║ Mode test-once sudah memiliki data terakhir.     ║"));
+    Serial.println(F("║ Tidak menerima frame baru agar seq/timestamp     ║"));
+    Serial.println(F("║ tidak bertambah.                                 ║"));
+    Serial.println(F("║ Command untuk data baru: test once reset         ║"));
+    Serial.println(F("╚═══════════════════════════════════════════════════╝"));
+    printLastRxReportFromCache();
+    printTestOnceStatus();
+    return;
+  }
+
+  testOnceMode = true;
+  testOnceDone = false;
+  testOnceRxDone = false;
+  testOnceAggDone = false;
+  testOnceSdDone = false;
+  testOnceMqttDone = false;
+  testOnceDisplayDone = false;
+  testOnceSeq = 0;
+  testOnceLocalSeq = 0;
+  testOnceTriggeredMs = millis();
+
+  hasLastRxReport = false;
+  lastRxRawLineCache = "";
+  lastRxDataCache = RawData();
+  lastRxParseOkCache = false;
+  lastRxCachedAtMs = 0;
+
+  linkRxBuffer = "";
+  resetAccumulator();
+  clearStorageBatchForTestOnce();
+
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    latestRaw = RawData();
+    aggData = AggregatedData();
+    strlcpy(latestRaw.syncText, "OFF-GRID", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
+    xSemaphoreGive(dataMutex);
+  }
+
+  // Paksa siklus berikutnya segera mencoba publish, save, dan redraw
+  // setelah aggregate pertama tersedia.
+  lastPublish = 0;
+  lastLocalSave = 0;
+  lastDraw = 0;
+  needFullRedraw = true;
+
+  Serial.println();
+  Serial.println(F("╔════════════ TEST-ONCE STARTED ════════════╗"));
+  Serial.println(F("║ ESP32-2 akan menerima 1 frame UART valid. ║"));
+  Serial.println(F("║ Setelah itu data dibekukan di cache.      ║"));
+  Serial.println(F("║ Ketik test once untuk tampilkan ulang.    ║"));
+  Serial.println(F("║ Data baru hanya dengan: test once reset   ║"));
+  Serial.println(F("╚════════════════════════════════════════════╝"));
+}
+
+void resetTestOnceMode() {
+  testOnceMode = true;
+  testOnceDone = false;
+  testOnceRxDone = false;
+  testOnceAggDone = false;
+  testOnceSdDone = false;
+  testOnceMqttDone = false;
+  testOnceDisplayDone = false;
+  testOnceSeq = 0;
+  testOnceLocalSeq = 0;
+  testOnceTriggeredMs = millis();
+
+  hasLastRxReport = false;
+  lastRxRawLineCache = "";
+  lastRxDataCache = RawData();
+  lastRxParseOkCache = false;
+  lastRxCachedAtMs = 0;
+
+  linkRxBuffer = "";
+  while (LinkSerial.available()) LinkSerial.read();
+
+  resetAccumulator();
+  clearStorageBatchForTestOnce();
+
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    latestRaw = RawData();
+    aggData = AggregatedData();
+    strlcpy(latestRaw.syncText, "OFF-GRID", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
+    xSemaphoreGive(dataMutex);
+  }
+
+  lastPublish = 0;
+  lastLocalSave = 0;
+  lastDraw = 0;
+  needFullRedraw = true;
+
+  Serial.println();
+  Serial.println(F("╔════════════ TEST-ONCE RESET ════════════╗"));
+  Serial.println(F("║ Cache lama dihapus.                     ║"));
+  Serial.println(F("║ ESP32-2 akan menerima 1 frame UART baru.║"));
+  Serial.println(F("║ seq dan timestampMs baru hanya muncul   ║"));
+  Serial.println(F("║ setelah frame baru diterima.            ║"));
+  Serial.println(F("╚═════════════════════════════════════════╝"));
+}
+
+void stopTestOnceMode() {
+  testOnceMode = false;
+  testOnceDone = false;
+  testOnceRxDone = false;
+  testOnceAggDone = false;
+  testOnceSdDone = false;
+  testOnceMqttDone = false;
+  testOnceDisplayDone = false;
+  linkRxBuffer = "";
+  needFullRedraw = true;
+  Serial.println(F("[TEST] once off. Mode monitoring kembali continuous."));
 }
 
 void addSampleToAccumulator(const RawData &d) {
@@ -1116,6 +1418,23 @@ void finalizeFastAggregate() {
     }
 
     pushStorageRecord(out);
+
+    if (testOnceMode && testOnceRxDone && !testOnceAggDone) {
+      testOnceAggDone = true;
+      testOnceLocalSeq = localRecordSeq;
+      Serial.println();
+      Serial.println(F("╔════════════ TEST-ONCE AGGREGATION ════════════╗"));
+      Serial.printf("[TEST] 1 record agregasi siap. localSeq=%lu, samples=%u\n",
+                    (unsigned long)testOnceLocalSeq, out.samples);
+      Serial.println(F("╚════════════════════════════════════════════════╝"));
+
+      // Paksa loop utama segera menjalankan SD save, MQTT publish, dan TFT draw
+      // tanpa menunggu sisa interval sebelumnya.
+      lastLocalSave = 0;
+      lastPublish = 0;
+      lastDraw = 0;
+      needFullRedraw = true;
+    }
 
     fastAggCompleted++;
     lastFastAggSamples = out.samples;
@@ -1446,8 +1765,8 @@ String buildJsonBatchPayload() {
 
 void publishRealtimeData() {
   if (!wifiOK || !mqtt.connected()) return;
-  // Test-once mode: lewati jika sudah pernah kirim
-  if (testOnceMode && testOnceDone) return;
+  // Test-once mode: publish cloud database hanya 1 kali setelah aggregate tersedia.
+  if (testOnceMode && (!testOnceAggDone || testOnceMqttDone)) return;
 
   bool hasData = false;
   uint32_t recordsInPayload = 0;
@@ -1480,6 +1799,16 @@ void publishRealtimeData() {
     mqttTotalPayloadBytes += mqttLastPayloadBytes;
     mqttTotalParameterPayloadBytes += mqttLastParameterPayloadBytes;
     mqttTotalRecordsSent += recordsInPayload;
+
+    if (testOnceMode && !testOnceMqttDone) {
+      testOnceMqttDone = true;
+      Serial.println();
+      Serial.println(F("╔════════════ TEST-ONCE MQTT/CLOUD DB ════════════╗"));
+      Serial.printf("[TEST] Payload terkirim ke topic realtime+history. bytes=%lu, records=%lu\n",
+                    (unsigned long)mqttLastPayloadBytes, (unsigned long)mqttLastRecordsSent);
+      Serial.println(F("╚══════════════════════════════════════════════════╝"));
+      updateTestOnceCompletion();
+    }
   } else {
     mqttPublishFailCount++;
   }
@@ -1759,8 +2088,8 @@ String buildCsvLine(const StorageRecord &r) {
 
 void saveSnapshotToSD() {
   if (!sdOK) return;
-  // Test-once mode: lewati jika sudah pernah kirim
-  if (testOnceMode && testOnceDone) return;
+  // Test-once mode: local database/SD hanya ditulis 1 kali setelah aggregate tersedia.
+  if (testOnceMode && (!testOnceAggDone || testOnceSdDone)) return;
 
   bool hasData = false;
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
@@ -1799,16 +2128,15 @@ void saveSnapshotToSD() {
     }
 
     sdSaveSuccessCount++;
-    if (testOnceMode && !testOnceDone) {
-      testOnceDone = true;
+    if (testOnceMode && !testOnceSdDone) {
+      testOnceSdDone = true;
       Serial.println();
-      Serial.println("╔════════════════════════════════════════════════════════╗");
-      Serial.println("║           TEST-ONCE: SNAPSHOT BERHASIL DISIMPAN        ║");
-      Serial.println("╟────────────────────────────────────────────────────────╢");
-      Serial.println("║  SD card & MQTT: pengiriman dihentikan setelah ini.    ║");
-      Serial.println("║  Gunakan command  'test once off'  untuk kembali       ║");
-      Serial.println("║  ke mode normal, atau 'test once'  untuk ulangi.       ║");
-      Serial.println("╚════════════════════════════════════════════════════════╝");
+      Serial.println(F("╔════════════ TEST-ONCE LOCAL SD DB ════════════╗"));
+      Serial.printf("[TEST] 1 record tersimpan ke %s. lastRow=%lu bytes\n",
+                    DB_FILE, (unsigned long)dbLastLineBytes);
+      Serial.println(F("[TEST] Record juga dimasukkan ke sync_queue.jsonl untuk backup MongoDB."));
+      Serial.println(F("╚═══════════════════════════════════════════════╝"));
+      updateTestOnceCompletion();
     }
     xSemaphoreGive(sdMutex);
   } else {
@@ -2681,6 +3009,12 @@ void handleTouchNavigation() {
   if (!touchDetected) return;
   if (!ts.touched()) return;
 
+  static unsigned long lastTouchMs = 0;
+  static int lastTouchedPage = -1;
+
+  // Debounce touch agar 1 tap tidak terbaca berkali-kali.
+  if (millis() - lastTouchMs < 180UL) return;
+
   int x, y, rawX, rawY;
   readTouchMapped(x, y, rawX, rawY);
 
@@ -2719,22 +3053,41 @@ void handleTouchNavigation() {
       calIndex = 0;
     }
 
-    delay(400);
+    lastTouchMs = millis();
     return;
   }
 
-  if (y >= 285) {
+  int targetPage = -1;
+
+  // Area navbar bawah layar.
+  // Generator : x 10-155
+  // Engine    : x 167-312
+  // FFT       : x 324-469
+  if (y >= 285 && y <= 320) {
     if (x >= 10 && x <= 155) {
-      activePage = PAGE_GENERATOR;
-      needFullRedraw = true;
+      targetPage = PAGE_GENERATOR;
     } else if (x >= 167 && x <= 312) {
-      activePage = PAGE_ENGINE;
-      needFullRedraw = true;
+      targetPage = PAGE_ENGINE;
     } else if (x >= 324 && x <= 469) {
-      activePage = PAGE_FFT;
-      needFullRedraw = true;
+      targetPage = PAGE_FFT;
     }
-    delay(250);
+  }
+
+  if (targetPage >= 0) {
+    lastTouchMs = millis();
+
+    if (targetPage != activePage) {
+      activePage = targetPage;
+      needFullRedraw = true;
+      lastDraw = 0;   // paksa redraw segera pada loop berikutnya
+
+      Serial.print(F("[TOUCH] Page changed to "));
+      if (activePage == PAGE_GENERATOR) Serial.println(F("GENERATOR"));
+      else if (activePage == PAGE_ENGINE) Serial.println(F("ENGINE"));
+      else Serial.println(F("FFT"));
+    }
+
+    lastTouchedPage = targetPage;
   }
 }
 
@@ -2744,9 +3097,10 @@ void handleTouchNavigation() {
 void printSerialHelp() {
   Serial.println();
   Serial.println(F("GENSYS CMD: help | spec/acq | db | sync | sync now | perf | fft | latest | page generator|engine|fft | redraw"));
-  Serial.println(F("TEST CMD  : perf reset | log acq on | log performance on | log latest on | log off"));
+  Serial.println(F("TEST CMD  : test once | test once reset | test once last | test once status | test once off | perf reset"));
+  Serial.println(F("LOG CMD   : log acq on | log performance on | log latest on | log off"));
   Serial.println(F("FFT CMD   : fft source voltgen | fft source voltgrid | fft source rpm"));
-  Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | db reset | db reset confirm"));
+  Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | rx monitor on/off | db reset | db reset confirm"));
   Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 5-10 menit, lalu ketik 'spec'."));
 }
 
@@ -2829,25 +3183,18 @@ void printDatabaseReport() {
   Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
   Serial.print  (F("  sync pending    : ")); Serial.println(countSdSyncPendingRecords());
   Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
-
-  Serial.println(F("LOCAL SD PARAMETERS"));
-  Serial.println(F("  recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
+  Serial.println();
 
   Serial.println(F("CLOUD / MONGODB ESTIMATE (MAIN DATABASE FIELDS ONLY)"));
   Serial.print  (F("  mqtt status     : ")); Serial.println(mqtt.connected() ? F("CONNECTED") : F("DISCONNECTED"));
   Serial.print  (F("  realtime topic  : ")); Serial.println(MQTT_REALTIME_TOPIC);
   Serial.print  (F("  history topic   : ")); Serial.println(MQTT_TOPIC);
-  Serial.print  (F("  actual MQTT     : ")); Serial.print(mqttLastPayloadBytes); Serial.println(F(" B/publish"));
   Serial.print  (F("  records/publish : ")); Serial.println(mqttLastRecordsSent);
   Serial.print  (F("  param record    : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record"));
   Serial.print  (F("  records/sec     : ")); Serial.println(STORAGE_BATCH_SIZE);
   Serial.print  (F("  param rate      : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
   Serial.print  (F("  pub OK/FAIL     : ")); Serial.print(mqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(mqttPublishFailCount);
-  Serial.println(F("CLOUD PARAMETERS"));
-  Serial.println(F("  recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,freq,volt,currentA,powerKW,phase_diff,synced"));
-  Serial.println(F("NOTE: estimasi database hanya menghitung field utama."));
-  Serial.println(F("      Payload MQTT tetap mengirim FFT untuk web dashboard, tetapi FFT tidak dihitung sebagai storage DB."));
   Serial.println(F("========================================================"));
 }
 
@@ -3102,12 +3449,17 @@ void processSerialCommand(String cmd) {
   else if (cmd == "rx raw off") { runtimeDebugRxRaw = false; Serial.println(F("[RX] raw off")); }
   else if (cmd == "rx ok on") { runtimeDebugRxOK = true; Serial.println(F("[RX] ok on")); }
   else if (cmd == "rx ok off") { runtimeDebugRxOK = false; Serial.println(F("[RX] ok off")); }
+  else if (cmd == "rx monitor on") { runtimeDebugRxRaw = true; runtimeDebugRxOK = true; Serial.println(F("[RX] monitor on: raw UART + named parameters")); printLastRxReportFromCache(); }
+  else if (cmd == "rx monitor off") { runtimeDebugRxRaw = false; runtimeDebugRxOK = false; Serial.println(F("[RX] monitor off")); }
   else if (cmd == "db ticker on") { dbSizeTickerEnabled = true; Serial.println(F("[DB] ticker on")); }
   else if (cmd == "db ticker off") { dbSizeTickerEnabled = false; Serial.println(F("[DB] ticker off")); }
   else if (cmd == "db reset") { sdResetPending = true; sdResetPendingMs = millis(); Serial.println(F("Type: db reset confirm")); }
   else if (cmd == "db reset confirm") { if (sdResetPending) resetSDDatabase(); sdResetPending = false; }
-  else if (cmd == "test once") { testOnceMode = true; testOnceDone = false; Serial.println(F("[TEST] once on")); }
-  else if (cmd == "test once off") { testOnceMode = false; testOnceDone = false; Serial.println(F("[TEST] once off")); }
+  else if (cmd == "test once" || cmd == "monitor once" || cmd == "db once") startTestOnceMode();
+  else if (cmd == "test once reset" || cmd == "monitor once reset" || cmd == "db once reset") resetTestOnceMode();
+  else if (cmd == "test once status" || cmd == "monitor once status") printTestOnceStatus();
+  else if (cmd == "test once last" || cmd == "rx last" || cmd == "last rx") printLastRxReportFromCache();
+  else if (cmd == "test once off" || cmd == "monitor continuous" || cmd == "continuous") stopTestOnceMode();
   else if (cmd == "log off") { serialLogEnabled = false; Serial.println(F("[LOG] off")); }
   else if (cmd == "log database on") { serialLogEnabled = true; serialLogDatabaseEnabled = true; Serial.println(F("[LOG] database on")); }
   else if (cmd == "log performance on") { serialLogEnabled = true; serialLogPerformanceEnabled = true; Serial.println(F("[LOG] performance on")); }
@@ -3285,27 +3637,52 @@ void loop() {
     needFullRedraw = true;
   }
 
+  // Test-once tetap aman karena publishRealtimeData()
+  // sudah punya guard: hanya publish 1 kali saat test-once.
   if (millis() - lastPublish >= publishInterval) {
     lastPublish = millis();
     publishRealtimeData();
   }
 
+  // Test-once tetap aman karena saveSnapshotToSD()
+  // sudah punya guard: hanya simpan 1 kali saat test-once.
   if (millis() - lastLocalSave >= localSaveInterval) {
     lastLocalSave = millis();
     saveSnapshotToSD();
   }
 
+  // Backup/sync SD ke MongoDB tidak dijalankan lagi setelah test-once selesai.
   if (millis() - lastSdSync >= SD_SYNC_INTERVAL_MS) {
     lastSdSync = millis();
-    requestSdSyncToMongoDB();
+    if (!testOnceMode || !testOnceDone) {
+      requestSdSyncToMongoDB();
+    }
   }
 
+  // WAJIB tetap aktif meskipun test-once sudah selesai.
+  // Yang dibekukan hanya data RX/agregasi/database, bukan UI.
   handleTouchNavigation();
 
-  if (millis() - lastDraw >= drawInterval) {
+  // Render tetap jalan agar page bisa berpindah.
+  // Jika needFullRedraw=true karena tap page, redraw dilakukan langsung
+  // tanpa menunggu drawInterval.
+  if (needFullRedraw || millis() - lastDraw >= drawInterval) {
     lastDraw = millis();
+
     drawCurrentPage(needFullRedraw);
     needFullRedraw = false;
+
+    // Status test-once display hanya ditandai sekali.
+    // Setelah itu display tetap boleh dirender untuk navigasi page.
+    if (testOnceMode && testOnceAggDone && !testOnceDisplayDone) {
+      testOnceDisplayDone = true;
+      Serial.println();
+      Serial.println(F("╔════════════ TEST-ONCE TFT MONITORING ════════════╗"));
+      Serial.println(F("[TEST] Satu tampilan monitoring telah dirender ke TFT."));
+      Serial.println(F("[TEST] Data dibekukan, tetapi HMI/touch navigation tetap aktif."));
+      Serial.println(F("╚═══════════════════════════════════════════════════╝"));
+      updateTestOnceCompletion();
+    }
   }
 
   delay(5);
