@@ -671,3 +671,131 @@ body {
 .cost-row:last-child{border-bottom:none;}
 .cost-empty{color:#64748b;}
 .maint-visual-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
+
+/* ── Help & Contact polish ───────────────────────────────────── */
+.help-contact-card {
+    position: relative;
+    overflow: hidden;
+}
+
+.help-contact-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--primary), var(--secondary), var(--warning));
+}
+
+.help-contact-body {
+    padding-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.contact-info-list {
+    display: grid;
+    gap: 10px;
+}
+
+.contact-info-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.contact-info-icon,
+.help-action-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.contact-info-icon {
+    color: var(--primary);
+    background: #eff6ff;
+}
+
+.contact-info-item p {
+    margin: 0 0 3px;
+    font-size: 0.74rem;
+    color: #64748b;
+    font-weight: 700;
+}
+
+.contact-info-item strong {
+    display: block;
+    color: #0f172a;
+    font-size: 0.95rem;
+    word-break: break-word;
+}
+
+.help-action-card.quick-call,
+.help-action-card.dealer-locator {
+    min-height: 76px;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 14px;
+    border-radius: 16px;
+    box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
+    text-align: left;
+}
+
+.help-action-card .help-action-icon {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+
+.help-action-card strong,
+.help-action-card small {
+    display: block;
+    line-height: 1.25;
+}
+
+.help-action-card strong {
+    font-size: 0.84rem;
+}
+
+.help-action-card small {
+    margin-top: 3px;
+    color: rgba(255, 255, 255, 0.84);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.help-tips-card {
+    padding: 13px 14px;
+    background: #f8fafc;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+}
+
+.help-tips-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px;
+    color: #334155;
+    font-size: 0.76rem;
+    font-weight: 800;
+}
+
+.help-tips-title i {
+    color: #3b82f6;
+}
+
+.help-tips-card ul {
+    margin: 0;
+    padding-left: 18px;
+    color: #64748b;
+    font-size: 0.73rem;
+    line-height: 1.7;
+}
