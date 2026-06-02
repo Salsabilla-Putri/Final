@@ -91,9 +91,9 @@ async function fetchData() {
         const json = await res.json();
         
         if (json.success) {
-            updateDashboard(json.data);
             const ts = Date.parse(json.data?.timestamp || '');
             const isFresh = Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
+            updateDashboard(json.data, isFresh);
             setEspConnectionStatus(isFresh);
         } else {
             setEspConnectionStatus(false);
@@ -112,23 +112,25 @@ async function fetchAlerts() {
 }
 
 // === UI UPDATE LOGIC ===
-function updateDashboard(data) {
+function updateDashboard(data, isEspConnected = true) {
     const syncEl = document.getElementById('syncIndicator');
     const syncStatus = getSyncByThreshold(data);
     syncEl.innerText = syncStatus;
     syncEl.className = syncStatus === 'ON-GRID' ? 'indicator ind-on' : 'indicator ind-off';
 
-    const setVal = (id, val, fixed=0) => {
+    const setVal = (id, val, fixed=0, fallback='--') => {
         const el = document.getElementById(id + 'Val');
-        if(el) el.innerText = Number(val).toFixed(fixed);
+        if (!el) return;
+        const num = Number(val);
+        el.innerText = Number.isFinite(num) ? num.toFixed(fixed) : fallback;
     };
 
     setVal('volt', data.volt, 1);
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
     setVal('power', data.power, 2);
-    const phaseDiff = getPhaseDifference(data);
-    setVal('phase', phaseDiff, 1);
+    const phaseDiff = isEspConnected ? getPhaseDifference(data) : 0;
+    setVal('phase', phaseDiff, 1, '0.0');
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
     setVal('map', data.map, 0);
