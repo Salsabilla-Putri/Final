@@ -39,6 +39,17 @@ function normalizeSyncStatus(data = {}) {
     return rawSync || 'UNKNOWN';
 }
 
+function getPhaseDifference(data = {}) {
+    const rawPhase = data?.phaseAngle ?? data?.phase_angle ?? data?.phaseDiff ?? data?.phase_diff;
+    const phaseAngle = Number(rawPhase);
+
+    if (!Number.isFinite(phaseAngle)) return undefined;
+
+    // Phase Difference di UI adalah beda fasa terkecil dari phaseAngle.
+    // Contoh: 350° berarti -10°, bukan 350°, karena melewati titik 0°.
+    return ((phaseAngle + 180) % 360 + 360) % 360 - 180;
+}
+
 function getSyncByThreshold(data) {
     const espSyncStatus = normalizeSyncStatus(data);
     if (espSyncStatus !== 'UNKNOWN') return espSyncStatus;
@@ -47,17 +58,17 @@ function getSyncByThreshold(data) {
     const vGrid = Number(data?.volt_grid ?? data?.voltGrid);
     const fGen = Number(data?.freq);
     const fGrid = Number(data?.freq_grid ?? data?.freqGrid);
-    const phase = Number(data?.phaseAngle ?? data?.phase_angle ?? data?.phaseDiff);
+    const phaseDiff = getPhaseDifference(data);
 
     const hasVolt = Number.isFinite(vGen) && Number.isFinite(vGrid);
     const hasFreq = Number.isFinite(fGen) && Number.isFinite(fGrid);
-    const hasPhase = Number.isFinite(phase);
+    const hasPhase = Number.isFinite(phaseDiff);
 
     if (!hasVolt || !hasFreq || !hasPhase) return 'UNKNOWN';
 
     const voltOk = Math.abs(vGen - vGrid) <= SYNC_THRESHOLDS.voltDeltaMax;
     const freqOk = Math.abs(fGen - fGrid) <= SYNC_THRESHOLDS.freqDeltaMax;
-    const phaseOk = Math.abs(phase) <= SYNC_THRESHOLDS.phaseDeltaMax;
+    const phaseOk = Math.abs(phaseDiff) <= SYNC_THRESHOLDS.phaseDeltaMax;
 
     return (voltOk && freqOk && phaseOk) ? 'ON-GRID' : 'OFF-GRID';
 }
@@ -116,7 +127,8 @@ function updateDashboard(data) {
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
     setVal('power', data.power, 2);
-    setVal('phase', data.phaseAngle ?? data.phase_angle ?? data.phaseDiff, 1);
+    const phaseDiff = getPhaseDifference(data);
+    setVal('phase', phaseDiff, 1);
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
     setVal('map', data.map, 0);
@@ -137,7 +149,7 @@ function updateDashboard(data) {
     applyVisual('amp', data.amp, { type: 'text' });
     applyVisual('freq', data.freq, { type: 'text' });
     applyVisual('batt', data.batt ?? data.battery ?? data.battVolt, { type: 'text' });
-    applyVisual('phase', data.phaseAngle ?? data.phase_angle ?? data.phaseDiff, { type: 'text' });
+    applyVisual('phase', phaseDiff, { type: 'text' });
 
     if (data._realtime) {
         const realtimeBadge = document.getElementById('realtimeBadge');
