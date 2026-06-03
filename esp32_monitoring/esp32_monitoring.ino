@@ -253,7 +253,9 @@ const char* FFT_CSV_HEADER =
 #define AGGREGATION_INTERVAL_MS   1000
 #define STORAGE_BATCH_SIZE        1
 #define SD_SYNC_INTERVAL_MS        600000UL   // 10 menit: cloud/history MongoDB dikirim batch
-#define SD_SYNC_BATCH_SIZE         650        // Maksimum record per batch. Sisa queue dikirim batch berikutnya
+#define SD_SYNC_BATCH_SIZE         600        // Target record per 10 menit (1 record/detik x 600 detik)
+#define MQTT_DB_CHUNK_RECORDS       20         // Batas record per publish MQTT gen/data agar payload aman untuk ESP32
+#define SD_SYNC_MAX_CHUNKS_PER_RUN  30         // 30 x 20 = 600 record per siklus sync 10 menit
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
@@ -608,6 +610,8 @@ unsigned long sdRecoverSuccessCount = 0;
 unsigned long sdRecoverFailCount = 0;
 unsigned long sdSyncSuccessCount = 0;
 unsigned long sdSyncFailCount = 0;
+unsigned long sdSyncMqttPublishSuccessCount = 0;
+unsigned long sdSyncMqttPublishFailCount = 0;
 volatile bool sdSyncBusy = false;
 volatile unsigned long sdSyncQueuedCount = 0;
 int sdSyncLastHttpCode = 0;
@@ -630,6 +634,9 @@ uint32_t sdSyncPendingCacheScanLimit = 0;
 unsigned long sdSyncPendingCacheAtMs = 0;
 uint32_t sdSyncLastBatchRecords = 0;
 uint32_t sdSyncLastPayloadBytes = 0;
+uint16_t sdSyncLastRunChunks = 0;
+uint32_t sdSyncLastRunRecords = 0;
+bool sdSyncLastMqttOk = false;
 
 
 // ── DB size ticker (setiap detik) ──────────────────────────────
@@ -1978,13 +1985,13 @@ void printMqttPayloadReport(const String &payload,
   Serial.println(MQTT_REALTIME_TOPIC);
 
   Serial.print(F("║ History/cloud   : "));
-  Serial.println(F("HTTP batch from SD queue every 10 min"));
+  Serial.println(F("MQTT gen/data batch every 10 min + HTTP ACK"));
 
   Serial.print(F("║ Realtime status : "));
   Serial.println(realtimeOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
 
-  Serial.print(F("║ History status  : "));
-  Serial.println(historyOk ? F("PUBLISH OK") : F("NOT SENT BY MQTT"));
+  Serial.print(F("║ MongoDB batch   : "));
+  Serial.println(historyOk ? F("PUBLISH OK") : F("WAITING 10 MIN BATCH"));
 
   if (fromCache && lastMqttPayloadCacheAtMs > 0) {
     Serial.print(F("║ Cache age       : "));
@@ -1995,7 +2002,7 @@ void printMqttPayloadReport(const String &payload,
   Serial.println(F("╠════════════ REALTIME FLAT MQTT JSON PAYLOAD ═══════════════╣"));
   Serial.println(payload);
 
-  Serial.println(F("╠════════════ CLOUD RECORD PREVIEW / HTTP BATCH FIELD ════════╣"));
+  Serial.println(F("╠════════════ CLOUD RECORD PREVIEW / MQTT gen/data FIELD ════════╣"));
   Serial.println(parameterOnlyPayload);
 
   Serial.println(F("╚═════════════════════════════════════════════════════════════╝"));
@@ -2075,6 +2082,7 @@ void printDatabasePayloadReport(bool fullPayload) {
   Serial.print(F("║ Save interval   : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
   Serial.print(F("║ Cloud interval  : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print(F("║ Max cloud batch : ")); Serial.println(SD_SYNC_BATCH_SIZE);
+  Serial.print(F("║ MQTT chunk      : ")); Serial.println(MQTT_DB_CHUNK_RECORDS);
 
   if (!hasLastDatabasePayloadCache) {
     Serial.println(F("║ Status          : belum ada record agregasi yang disimpan."));
@@ -2088,7 +2096,7 @@ void printDatabasePayloadReport(bool fullPayload) {
   Serial.print(F("║ CSV row bytes   : ")); Serial.println(lastDatabaseCsvBytesCache);
   Serial.print(F("║ Queue JSON bytes: ")); Serial.println(lastDatabaseJsonBytesCache);
   Serial.print(F("║ Sync pending    : ")); Serial.println(getSdSyncPendingCached());
-  Serial.print(F("║ Sync HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print(F("║ HTTP ACK code   : ")); Serial.println(sdSyncLastHttpCode);
   Serial.print(F("║ Sync busy       : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
 
   if (fullPayload) {
@@ -2121,7 +2129,7 @@ void printRealtimeMonitoringPayloadReport(bool fullPayload) {
   Serial.print(F("║ Last payload    : ")); Serial.print(lastMqttPayloadCache.length()); Serial.println(F(" B"));
   Serial.print(F("║ Records         : ")); Serial.println(lastMqttPayloadRecordsCache);
   Serial.print(F("║ Realtime status : ")); Serial.println(lastMqttRealtimeOkCache ? F("PUBLISH OK") : F("PUBLISH FAIL"));
-  Serial.println(F("║ History/MongoDB : NOT SENT BY MQTT; sent by SD HTTP batch 10 min."));
+  Serial.println(F("║ History/MongoDB : WAITING 10 MIN BATCH; MQTT gen/data + HTTP ACK."));
 
   if (fullPayload) {
     Serial.println(F("╠════════════ LAST REALTIME MQTT JSON PAYLOAD ══════════════╣"));
@@ -2198,8 +2206,8 @@ void publishRealtimeData() {
   if (!hasData) return;
 
   // MQTT hanya untuk realtime dashboard 1 detik.
-  // History/cloud MongoDB TIDAK dikirim via MQTT lagi.
-  // History dikirim via HTTP batch dari sync_queue.jsonl setiap SD_SYNC_INTERVAL_MS = 10 menit.
+  // MQTT realtime tetap ke gen/realtime setiap 1 detik.
+  // History/cloud MongoDB dikirim dari SD queue ke gen/data setiap 10 menit oleh SdSyncTask.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
@@ -2209,7 +2217,7 @@ void publishRealtimeData() {
 
   uint32_t pubStart = micros();
   bool realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
-  bool historyOk = false; // sengaja false/not sent: cloud history memakai HTTP batch 10 menit
+  bool historyOk = false; // status batch MongoDB ditangani SdSyncTask tiap 10 menit
   bool ok = realtimeOk;
   perfMqttPublishUs = micros() - pubStart;
   perfUpdateStat(acqMon.mqttPublishUs, perfMqttPublishUs);
@@ -2220,7 +2228,7 @@ void publishRealtimeData() {
   lastMqttPayloadCache = realtimePayload;
   lastMqttParameterOnlyPayloadCache = parameterOnlyPayload;
   lastMqttRealtimeTopicCache = MQTT_REALTIME_TOPIC;
-  lastMqttHistoryTopicCache = String(F("HTTP_BATCH_10_MIN"));
+  lastMqttHistoryTopicCache = MQTT_TOPIC;
   lastMqttRealtimeOkCache = realtimeOk;
   lastMqttHistoryOkCache = historyOk;
   lastMqttPayloadCacheAtMs = millis();
@@ -2253,7 +2261,7 @@ void publishRealtimeData() {
                     MQTT_REALTIME_TOPIC,
                     (unsigned long)mqttLastPayloadBytes,
                     (unsigned long)mqttLastRecordsSent);
-      Serial.println(F("[TEST] Cloud/history MongoDB dikirim dari SD queue via HTTP batch 10 menit."));
+      Serial.println(F("[TEST] Cloud/history MongoDB dikirim batch ke MQTT gen/data tiap 10 menit, lalu di-ACK via HTTP agar queue SD aman."));
       Serial.println(F("╚══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -2369,69 +2377,16 @@ bool rewriteSdSyncQueueAfterAck(uint16_t ackedLines) {
   return true;
 }
 
-void syncSdQueueToMongoDB() {
-  sdSyncLastAttemptMs = millis();
-  sdSyncLastAckedRecords = 0;
-  sdSyncLastBatchRecords = 0;
-  sdSyncLastPayloadBytes = 0;
-
-  if (!sdOK || !wifiOK) return;
-  if (String(CLOUD_INGEST_URL).indexOf("localhost") >= 0) {
+bool postSdSyncPayloadForAck(const String &payload) {
+  String ingestUrl = String(CLOUD_INGEST_URL);
+  if (ingestUrl.indexOf("localhost") >= 0) {
     sdSyncLastHttpCode = -2;
-    return;
+    return false;
   }
-  if (!SD.exists(SD_SYNC_FILE)) {
-    sdSyncPendingCached = 0;
-    sdSyncPendingCacheTruncated = false;
-    return;
-  }
-
-  String recordsJson = "";
-  recordsJson.reserve(120000); // cukup untuk batch besar; tetap aman jika heap tidak cukup karena String akan tumbuh dinamis
-  uint16_t recordsCount = 0;
-
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
-
-  deselectAllSPI();
-  File queue = SD.open(SD_SYNC_FILE, FILE_READ);
-  if (!queue) {
-    xSemaphoreGive(sdMutex);
-    return;
-  }
-
-  while (queue.available() && recordsCount < SD_SYNC_BATCH_SIZE) {
-    String line = queue.readStringUntil('\n');
-    line.trim();
-    if (!line.length()) continue;
-    if (recordsCount > 0) recordsJson += ",";
-    recordsJson += line;
-    recordsCount++;
-    if ((recordsCount % 25) == 0) vTaskDelay(pdMS_TO_TICKS(1));
-  }
-  queue.close();
-  xSemaphoreGive(sdMutex);
-
-  if (!recordsCount) {
-    sdSyncPendingCached = 0;
-    sdSyncPendingCacheTruncated = false;
-    return;
-  }
-
-  String payload = "{";
-  payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-  payload += "\"source\":\"esp32_sd_backup_10min\",";
-  payload += "\"intervalMs\":" + String(SD_SYNC_INTERVAL_MS) + ",";
-  payload += "\"maxBatchSize\":" + String(SD_SYNC_BATCH_SIZE) + ",";
-  payload += "\"records\":[" + recordsJson + "]";
-  payload += "}";
-
-  sdSyncLastBatchRecords = recordsCount;
-  sdSyncLastPayloadBytes = payload.length();
 
   HTTPClient http;
   http.setTimeout(CLOUD_INGEST_TIMEOUT_MS);
 
-  String ingestUrl = String(CLOUD_INGEST_URL);
   bool httpStarted = false;
   int code = -1;
 
@@ -2458,30 +2413,122 @@ void syncSdQueueToMongoDB() {
 
   if (!httpStarted) {
     sdSyncLastHttpCode = -1;
-    sdSyncFailCount++;
-    return;
+    return false;
   }
 
   sdSyncLastHttpCode = code;
+  return code >= 200 && code < 300;
+}
 
-  if (code < 200 || code >= 300) {
-    sdSyncFailCount++;
+uint16_t readSdSyncQueueBatchJson(String &recordsJson, uint16_t maxRecords) {
+  recordsJson = "";
+  recordsJson.reserve((uint32_t)maxRecords * 420UL);
+  uint16_t recordsCount = 0;
+
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) return 0;
+
+  deselectAllSPI();
+  File queue = SD.open(SD_SYNC_FILE, FILE_READ);
+  if (!queue) {
+    xSemaphoreGive(sdMutex);
+    return 0;
+  }
+
+  while (queue.available() && recordsCount < maxRecords) {
+    String line = queue.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) continue;
+    if (recordsCount > 0) recordsJson += ",";
+    recordsJson += line;
+    recordsCount++;
+    if ((recordsCount % 10) == 0) vTaskDelay(pdMS_TO_TICKS(1));
+  }
+
+  queue.close();
+  xSemaphoreGive(sdMutex);
+  return recordsCount;
+}
+
+void syncSdQueueToMongoDB() {
+  sdSyncLastAttemptMs = millis();
+  sdSyncLastAckedRecords = 0;
+  sdSyncLastBatchRecords = 0;
+  sdSyncLastPayloadBytes = 0;
+  sdSyncLastRunChunks = 0;
+  sdSyncLastRunRecords = 0;
+  sdSyncLastMqttOk = false;
+
+  if (!sdOK || !wifiOK || !mqtt.connected()) return;
+  if (!SD.exists(SD_SYNC_FILE)) {
+    sdSyncPendingCached = 0;
+    sdSyncPendingCacheTruncated = false;
     return;
   }
 
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
-    bool rewritten = rewriteSdSyncQueueAfterAck(recordsCount);
-    xSemaphoreGive(sdMutex);
+  for (uint16_t chunk = 0; chunk < SD_SYNC_MAX_CHUNKS_PER_RUN; chunk++) {
+    String recordsJson;
+    uint16_t recordsCount = readSdSyncQueueBatchJson(recordsJson, MQTT_DB_CHUNK_RECORDS);
 
-    if (rewritten) {
-      sdSyncSuccessCount += recordsCount;
-      sdSyncLastAckedRecords = recordsCount;
+    if (!recordsCount) {
+      sdSyncPendingCached = 0;
+      sdSyncPendingCacheTruncated = false;
+      return;
+    }
 
+    String payload = "{";
+    payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+    payload += "\"source\":\"esp32_sd_backup_10min\",";
+    payload += "\"transport\":\"mqtt_gen_data_with_http_ack\",";
+    payload += "\"topic\":\"" + String(MQTT_TOPIC) + "\",";
+    payload += "\"intervalMs\":" + String(SD_SYNC_INTERVAL_MS) + ",";
+    payload += "\"maxBatchSize\":" + String(SD_SYNC_BATCH_SIZE) + ",";
+    payload += "\"chunkSize\":" + String(MQTT_DB_CHUNK_RECORDS) + ",";
+    payload += "\"chunkIndex\":" + String(chunk + 1) + ",";
+    payload += "\"records\":[" + recordsJson + "]";
+    payload += "}";
+
+    sdSyncLastBatchRecords = recordsCount;
+    sdSyncLastPayloadBytes = payload.length();
+    sdSyncLastRunChunks++;
+    sdSyncLastRunRecords += recordsCount;
+
+    mqtt.loop();
+    bool mqttOk = mqtt.publish(MQTT_TOPIC, payload.c_str());
+    sdSyncLastMqttOk = mqttOk;
+    if (mqttOk) sdSyncMqttPublishSuccessCount++;
+    else {
+      sdSyncMqttPublishFailCount++;
+      sdSyncFailCount++;
+      return;
+    }
+
+    // HTTP POST dipakai sebagai ACK aplikasi. Queue SD hanya dihapus jika server
+    // benar-benar memberi 2xx. Jika HTTP/MongoDB/server gagal, record tetap di SD
+    // dan publish MQTT berikutnya aman karena backend melakukan upsert recordId.
+    bool ackOk = postSdSyncPayloadForAck(payload);
+    if (!ackOk) {
+      sdSyncFailCount++;
+      return;
+    }
+
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
+      bool rewritten = rewriteSdSyncQueueAfterAck(recordsCount);
+      xSemaphoreGive(sdMutex);
+
+      if (rewritten) {
+        sdSyncSuccessCount += recordsCount;
+        sdSyncLastAckedRecords += recordsCount;
+      } else {
+        sdSyncFailCount++;
+        return;
+      }
     } else {
       sdSyncFailCount++;
+      return;
     }
-  } else {
-    sdSyncFailCount++;
+
+    if (recordsCount < MQTT_DB_CHUNK_RECORDS) return;
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
@@ -2857,7 +2904,7 @@ void saveSnapshotToSD() {
     file.close();
     fftFile.close();
 
-    // Outbox terpisah: record tetap ada di SD sampai server memberi ACK HTTP.
+    // Outbox terpisah: record tetap ada di SD sampai server memberi ACK HTTP setelah publish MQTT gen/data.
     // Ini membuat MongoDB bisa disusulkan lagi saat WiFi/server kembali stabil.
     for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
       if (!storageBatch[i].valid) continue;
@@ -3140,7 +3187,7 @@ void reconnectMQTT() {
   Serial.print("[MQTT] User  : "); Serial.println(MQTT_USER);
   Serial.println("[MQTT] Pass  : ********");
   Serial.print("[MQTT] Realtime Topic : "); Serial.println(MQTT_REALTIME_TOPIC);
-  Serial.println("[MQTT] History/Cloud  : HTTP batch dari SD queue tiap 10 menit");
+  Serial.println("[MQTT] History/Cloud  : gen/data batch dari SD queue tiap 10 menit + HTTP ACK");
   Serial.print("[MQTT] Client: "); Serial.println(clientId);
   Serial.print("[MQTT] Connecting... ");
 
@@ -3885,22 +3932,28 @@ void printSdSyncStatus() {
   Serial.println();
   Serial.println(F("================ SD -> MONGODB SYNC ================"));
   Serial.print  (F("  queue file      : ")); Serial.println(SD_SYNC_FILE);
-  Serial.print  (F("  ingest url      : ")); Serial.println(CLOUD_INGEST_URL);
+  Serial.print  (F("  mqtt db topic   : ")); Serial.println(MQTT_TOPIC);
+  Serial.print  (F("  ack url         : ")); Serial.println(CLOUD_INGEST_URL);
   Serial.print  (F("  pending records : ")); Serial.println(pending);
   Serial.print  (F("  sync interval   : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print  (F("  batch size max  : ")); Serial.println(SD_SYNC_BATCH_SIZE);
-  Serial.print  (F("  last batch recs : ")); Serial.println(sdSyncLastBatchRecords);
+  Serial.print  (F("  mqtt chunk size : ")); Serial.println(MQTT_DB_CHUNK_RECORDS);
+  Serial.print  (F("  chunks/run max  : ")); Serial.println(SD_SYNC_MAX_CHUNKS_PER_RUN);
+  Serial.print  (F("  last chunk recs : ")); Serial.println(sdSyncLastBatchRecords);
+  Serial.print  (F("  last run chunks : ")); Serial.println(sdSyncLastRunChunks);
+  Serial.print  (F("  last run records: ")); Serial.println(sdSyncLastRunRecords);
   Serial.print  (F("  last payload    : ")); Serial.print(sdSyncLastPayloadBytes); Serial.println(F(" B"));
   Serial.print  (F("  pending cache   : ")); Serial.println(sdSyncPendingCacheTruncated ? F("TRUNCATED/APPROX") : F("EXACT/SESSION"));
-  Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  MQTT pub OK/FAIL: ")); Serial.print(sdSyncMqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncMqttPublishFailCount);
+  Serial.print  (F("  HTTP ACK OK/FAIL: ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
   Serial.print  (F("  sync busy       : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
   Serial.print  (F("  sync queued     : ")); Serial.println(sdSyncQueuedCount);
-  Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("  last ACK code    : ")); Serial.println(sdSyncLastHttpCode);
   Serial.print  (F("  last ACK records: ")); Serial.println(sdSyncLastAckedRecords);
   Serial.print  (F("  last attempt age: "));
   if (sdSyncLastAttemptMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - sdSyncLastAttemptMs) / 1000UL); Serial.println(F(" s ago")); }
-  Serial.println(F("STATUS: pending=0 dan last HTTP code 2xx berarti SD sudah sinkron."));
+  Serial.println(F("STATUS: pending=0 dan last ACK code 2xx berarti SD sudah sinkron."));
   Serial.println(F("NOTE  : HTTP code -2 berarti CLOUD_INGEST_URL masih localhost/default."));
   Serial.println(F("TIP   : Default CLOUD_INGEST_URL memakai server Render production."));
   Serial.println(F("===================================================="));
@@ -3931,23 +3984,27 @@ void printDatabaseReport() {
   Serial.print  (F("  write rate      : ")); Serial.println(formatBytes((uint64_t)sdBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 7 days     : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
-  Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  MQTT pub OK/FAIL: ")); Serial.print(sdSyncMqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncMqttPublishFailCount);
+  Serial.print  (F("  HTTP ACK OK/FAIL: ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
   Serial.print  (F("  sync pending    : ")); Serial.print(getSdSyncPendingCached()); if (sdSyncPendingCacheTruncated) Serial.print(F("+")); Serial.println();
-  Serial.print  (F("  last HTTP code  : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("  last ACK code    : ")); Serial.println(sdSyncLastHttpCode);
   Serial.println();
 
-  Serial.println(F("CLOUD / MONGODB HISTORY - HTTP BATCH 10 MIN (MAIN DATABASE FIELDS ONLY)"));
+  Serial.println(F("CLOUD / MONGODB HISTORY - MQTT gen/data BATCH 10 MIN (MAIN DATABASE FIELDS ONLY)"));
   Serial.print  (F("  mqtt status     : ")); Serial.println(mqtt.connected() ? F("CONNECTED") : F("DISCONNECTED"));
   Serial.print  (F("  realtime topic  : ")); Serial.println(MQTT_REALTIME_TOPIC);
-  Serial.print  (F("  history path    : ")); Serial.println(F("HTTP POST /api/ingest/batch"));
+  Serial.print  (F("  history topic   : ")); Serial.println(MQTT_TOPIC);
+  Serial.print  (F("  ack path        : ")); Serial.println(F("HTTP POST /api/ingest/batch"));
   Serial.print  (F("  records/batch max: ")); Serial.println(SD_SYNC_BATCH_SIZE);
+  Serial.print  (F("  records/chunk   : ")); Serial.println(MQTT_DB_CHUNK_RECORDS);
   Serial.print  (F("  interval        : ")); Serial.print(SD_SYNC_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
   Serial.print  (F("  last batch recs : ")); Serial.println(sdSyncLastBatchRecords);
   Serial.print  (F("  param record    : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record"));
   Serial.print  (F("  records/sec     : ")); Serial.println(STORAGE_BATCH_SIZE);
   Serial.print  (F("  param rate      : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
-  Serial.print  (F("  sync OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  MQTT pub OK/FAIL: ")); Serial.print(sdSyncMqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncMqttPublishFailCount);
+  Serial.print  (F("  HTTP ACK OK/FAIL: ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
   Serial.println(F("========================================================"));
 }
 
@@ -4143,8 +4200,9 @@ void printPerformanceReport() {
 
   Serial.println(F("║ [4] ESTIMASI DATABASE CLOUD MONGODB                                             ║"));
   Serial.print  (F("║ Realtime MQTT dashboard      : every ")); Serial.print(publishInterval); Serial.println(F(" ms"));
-  Serial.print  (F("║ Cloud history sync interval  : ")); Serial.print(SD_SYNC_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
+  Serial.print  (F("║ Cloud MQTT sync interval     : ")); Serial.print(SD_SYNC_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
   Serial.print  (F("║ Max records per cloud batch  : ")); Serial.println(SD_SYNC_BATCH_SIZE);
+  Serial.print  (F("║ MQTT records per chunk       : ")); Serial.println(MQTT_DB_CHUNK_RECORDS);
   Serial.print  (F("║ Generated records / 10 min   : ")); Serial.println(cloudBatchGeneratedPer10Min, 0);
   Serial.print  (F("║ Estimated cloud batch payload: ")); Serial.println(formatBytes((uint64_t)cloudBatchPayloadEstimate));
   Serial.print  (F("║ Param JSON size              : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record, tanpa FFT"));
@@ -4152,8 +4210,9 @@ void printPerformanceReport() {
   Serial.print  (F("║ Estimated MongoDB 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
   Serial.print  (F("║ Pending SD -> MongoDB        : ")); Serial.print(getSdSyncPendingCached()); if (sdSyncPendingCacheTruncated) Serial.print(F("+")); Serial.println(F(" record"));
   Serial.print  (F("║ Last sync batch/payload      : ")); Serial.print(sdSyncLastBatchRecords); Serial.print(F(" record / ")); Serial.println(formatBytes(sdSyncLastPayloadBytes));
-  Serial.print  (F("║ Sync OK/FAIL                 : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
-  Serial.print  (F("║ Last HTTP code               : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("║ MQTT pub OK/FAIL             : ")); Serial.print(sdSyncMqttPublishSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncMqttPublishFailCount);
+  Serial.print  (F("║ HTTP ACK OK/FAIL             : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("║ Last HTTP ACK code           : ")); Serial.println(sdSyncLastHttpCode);
   Serial.println(F("╚════════════════════════════════════════════════════════════════════════════════╝"));
 }
 
@@ -4313,7 +4372,7 @@ void resetSDDatabase() {
     if (SD.exists(SD_SYNC_FILE)) SD.remove(SD_SYNC_FILE);
     if (SD.exists(SD_SYNC_TMP_FILE)) SD.remove(SD_SYNC_TMP_FILE);
     if (createFreshDatabaseCsv() && createFreshFftCsv()) {
-      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0; sdSyncLastHttpCode = 0; sdSyncLastAckedRecords = 0; sdSyncLastAttemptMs = 0; sdSyncPendingCached = 0; sdSyncPendingCacheTruncated = false; sdSyncLastBatchRecords = 0; sdSyncLastPayloadBytes = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = "";
+      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0; sdSyncMqttPublishSuccessCount = 0; sdSyncMqttPublishFailCount = 0; sdSyncLastHttpCode = 0; sdSyncLastAckedRecords = 0; sdSyncLastAttemptMs = 0; sdSyncPendingCached = 0; sdSyncPendingCacheTruncated = false; sdSyncLastBatchRecords = 0; sdSyncLastPayloadBytes = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = "";
       Serial.println(F("[DB] database.csv dan fft.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
@@ -4351,7 +4410,7 @@ void processSerialCommand(String cmd) {
   else if (cmd == "sd reinit" || cmd == "sd retry" || cmd == "reinit sd") reinitSdFromCommand();
   else if (cmd == "sync" || cmd == "sync status") printSdSyncStatus();
   else if (cmd == "sync now") {
-    if (requestSdSyncToMongoDB()) Serial.println(F("[SYNC] request queued. HTTP upload berjalan di background task."));
+    if (requestSdSyncToMongoDB()) Serial.println(F("[SYNC] request queued. MQTT gen/data + HTTP ACK berjalan di background task."));
     else Serial.println(F("[SYNC] request sudah antre/masih berjalan. Serial dan display tetap responsif."));
     printSdSyncStatus();
   }
@@ -4497,7 +4556,7 @@ void setup() {
 
   drawBootSplashStep("Connecting MQTT broker...", 86);
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setBufferSize(4096);
+  mqtt.setBufferSize(16384);
 
   if (wifiOK) {
     reconnectMQTT();
