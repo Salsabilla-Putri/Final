@@ -661,6 +661,7 @@ app.post('/api/ingest/batch', async (req, res) => {
         res.status(201).json({
             success: true,
             ackedRecords: savedIds.length,
+            accepted: savedIds.length,
             receivedRecords: records.length,
             processedRecords: maxBatch,
             truncated: records.length > maxBatch,
