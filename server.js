@@ -88,7 +88,7 @@ async function ensureDbReady() {
 const generatorDataSchema = new mongoose.Schema({
     // recordId berasal dari ESP32 SD backup. Field ini menjadi kunci deduplikasi
     // agar retry pengiriman backup tidak membuat data dobel di MongoDB.
-    recordId: { type: String, unique: true, sparse: true },
+    recordId: String,
     localSeq: Number,
 
     timestamp: { type: Date, default: Date.now },
@@ -1180,6 +1180,46 @@ app.get('/api/ingest/status', (req, res) => {
     });
 });
 
+app.get('/api/ingest/batch', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Endpoint aktif. Browser GET hanya untuk cek status; ESP32 mengirim data backup dengan POST JSON.',
+        method: 'POST',
+        path: '/api/ingest/batch',
+        dbReady: isDbReady(),
+        mqttHistoryTopic: 'gen/data',
+        realtimeTopic: 'gen/realtime',
+        dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
+        dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
+        dbBatchMaxRecords: DB_BATCH_MAX_RECORDS,
+        acceptedBody: {
+            deviceId: 'ESP32_GENERATOR_01',
+            source: 'esp32_sd_backup_10min',
+            records: [
+                {
+                    recordId: 'ESP32_GENERATOR_01-1-123456',
+                    localSeq: 1,
+                    timestamp: new Date().toISOString(),
+                    rpm: 1500,
+                    tps: 25,
+                    map: 80,
+                    iat: 35,
+                    clt: 75,
+                    afr: 14.7,
+                    batt: 12.8,
+                    fuel: 70,
+                    freq: 50,
+                    volt: 220,
+                    currentA: 10,
+                    powerKW: 2.2,
+                    phase_diff: 0,
+                    synced: false
+                }
+            ]
+        }
+    });
+});
+
 // ============================================================
 // BACKUP INGEST ENDPOINT
 // Data dari SD card ESP32 dikirim ke endpoint ini sebagai batch/chunk.
@@ -1252,6 +1292,8 @@ app.post('/api/ingest/batch', async (req, res) => {
             source: payload.source || 'esp32_sd_backup',
             received: records.length,
             accepted: docs.length,
+            ackedRecords: docs.length,
+            processedRecords: docs.length,
             inserted: result.upsertedCount || 0,
             matchedExisting: result.matchedCount || 0,
             duplicate: result.matchedCount || 0,
@@ -1308,11 +1350,24 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis legacy. Untuk skema SD backup baru, ESP32 lebih
-        // disarankan mengirim ke /api/ingest/batch agar mendapatkan ACK langsung.
+        // gen/data: jalur historis/database. Payload dapat berupa 1 record atau wrapper
+        // records[] dari SD queue ESP32. Semua record dimasukkan ke buffer MongoDB batch
+        // dengan upsert recordId agar retry SD tidak membuat duplikat.
         if (topic === 'gen/data') {
-            addGeneratorDataToBatch(latestData);
-            if (fftDoc) addFftDataToBatch(fftDoc);
+            const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
+            for (const record of records) {
+                if (!record || typeof record !== 'object') continue;
+                const snapshot = normalizeGeneratorPayload({
+                    ...record,
+                    deviceId: record.deviceId || parsed.deviceId,
+                    source: parsed.source || record.source,
+                    timestamp: record.timestamp || parsed.timestamp
+                });
+                addGeneratorDataToBatch(snapshot);
+
+                const recordFftDoc = normalizeFftPayload(record, snapshot.deviceId);
+                if (recordFftDoc) addFftDataToBatch(recordFftDoc);
+            }
         }
 
     } catch (error) {

@@ -636,6 +636,7 @@ uint32_t sdSyncLastBatchRecords = 0;
 uint32_t sdSyncLastPayloadBytes = 0;
 uint16_t sdSyncLastRunChunks = 0;
 uint32_t sdSyncLastRunRecords = 0;
+uint16_t sdSyncLastAckResponseRecords = 0;
 bool sdSyncLastMqttOk = false;
 
 
@@ -2377,7 +2378,37 @@ bool rewriteSdSyncQueueAfterAck(uint16_t ackedLines) {
   return true;
 }
 
-bool postSdSyncPayloadForAck(const String &payload) {
+uint16_t extractJsonUintField(const String &json, const char* key) {
+  String pattern = "\"" + String(key) + "\":";
+  int pos = json.indexOf(pattern);
+  if (pos < 0) return 0;
+  pos += pattern.length();
+  while (pos < (int)json.length() && (json.charAt(pos) == ' ' || json.charAt(pos) == '\t')) pos++;
+
+  uint32_t value = 0;
+  bool hasDigit = false;
+  while (pos < (int)json.length()) {
+    char c = json.charAt(pos);
+    if (c < '0' || c > '9') break;
+    hasDigit = true;
+    value = (value * 10UL) + (uint32_t)(c - '0');
+    if (value > 65535UL) return 65535;
+    pos++;
+  }
+  return hasDigit ? (uint16_t)value : 0;
+}
+
+uint16_t parseAckedRecordsFromResponse(const String &body) {
+  uint16_t acked = extractJsonUintField(body, "ackedRecords");
+  if (acked) return acked;
+  acked = extractJsonUintField(body, "accepted");
+  if (acked) return acked;
+  acked = extractJsonUintField(body, "processedRecords");
+  if (acked) return acked;
+  return extractJsonUintField(body, "received");
+}
+
+bool postSdSyncPayloadForAck(const String &payload, uint16_t expectedRecords) {
   String ingestUrl = String(CLOUD_INGEST_URL);
   if (ingestUrl.indexOf("localhost") >= 0) {
     sdSyncLastHttpCode = -2;
@@ -2389,6 +2420,7 @@ bool postSdSyncPayloadForAck(const String &payload) {
 
   bool httpStarted = false;
   int code = -1;
+  String responseBody = "";
 
   if (ingestUrl.startsWith("https://")) {
     WiFiClientSecure secureClient;
@@ -2399,6 +2431,7 @@ bool postSdSyncPayloadForAck(const String &payload) {
     if (httpStarted) {
       http.addHeader("Content-Type", "application/json");
       code = http.POST(payload);
+      responseBody = http.getString();
       http.end();
     }
   } else {
@@ -2407,6 +2440,7 @@ bool postSdSyncPayloadForAck(const String &payload) {
     if (httpStarted) {
       http.addHeader("Content-Type", "application/json");
       code = http.POST(payload);
+      responseBody = http.getString();
       http.end();
     }
   }
@@ -2417,7 +2451,10 @@ bool postSdSyncPayloadForAck(const String &payload) {
   }
 
   sdSyncLastHttpCode = code;
-  return code >= 200 && code < 300;
+  if (code < 200 || code >= 300) return false;
+
+  sdSyncLastAckResponseRecords = parseAckedRecordsFromResponse(responseBody);
+  return sdSyncLastAckResponseRecords >= expectedRecords;
 }
 
 uint16_t readSdSyncQueueBatchJson(String &recordsJson, uint16_t maxRecords) {
@@ -2456,6 +2493,7 @@ void syncSdQueueToMongoDB() {
   sdSyncLastPayloadBytes = 0;
   sdSyncLastRunChunks = 0;
   sdSyncLastRunRecords = 0;
+  sdSyncLastAckResponseRecords = 0;
   sdSyncLastMqttOk = false;
 
   if (!sdOK || !wifiOK || !mqtt.connected()) return;
@@ -2505,7 +2543,7 @@ void syncSdQueueToMongoDB() {
     // HTTP POST dipakai sebagai ACK aplikasi. Queue SD hanya dihapus jika server
     // benar-benar memberi 2xx. Jika HTTP/MongoDB/server gagal, record tetap di SD
     // dan publish MQTT berikutnya aman karena backend melakukan upsert recordId.
-    bool ackOk = postSdSyncPayloadForAck(payload);
+    bool ackOk = postSdSyncPayloadForAck(payload, recordsCount);
     if (!ackOk) {
       sdSyncFailCount++;
       return;
@@ -3950,6 +3988,7 @@ void printSdSyncStatus() {
   Serial.print  (F("  sync queued     : ")); Serial.println(sdSyncQueuedCount);
   Serial.print  (F("  last ACK code    : ")); Serial.println(sdSyncLastHttpCode);
   Serial.print  (F("  last ACK records: ")); Serial.println(sdSyncLastAckedRecords);
+  Serial.print  (F("  ACK response rec: ")); Serial.println(sdSyncLastAckResponseRecords);
   Serial.print  (F("  last attempt age: "));
   if (sdSyncLastAttemptMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - sdSyncLastAttemptMs) / 1000UL); Serial.println(F(" s ago")); }
@@ -4372,7 +4411,7 @@ void resetSDDatabase() {
     if (SD.exists(SD_SYNC_FILE)) SD.remove(SD_SYNC_FILE);
     if (SD.exists(SD_SYNC_TMP_FILE)) SD.remove(SD_SYNC_TMP_FILE);
     if (createFreshDatabaseCsv() && createFreshFftCsv()) {
-      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0; sdSyncMqttPublishSuccessCount = 0; sdSyncMqttPublishFailCount = 0; sdSyncLastHttpCode = 0; sdSyncLastAckedRecords = 0; sdSyncLastAttemptMs = 0; sdSyncPendingCached = 0; sdSyncPendingCacheTruncated = false; sdSyncLastBatchRecords = 0; sdSyncLastPayloadBytes = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = "";
+      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0; sdSyncMqttPublishSuccessCount = 0; sdSyncMqttPublishFailCount = 0; sdSyncLastHttpCode = 0; sdSyncLastAckedRecords = 0; sdSyncLastAttemptMs = 0; sdSyncPendingCached = 0; sdSyncPendingCacheTruncated = false; sdSyncLastBatchRecords = 0; sdSyncLastPayloadBytes = 0; sdSyncLastRunChunks = 0; sdSyncLastRunRecords = 0; sdSyncLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = "";
       Serial.println(F("[DB] database.csv dan fft.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
