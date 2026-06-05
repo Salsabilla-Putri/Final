@@ -231,8 +231,6 @@ const char* DB_FILE = "/database.csv";
 const char* DB_BACKUP_FILE = "/database_old.csv";
 const char* FFT_FILE = "/fft.csv";
 const char* FFT_BACKUP_FILE = "/fft_old.csv";
-const char* LEGACY_SD_SYNC_FILE = "/sync_queue.jsonl";
-const char* LEGACY_SD_SYNC_TMP_FILE = "/sync_queue.tmp";
 
 // Header CSV lokal. database.csv hanya berisi parameter agregasi utama.
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
@@ -252,9 +250,9 @@ const char* FFT_CSV_HEADER =
 #define SENSOR_SAMPLE_INTERVAL_MS 20
 #define AGGREGATION_INTERVAL_MS   1000
 #define STORAGE_BATCH_SIZE        1
-#define SD_SYNC_INTERVAL_MS        600000UL   // 10 menit: cloud/history MongoDB dikirim batch
-#define SD_SYNC_BATCH_SIZE         600        // Target record per 10 menit (1 record/detik x 600 detik)
-#define MONGODB_BUFFER_RECORDS     SD_SYNC_BATCH_SIZE // Buffer MongoDB 10 menit: 600 record @ 1 record/detik
+#define MONGODB_BATCH_INTERVAL_MS 600000UL   // 10 menit: cloud/history MongoDB dikirim batch
+#define MONGODB_BATCH_RECORDS     600        // Target record per 10 menit (1 record/detik x 600 detik)
+#define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS // Buffer MongoDB 10 menit: 600 record @ 1 record/detik
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
@@ -532,7 +530,7 @@ FFTData fftData;
 FFTData fftMultiData[FFT_SOURCE_COUNT];
 StorageRecord storageBatch[STORAGE_BATCH_SIZE];
 SemaphoreHandle_t fftMutex = NULL;
-SemaphoreHandle_t sdSyncRequestSemaphore = NULL;
+SemaphoreHandle_t mongoUploadRequestSemaphore = NULL;
 SemaphoreHandle_t mongoBufferMutex = NULL;
 
 float fftBuffers[FFT_SOURCE_COUNT][FFT_SAMPLES];
@@ -587,7 +585,7 @@ uint8_t calIndex = 0;
 unsigned long lastPublish = 0;
 unsigned long lastDraw = 0;
 unsigned long lastLocalSave = 0;
-unsigned long lastSdSync = 0;
+unsigned long lastMongoBatchSend = 0;
 unsigned long lastReconnect = 0;
 unsigned long lastWifiCheck = 0;
 unsigned long lastLinkFrameMs = 0;
@@ -608,15 +606,13 @@ unsigned long sdLastFileOkMs = 0;
 unsigned long sdLastRecoverAttemptMs = 0;
 unsigned long sdRecoverSuccessCount = 0;
 unsigned long sdRecoverFailCount = 0;
-unsigned long sdSyncSuccessCount = 0;
-unsigned long sdSyncFailCount = 0;
-unsigned long sdSyncMqttPublishSuccessCount = 0;
-unsigned long sdSyncMqttPublishFailCount = 0;
-volatile bool sdSyncBusy = false;
-volatile unsigned long sdSyncQueuedCount = 0;
-int sdSyncLastHttpCode = 0;
-uint16_t sdSyncLastAckedRecords = 0;
-unsigned long sdSyncLastAttemptMs = 0;
+unsigned long mongoUploadSuccessRecords = 0;
+unsigned long mongoUploadFailCount = 0;
+volatile bool mongoUploadBusy = false;
+volatile unsigned long mongoUploadQueuedCount = 0;
+int mongoUploadLastHttpCode = 0;
+uint16_t mongoUploadLastAckedRecords = 0;
+unsigned long mongoUploadLastAttemptMs = 0;
 uint64_t dbTotalWrittenBytes = 0;
 uint32_t dbLastLineBytes = 0;
 uint64_t dbCachedFileSizeBytes = 0;
@@ -626,13 +622,13 @@ uint64_t sdCachedFreeBytes = 0;
 unsigned long dbCachedAtMs = 0;
 
 // Statistik pengiriman buffer RAM MongoDB 10 menit.
-// File sync_queue.jsonl lama tidak lagi dipakai untuk sinkronisasi SD -> MongoDB.
-uint32_t sdSyncLastBatchRecords = 0;
-uint32_t sdSyncLastPayloadBytes = 0;
-uint16_t sdSyncLastRunChunks = 0;
-uint32_t sdSyncLastRunRecords = 0;
-uint16_t sdSyncLastAckResponseRecords = 0;
-bool sdSyncLastMqttOk = false;
+// Tidak ada sinkronisasi SD -> MongoDB; MongoDB hanya memakai buffer RAM baru.
+uint32_t mongoUploadLastBatchRecords = 0;
+uint32_t mongoUploadLastPayloadBytes = 0;
+uint16_t mongoUploadLastRunChunks = 0;
+uint32_t mongoUploadLastRunRecords = 0;
+uint16_t mongoUploadLastAckResponseRecords = 0;
+bool mongoUploadLastMqttOk = false;
 
 String mongoDbBuffer[MONGODB_BUFFER_RECORDS];
 uint16_t mongoDbBufferCount = 0;
@@ -745,7 +741,7 @@ uint32_t lastDatabaseJsonBytesCache = 0;
 // Monitor Serial opsional. Default OFF agar tidak membanjiri Serial Monitor.
 bool serialDatabasePayloadEnabled = false;     // print payload database saat SD save
 bool serialRealtimePayloadEnabled = false;     // print payload monitoring saat MQTT publish
-bool serialSyncStatusTickerEnabled = false;    // print ringkas status buffer MongoDB
+bool serialMongoBufferTickerEnabled = false;    // print ringkas status buffer MongoDB
 bool serialMonitorOverviewEnabled = false;     // print ringkas RAW+AGG+MQTT+BUFFER
 
 WiFiClient espClient;
@@ -755,7 +751,7 @@ String serialCmd = "";
 char tmp[24];
 
 // Forward declaration untuk fungsi yang dipakai oleh report Serial sebelum definisi aslinya.
-void printSdSyncStatus();
+void printMongoBufferStatus();
 
 // ============================================================
 // SERIAL LOG CONFIG
@@ -2083,7 +2079,7 @@ void printDatabasePayloadReport(bool fullPayload) {
   Serial.print(F("║ FFT file        : ")); Serial.println(FFT_FILE);
   Serial.print(F("║ Mongo endpoint  : ")); Serial.println(CLOUD_INGEST_URL);
   Serial.print(F("║ Save interval   : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
-  Serial.print(F("║ Mongo interval  : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
+  Serial.print(F("║ Mongo interval  : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print(F("║ Target batch    : ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print(F("║ Buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
 
@@ -2099,8 +2095,8 @@ void printDatabasePayloadReport(bool fullPayload) {
   Serial.print(F("║ CSV row bytes   : ")); Serial.println(lastDatabaseCsvBytesCache);
   Serial.print(F("║ JSON row bytes  : ")); Serial.println(lastDatabaseJsonBytesCache);
   Serial.print(F("║ Buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print(F("║ HTTP ACK code   : ")); Serial.println(sdSyncLastHttpCode);
-  Serial.print(F("║ Send busy       : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
+  Serial.print(F("║ HTTP ACK code   : ")); Serial.println(mongoUploadLastHttpCode);
+  Serial.print(F("║ Send busy       : ")); Serial.println(mongoUploadBusy ? F("YES") : F("NO"));
 
   if (fullPayload) {
     Serial.println(F("╠════════════ LAST CSV ROW WRITTEN TO SD ════════════════════╣"));
@@ -2184,12 +2180,12 @@ void printSerialMonitoringOverview() {
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.println(F("║ 4) MONGODB 10-MIN RAM BUFFER                              ║"));
   Serial.print(F("║ buffer count   : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print(F("║ interval       : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
+  Serial.print(F("║ interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print(F("║ target batch   : ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print(F("║ last batch     : ")); Serial.print(sdSyncLastBatchRecords); Serial.print(F(" records, ")); Serial.print(sdSyncLastPayloadBytes); Serial.println(F(" B"));
-  Serial.print(F("║ HTTP code      : ")); Serial.println(sdSyncLastHttpCode);
-  Serial.print(F("║ busy           : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
-  Serial.print(F("║ OK/FAIL        : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print(F("║ last batch     : ")); Serial.print(mongoUploadLastBatchRecords); Serial.print(F(" records, ")); Serial.print(mongoUploadLastPayloadBytes); Serial.println(F(" B"));
+  Serial.print(F("║ HTTP code      : ")); Serial.println(mongoUploadLastHttpCode);
+  Serial.print(F("║ busy           : ")); Serial.println(mongoUploadBusy ? F("YES") : F("NO"));
+  Serial.print(F("║ OK/FAIL        : ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
   Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
 }
 
@@ -2210,7 +2206,7 @@ void publishRealtimeData() {
 
   // MQTT hanya untuk realtime dashboard 1 detik.
   // MQTT realtime tetap ke gen/realtime setiap 1 detik.
-  // History/cloud MongoDB dikirim dari buffer RAM ke /api/ingest/batch setiap 10 menit oleh SdSyncTask.
+  // History/cloud MongoDB dikirim dari buffer RAM ke /api/ingest/batch setiap 10 menit oleh MongoBufferTask.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
@@ -2220,7 +2216,7 @@ void publishRealtimeData() {
 
   uint32_t pubStart = micros();
   bool realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
-  bool historyOk = false; // status batch MongoDB ditangani SdSyncTask tiap 10 menit
+  bool historyOk = false; // status batch MongoDB ditangani MongoBufferTask tiap 10 menit
   bool ok = realtimeOk;
   perfMqttPublishUs = micros() - pubStart;
   perfUpdateStat(acqMon.mqttPublishUs, perfMqttPublishUs);
@@ -2327,7 +2323,7 @@ uint16_t buildMongoDbBufferPayload(String &payload) {
   payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   payload += "\"source\":\"esp32_ram_buffer_10min\",";
   payload += "\"transport\":\"http_buffer_10min\",";
-  payload += "\"intervalMs\":" + String(SD_SYNC_INTERVAL_MS) + ",";
+  payload += "\"intervalMs\":" + String(MONGODB_BATCH_INTERVAL_MS) + ",";
   payload += "\"maxBatchSize\":" + String(MONGODB_BUFFER_RECORDS) + ",";
   payload += "\"bufferedRecords\":" + String(recordsCount) + ",";
   payload += "\"records\":[";
@@ -2371,10 +2367,10 @@ uint16_t parseAckedRecordsFromResponse(const String &body) {
   return extractJsonUintField(body, "received");
 }
 
-bool postSdSyncPayloadForAck(const String &payload, uint16_t expectedRecords) {
+bool postMongoBufferPayloadForAck(const String &payload, uint16_t expectedRecords) {
   String ingestUrl = String(CLOUD_INGEST_URL);
   if (ingestUrl.indexOf("localhost") >= 0) {
-    sdSyncLastHttpCode = -2;
+    mongoUploadLastHttpCode = -2;
     return false;
   }
 
@@ -2409,26 +2405,26 @@ bool postSdSyncPayloadForAck(const String &payload, uint16_t expectedRecords) {
   }
 
   if (!httpStarted) {
-    sdSyncLastHttpCode = -1;
+    mongoUploadLastHttpCode = -1;
     return false;
   }
 
-  sdSyncLastHttpCode = code;
+  mongoUploadLastHttpCode = code;
   if (code < 200 || code >= 300) return false;
 
-  sdSyncLastAckResponseRecords = parseAckedRecordsFromResponse(responseBody);
-  return sdSyncLastAckResponseRecords >= expectedRecords;
+  mongoUploadLastAckResponseRecords = parseAckedRecordsFromResponse(responseBody);
+  return mongoUploadLastAckResponseRecords >= expectedRecords;
 }
 
-void syncSdQueueToMongoDB() {
-  sdSyncLastAttemptMs = millis();
-  sdSyncLastAckedRecords = 0;
-  sdSyncLastBatchRecords = 0;
-  sdSyncLastPayloadBytes = 0;
-  sdSyncLastRunChunks = 0;
-  sdSyncLastRunRecords = 0;
-  sdSyncLastAckResponseRecords = 0;
-  sdSyncLastMqttOk = false;
+void sendMongoDbBufferToMongoDB() {
+  mongoUploadLastAttemptMs = millis();
+  mongoUploadLastAckedRecords = 0;
+  mongoUploadLastBatchRecords = 0;
+  mongoUploadLastPayloadBytes = 0;
+  mongoUploadLastRunChunks = 0;
+  mongoUploadLastRunRecords = 0;
+  mongoUploadLastAckResponseRecords = 0;
+  mongoUploadLastMqttOk = false;
   mongoDbLastSentRecords = 0;
   mongoDbLastPayloadBytes = 0;
   mongoDbLastAckResponseRecords = 0;
@@ -2439,17 +2435,17 @@ void syncSdQueueToMongoDB() {
   uint16_t recordsCount = buildMongoDbBufferPayload(payload);
   if (!recordsCount) return;
 
-  sdSyncLastBatchRecords = recordsCount;
-  sdSyncLastPayloadBytes = payload.length();
-  sdSyncLastRunChunks = 1;
-  sdSyncLastRunRecords = recordsCount;
+  mongoUploadLastBatchRecords = recordsCount;
+  mongoUploadLastPayloadBytes = payload.length();
+  mongoUploadLastRunChunks = 1;
+  mongoUploadLastRunRecords = recordsCount;
   mongoDbLastPayloadBytes = payload.length();
 
-  bool ackOk = postSdSyncPayloadForAck(payload, recordsCount);
-  mongoDbLastAckResponseRecords = sdSyncLastAckResponseRecords;
+  bool ackOk = postMongoBufferPayloadForAck(payload, recordsCount);
+  mongoDbLastAckResponseRecords = mongoUploadLastAckResponseRecords;
 
   if (!ackOk) {
-    sdSyncFailCount++;
+    mongoUploadFailCount++;
     return;
   }
 
@@ -2459,43 +2455,43 @@ void syncSdQueueToMongoDB() {
   } else if (mongoBufferMutex == NULL) {
     clearMongoDbBufferNoLock(recordsCount);
   } else {
-    sdSyncFailCount++;
+    mongoUploadFailCount++;
     return;
   }
 
-  sdSyncSuccessCount += recordsCount;
-  sdSyncLastAckedRecords = recordsCount;
+  mongoUploadSuccessRecords += recordsCount;
+  mongoUploadLastAckedRecords = recordsCount;
   mongoDbLastSentRecords = recordsCount;
   mongoDbTotalSentRecords += recordsCount;
   mongoDbLastSendMs = millis();
 }
 
-bool requestSdSyncToMongoDB() {
-  if (sdSyncRequestSemaphore == NULL) return false;
+bool requestMongoBufferSend() {
+  if (mongoUploadRequestSemaphore == NULL) return false;
 
-  BaseType_t queued = xSemaphoreGive(sdSyncRequestSemaphore);
+  BaseType_t queued = xSemaphoreGive(mongoUploadRequestSemaphore);
   if (queued == pdTRUE) {
-    sdSyncQueuedCount++;
+    mongoUploadQueuedCount++;
     return true;
   }
 
-  // Semaphore sudah berisi request: task sync sedang berjalan atau sudah antre.
+  // Semaphore sudah berisi request: task upload MongoDB sedang berjalan atau sudah antre.
   return false;
 }
 
-void SdSyncTask(void *pvParameters) {
+void MongoBufferTask(void *pvParameters) {
   (void)pvParameters;
 
   while (true) {
-    if (sdSyncRequestSemaphore == NULL) {
+    if (mongoUploadRequestSemaphore == NULL) {
       vTaskDelay(pdMS_TO_TICKS(1000));
       continue;
     }
 
-    if (xSemaphoreTake(sdSyncRequestSemaphore, portMAX_DELAY) == pdTRUE) {
-      sdSyncBusy = true;
-      syncSdQueueToMongoDB();
-      sdSyncBusy = false;
+    if (xSemaphoreTake(mongoUploadRequestSemaphore, portMAX_DELAY) == pdTRUE) {
+      mongoUploadBusy = true;
+      sendMongoDbBufferToMongoDB();
+      mongoUploadBusy = false;
       vTaskDelay(pdMS_TO_TICKS(10));
     }
   }
@@ -3867,24 +3863,24 @@ String buildCloudEstimateRecordOnly() {
 }
 
 
-void printSdSyncStatus() {
+void printMongoBufferStatus() {
   uint16_t bufferCount = mongoDbBufferCount;
 
   Serial.println();
   Serial.println(F("================ MONGODB 10-MIN BUFFER ================"));
   Serial.print  (F("  buffer records : ")); Serial.print(bufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print  (F("  interval       : ")); Serial.print(SD_SYNC_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
+  Serial.print  (F("  interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print  (F("  endpoint       : ")); Serial.println(CLOUD_INGEST_URL);
   Serial.print  (F("  last sent      : ")); Serial.print(mongoDbLastSentRecords); Serial.println(F(" records"));
   Serial.print  (F("  total sent     : ")); Serial.print(mongoDbTotalSentRecords); Serial.println(F(" records"));
   Serial.print  (F("  last payload   : ")); Serial.print(mongoDbLastPayloadBytes); Serial.println(F(" B"));
-  Serial.print  (F("  ACK OK/FAIL    : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
-  Serial.print  (F("  last ACK code  : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("  ACK OK/FAIL    : ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
+  Serial.print  (F("  last ACK code  : ")); Serial.println(mongoUploadLastHttpCode);
   Serial.print  (F("  ACK response   : ")); Serial.print(mongoDbLastAckResponseRecords); Serial.println(F(" records"));
   Serial.print  (F("  buffered total : ")); Serial.println(mongoDbBufferedTotal);
   Serial.print  (F("  overflow count : ")); Serial.println(mongoDbBufferOverflowCount);
-  Serial.print  (F("  send busy      : ")); Serial.println(sdSyncBusy ? F("YES") : F("NO"));
-  Serial.print  (F("  send queued    : ")); Serial.println(sdSyncQueuedCount);
+  Serial.print  (F("  send busy      : ")); Serial.println(mongoUploadBusy ? F("YES") : F("NO"));
+  Serial.print  (F("  send queued    : ")); Serial.println(mongoUploadQueuedCount);
   Serial.print  (F("  last send age  : "));
   if (mongoDbLastSendMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - mongoDbLastSendMs) / 1000UL); Serial.println(F(" s ago")); }
@@ -3919,8 +3915,8 @@ void printDatabaseReport() {
   Serial.print  (F("  est. 7 days     : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
   Serial.print  (F("  buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print  (F("  HTTP send OK/FAIL: ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
-  Serial.print  (F("  last ACK code    : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("  HTTP send OK/FAIL: ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
+  Serial.print  (F("  last ACK code    : ")); Serial.println(mongoUploadLastHttpCode);
   Serial.println();
 
   Serial.println(F("CLOUD / MONGODB HISTORY - HTTP BUFFER BATCH 10 MIN (MAIN DATABASE FIELDS ONLY)"));
@@ -3929,13 +3925,13 @@ void printDatabaseReport() {
   Serial.print  (F("  ack path        : ")); Serial.println(F("HTTP POST /api/ingest/batch"));
   Serial.print  (F("  target batch    : ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("  buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print  (F("  interval        : ")); Serial.print(SD_SYNC_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
-  Serial.print  (F("  last batch recs : ")); Serial.println(sdSyncLastBatchRecords);
+  Serial.print  (F("  interval        : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
+  Serial.print  (F("  last batch recs : ")); Serial.println(mongoUploadLastBatchRecords);
   Serial.print  (F("  param record    : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record"));
   Serial.print  (F("  records/sec     : ")); Serial.println(STORAGE_BATCH_SIZE);
   Serial.print  (F("  param rate      : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
-  Serial.print  (F("  HTTP send OK/FAIL: ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
+  Serial.print  (F("  HTTP send OK/FAIL: ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
   Serial.print  (F("  sent total      : ")); Serial.println(mongoDbTotalSentRecords);
   Serial.println(F("========================================================"));
 }
@@ -3981,7 +3977,7 @@ void printAcquisitionSpecReport() {
 
   const bool databaseTargetPass =
     publishInterval == SPEC_DATABASE_TARGET_MS ||
-    SD_SYNC_INTERVAL_MS == SPEC_DATABASE_TARGET_MS;
+    MONGODB_BATCH_INTERVAL_MS == SPEC_DATABASE_TARGET_MS;
 
   Serial.println();
   Serial.println(F("╔════════════════ GENSYS SPEC & ACQUISITION TEST ════════════════╗"));
@@ -3994,7 +3990,7 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ Record lokal/SD interval      : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
   Serial.print  (F("║ Target database online        : ")); Serial.print(SPEC_DATABASE_TARGET_MS / 60000UL); Serial.println(F(" menit"));
   Serial.print  (F("║ MQTT publish saat ini         : ")); Serial.print(publishInterval); Serial.println(F(" ms"));
-  Serial.print  (F("║ MongoDB buffer interval       : ")); Serial.print(SD_SYNC_INTERVAL_MS); Serial.println(F(" ms"));
+  Serial.print  (F("║ MongoDB buffer interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS); Serial.println(F(" ms"));
 
   Serial.println(F("║ [2] PARAMETER MONITORING TERSEDIA                               ║"));
   Serial.print  (F("║ Kelistrikan : V=")); Serial.print(r.volt, 2);
@@ -4049,7 +4045,7 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ OVERALL REAL-TIME MONITOR   : ")); Serial.println(passFailText(realtimePass));
 
   if (!databaseTargetPass) {
-    Serial.println(F("║ CATATAN: SD_SYNC_INTERVAL_MS belum 10 menit. Cek nilai macro timing.        ║"));
+    Serial.println(F("║ CATATAN: MONGODB_BATCH_INTERVAL_MS belum 10 menit. Cek nilai macro timing.        ║"));
   }
 
   Serial.println(F("╚═════════════════════════════════════════════════════════════════════╝"));
@@ -4081,7 +4077,7 @@ void printPerformanceReport() {
 
   const float cloudRecordBytes = cloudParamOnly.length();
   const float cloudBytesPerSec = cloudRecordBytes * STORAGE_BATCH_SIZE;
-  const float cloudBatchCapacityPer10Min = (float)SD_SYNC_BATCH_SIZE;
+  const float cloudBatchCapacityPer10Min = (float)MONGODB_BATCH_RECORDS;
   const float cloudBatchGeneratedPer10Min = (600000.0f / (float)localSaveInterval) * STORAGE_BATCH_SIZE;
   const float cloudBatchPayloadEstimate = cloudRecordBytes * min(cloudBatchGeneratedPer10Min, cloudBatchCapacityPer10Min);
   const float mongoIndexOverheadFactor = 2.2f;
@@ -4132,7 +4128,7 @@ void printPerformanceReport() {
 
   Serial.println(F("║ [4] ESTIMASI DATABASE CLOUD MONGODB                                             ║"));
   Serial.print  (F("║ Realtime MQTT dashboard      : every ")); Serial.print(publishInterval); Serial.println(F(" ms"));
-  Serial.print  (F("║ MongoDB buffer send interval : ")); Serial.print(SD_SYNC_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
+  Serial.print  (F("║ MongoDB buffer send interval : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
   Serial.print  (F("║ Target records per batch     : ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("║ Current buffer count         : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("║ Generated records / 10 min   : ")); Serial.println(cloudBatchGeneratedPer10Min, 0);
@@ -4140,10 +4136,10 @@ void printPerformanceReport() {
   Serial.print  (F("║ Param JSON size              : ")); Serial.print((uint32_t)cloudRecordBytes); Serial.println(F(" B/record, tanpa FFT"));
   Serial.print  (F("║ Effective cloud data rate    : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
   Serial.print  (F("║ Estimated MongoDB 10 years   : ")); Serial.println(formatBytes((uint64_t)cloud10y));
-  Serial.print  (F("║ Last MongoDB batch/payload   : ")); Serial.print(sdSyncLastBatchRecords); Serial.print(F(" record / ")); Serial.println(formatBytes(sdSyncLastPayloadBytes));
+  Serial.print  (F("║ Last MongoDB batch/payload   : ")); Serial.print(mongoUploadLastBatchRecords); Serial.print(F(" record / ")); Serial.println(formatBytes(mongoUploadLastPayloadBytes));
   Serial.print  (F("║ MongoDB sent total           : ")); Serial.println(mongoDbTotalSentRecords);
-  Serial.print  (F("║ HTTP send OK/FAIL            : ")); Serial.print(sdSyncSuccessCount); Serial.print(F(" / ")); Serial.println(sdSyncFailCount);
-  Serial.print  (F("║ Last HTTP ACK code           : ")); Serial.println(sdSyncLastHttpCode);
+  Serial.print  (F("║ HTTP send OK/FAIL            : ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
+  Serial.print  (F("║ Last HTTP ACK code           : ")); Serial.println(mongoUploadLastHttpCode);
   Serial.println(F("╚════════════════════════════════════════════════════════════════════════════════╝"));
 }
 
@@ -4305,10 +4301,8 @@ void resetSDDatabase() {
     deselectAllSPI();
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
     if (SD.exists(FFT_FILE)) SD.remove(FFT_FILE);
-    if (SD.exists(LEGACY_SD_SYNC_FILE)) SD.remove(LEGACY_SD_SYNC_FILE);
-    if (SD.exists(LEGACY_SD_SYNC_TMP_FILE)) SD.remove(LEGACY_SD_SYNC_TMP_FILE);
     if (createFreshDatabaseCsv() && createFreshFftCsv()) {
-      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; sdSyncSuccessCount = 0; sdSyncFailCount = 0; sdSyncMqttPublishSuccessCount = 0; sdSyncMqttPublishFailCount = 0; sdSyncLastHttpCode = 0; sdSyncLastAckedRecords = 0; sdSyncLastAttemptMs = 0; sdSyncLastBatchRecords = 0; sdSyncLastPayloadBytes = 0; sdSyncLastRunChunks = 0; sdSyncLastRunRecords = 0; sdSyncLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
+      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; mongoUploadSuccessRecords = 0; mongoUploadFailCount = 0; mongoUploadLastHttpCode = 0; mongoUploadLastAckedRecords = 0; mongoUploadLastAttemptMs = 0; mongoUploadLastBatchRecords = 0; mongoUploadLastPayloadBytes = 0; mongoUploadLastRunChunks = 0; mongoUploadLastRunRecords = 0; mongoUploadLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
       Serial.println(F("[DB] database.csv dan fft.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
@@ -4328,7 +4322,7 @@ void handlePeriodicSerialLog() {
   if (serialLogFFTEnabled) printFFTReport();
   if (serialLogLatestEnabled) printLatestDataReport();
   if (serialMonitorOverviewEnabled) printSerialMonitoringOverview();
-  if (serialSyncStatusTickerEnabled) printSdSyncStatus();
+  if (serialMongoBufferTickerEnabled) printMongoBufferStatus();
 }
 
 void printDbSizeTicker() {
@@ -4344,11 +4338,11 @@ void processSerialCommand(String cmd) {
   else if (cmd == "sd check" || cmd == "db check" || cmd == "file check") printSdFileCheck();
   else if (cmd == "db create" || cmd == "database create" || cmd == "create db" || cmd == "create database") createDatabaseCsvFromCommand();
   else if (cmd == "sd reinit" || cmd == "sd retry" || cmd == "reinit sd") reinitSdFromCommand();
-  else if (cmd == "sync" || cmd == "sync status" || cmd == "mongo buffer" || cmd == "buffer") printSdSyncStatus();
-  else if (cmd == "sync now" || cmd == "send now" || cmd == "mongo send") {
-    if (requestSdSyncToMongoDB()) Serial.println(F("[MONGO] send request queued. Buffer MongoDB dikirim via HTTP batch."));
+  else if (cmd == "mongo" || cmd == "mongo buffer" || cmd == "buffer") printMongoBufferStatus();
+  else if (cmd == "send now" || cmd == "mongo send") {
+    if (requestMongoBufferSend()) Serial.println(F("[MONGO] send request queued. Buffer MongoDB dikirim via HTTP batch."));
     else Serial.println(F("[MONGO] send request sudah antre/masih berjalan. Serial dan display tetap responsif."));
-    printSdSyncStatus();
+    printMongoBufferStatus();
   }
   else if (cmd == "sync rebuild" || cmd == "sync sd" || cmd == "sync full" || cmd == "rebuild sync") rebuildSyncQueueFromSdCommand();
   else if (cmd == "monitor overview" || cmd == "serial monitor" || cmd == "monitor all" || cmd == "status all") printSerialMonitoringOverview();
@@ -4363,8 +4357,8 @@ void processSerialCommand(String cmd) {
   else if (cmd == "db payload off") { serialDatabasePayloadEnabled = false; Serial.println(F("[DB] payload monitor OFF.")); }
   else if (cmd == "monitoring payload on" || cmd == "realtime payload on") { serialRealtimePayloadEnabled = true; Serial.println(F("[MQTT] realtime monitoring payload ON.")); }
   else if (cmd == "monitoring payload off" || cmd == "realtime payload off") { serialRealtimePayloadEnabled = false; Serial.println(F("[MQTT] realtime monitoring payload OFF.")); }
-  else if (cmd == "sync ticker on" || cmd == "mongo ticker on") { serialLogEnabled = true; serialSyncStatusTickerEnabled = true; Serial.println(F("[MONGO] buffer ticker ON.")); }
-  else if (cmd == "sync ticker off" || cmd == "mongo ticker off") { serialSyncStatusTickerEnabled = false; Serial.println(F("[MONGO] buffer ticker OFF.")); }
+  else if (cmd == "mongo ticker on") { serialLogEnabled = true; serialMongoBufferTickerEnabled = true; Serial.println(F("[MONGO] buffer ticker ON.")); }
+  else if (cmd == "mongo ticker off") { serialMongoBufferTickerEnabled = false; Serial.println(F("[MONGO] buffer ticker OFF.")); }
   else if (cmd == "spec" || cmd == "acq" || cmd == "compute") printAcquisitionSpecReport();
   else if (cmd == "performance" || cmd == "perf" || cmd == "perf acq" || cmd == "performance acq" || cmd == "acquisition performance") printPerformanceReport();
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
@@ -4397,7 +4391,7 @@ void processSerialCommand(String cmd) {
   else if (cmd == "test once status" || cmd == "monitor once status") printTestOnceStatus();
   else if (cmd == "test once last" || cmd == "rx last" || cmd == "last rx") printLastRxReportFromCache();
   else if (cmd == "test once off" || cmd == "monitor continuous" || cmd == "continuous") stopTestOnceMode();
-  else if (cmd == "log off") { serialLogEnabled = false; serialLogAllEnabled = false; serialLogDatabaseEnabled = false; serialLogPerformanceEnabled = false; serialLogSensorEnabled = false; serialLogNetworkEnabled = false; serialLogAggregationEnabled = false; serialLogStorageEnabled = false; serialLogFFTEnabled = false; serialLogLatestEnabled = false; serialMonitorOverviewEnabled = false; serialSyncStatusTickerEnabled = false; Serial.println(F("[LOG] off")); }
+  else if (cmd == "log off") { serialLogEnabled = false; serialLogAllEnabled = false; serialLogDatabaseEnabled = false; serialLogPerformanceEnabled = false; serialLogSensorEnabled = false; serialLogNetworkEnabled = false; serialLogAggregationEnabled = false; serialLogStorageEnabled = false; serialLogFFTEnabled = false; serialLogLatestEnabled = false; serialMonitorOverviewEnabled = false; serialMongoBufferTickerEnabled = false; Serial.println(F("[LOG] off")); }
   else if (cmd == "log database on") { serialLogEnabled = true; serialLogDatabaseEnabled = true; Serial.println(F("[LOG] database on")); }
   else if (cmd == "log performance on") { serialLogEnabled = true; serialLogPerformanceEnabled = true; Serial.println(F("[LOG] performance on")); }
   else if (cmd == "log aggregation on" || cmd == "log agg on") { serialLogEnabled = true; serialLogAggregationEnabled = true; Serial.println(F("[LOG] aggregation on")); }
@@ -4449,13 +4443,13 @@ void setup() {
   sdMutex = xSemaphoreCreateMutex();
   mongoBufferMutex = xSemaphoreCreateMutex();
   fftMutex = xSemaphoreCreateMutex();
-  sdSyncRequestSemaphore = xSemaphoreCreateBinary();
+  mongoUploadRequestSemaphore = xSemaphoreCreateBinary();
 
   if (dataMutex == NULL) Serial.println("[ERROR] dataMutex gagal dibuat.");
   if (sdMutex == NULL) Serial.println("[ERROR] sdMutex gagal dibuat.");
   if (mongoBufferMutex == NULL) Serial.println("[ERROR] mongoBufferMutex gagal dibuat.");
   if (fftMutex == NULL) Serial.println("[ERROR] fftMutex gagal dibuat.");
-  if (sdSyncRequestSemaphore == NULL) Serial.println("[ERROR] sdSyncRequestSemaphore gagal dibuat.");
+  if (mongoUploadRequestSemaphore == NULL) Serial.println("[ERROR] mongoUploadRequestSemaphore gagal dibuat.");
 
   deselectAllSPI();
 
@@ -4523,8 +4517,8 @@ void setup() {
   );
 
   xTaskCreatePinnedToCore(
-    SdSyncTask,
-    "SdSyncTask",
+    MongoBufferTask,
+    "MongoBufferTask",
     10000,
     NULL,
     1,
@@ -4592,10 +4586,10 @@ void loop() {
   }
 
   // Kirim buffer RAM MongoDB setiap 10 menit; SD tetap hanya arsip lokal.
-  if (millis() - lastSdSync >= SD_SYNC_INTERVAL_MS) {
-    lastSdSync = millis();
+  if (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS) {
+    lastMongoBatchSend = millis();
     if (!testOnceMode || !testOnceDone) {
-      requestSdSyncToMongoDB();
+      requestMongoBufferSend();
     }
   }
 
