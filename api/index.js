@@ -58,6 +58,9 @@ async function connectDB() {
 const generatorDataSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
     deviceId: { type: String, required: true },
+    recordId: { type: String, index: true, unique: true, sparse: true },
+    localSeq: Number,
+    source: String,
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, synced: Boolean, status: String, oil: Number, iat: Number,
@@ -311,6 +314,82 @@ function pickEffectivePayload(rawPayload) {
     };
 }
 
+function parseFiniteNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeGeneratorSnapshot(rawPayload = {}, defaults = latestData) {
+    const snapshot = pickEffectivePayload(rawPayload);
+    if (!snapshot || typeof snapshot !== 'object') return null;
+
+    const nextData = { ...defaults };
+    const eventTimestamp = snapshot.timestamp ? new Date(snapshot.timestamp) : new Date();
+    nextData.timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
+    nextData.deviceId = snapshot.deviceId || nextData.deviceId || 'ESP32_GENERATOR_01';
+    nextData.recordId = snapshot.recordId || undefined;
+    const localSeq = parseFiniteNumber(snapshot.localSeq);
+    if (localSeq !== undefined) nextData.localSeq = localSeq;
+
+    nextData.sync = normalizeSyncStatus(snapshot, nextData.sync);
+    nextData.synced = nextData.sync === 'ON-GRID';
+    nextData.status = snapshot.status || (Number(snapshot.rpm || 0) > 0 ? 'RUNNING' : nextData.status);
+
+    const numericKeys = ['rpm', 'volt', 'freq', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
+    for (const key of numericKeys) {
+        if (snapshot[key] !== undefined && snapshot[key] !== null && snapshot[key] !== '') {
+            const parsed = parseFiniteNumber(snapshot[key]);
+            if (parsed !== undefined) nextData[key] = parsed;
+        }
+    }
+
+    const coolantValue = readCoolantValue(snapshot);
+    if (coolantValue !== undefined) {
+        const parsedCoolant = parseFiniteNumber(coolantValue);
+        if (parsedCoolant !== undefined) nextData.coolant = parsedCoolant;
+    }
+
+    const ampValue = readAmpValue(snapshot);
+    if (ampValue !== undefined) {
+        const parsedAmp = parseFiniteNumber(ampValue);
+        if (parsedAmp !== undefined) nextData.amp = parsedAmp;
+    }
+
+    const powerValue = readPowerValue(snapshot);
+    if (powerValue !== undefined) {
+        const parsedPower = parseFiniteNumber(powerValue);
+        if (parsedPower !== undefined) nextData.power = parsedPower;
+    } else if (nextData.volt && nextData.amp) {
+        nextData.power = (nextData.volt * nextData.amp) / 1000;
+    }
+
+    const tempValue = firstDefined(snapshot.temp, snapshot.temperature);
+    if (tempValue !== undefined) {
+        const parsedTemp = parseFiniteNumber(tempValue);
+        if (parsedTemp !== undefined) nextData.temp = parsedTemp;
+    }
+
+    return nextData;
+}
+
+async function persistGeneratorSnapshot(rawPayload = {}, { source = 'http_ingest' } = {}) {
+    const normalized = normalizeGeneratorSnapshot(rawPayload);
+    if (!normalized) return null;
+
+    latestData = { ...latestData, ...normalized };
+    const docPayload = { ...normalized, source };
+
+    if (normalized.recordId) {
+        return await GeneratorData.findOneAndUpdate(
+            { recordId: normalized.recordId },
+            { $set: docPayload },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+    }
+
+    return await GeneratorData.create(docPayload);
+}
+
 async function syncActiveTimeHistory(data) {
     const status = String(data?.status || '').toUpperCase();
     const rpm = Number(data?.rpm || 0);
@@ -388,65 +467,32 @@ function initMQTT() {
             connectTimeout: 5000,
             reconnectPeriod: 0
         });
-        const persistLatestSnapshot = async (eventTimestamp = new Date()) => {
-            latestData.timestamp = eventTimestamp;
+        const persistLatestSnapshot = async (rawSnapshot, eventTimestamp = new Date()) => {
             const nowMs = eventTimestamp.getTime();
-            if (nowMs - lastPersistAt < 1000) return;
+            if (nowMs - lastPersistAt < 1000 && !Array.isArray(rawSnapshot?.records)) return;
             lastPersistAt = nowMs;
             try {
-                await new GeneratorData(latestData).save();
-                await syncActiveTimeHistory(latestData);
-                await checkAndSaveAlerts(latestData);
+                const records = Array.isArray(rawSnapshot?.records) ? rawSnapshot.records : [rawSnapshot];
+                let savedCount = 0;
+                for (const record of records) {
+                    const saved = await persistGeneratorSnapshot(
+                        {
+                            ...record,
+                            deviceId: record?.deviceId || rawSnapshot?.deviceId,
+                            source: rawSnapshot?.source || record?.source,
+                            timestamp: record?.timestamp || rawSnapshot?.timestamp
+                        },
+                        { source: rawSnapshot?.source || 'mqtt_gen_data' }
+                    );
+                    if (saved) savedCount++;
+                }
+                if (savedCount > 0) {
+                    await syncActiveTimeHistory(latestData);
+                    await checkAndSaveAlerts(latestData);
+                }
             } catch (e) {
                 console.error('DB Save Error:', e.message);
             }
-        };
-
-        const applySnapshot = (rawSnapshot) => {
-            const snapshot = pickEffectivePayload(rawSnapshot);
-            if (!snapshot || typeof snapshot !== 'object') return;
-            const numericKeys = ['rpm', 'volt', 'freq', 'temp', 'coolant', 'fuel', 'oil', 'iat', 'map', 'batt', 'afr', 'tps'];
-            const nextData = { ...latestData };
-
-            nextData.deviceId = snapshot.deviceId || nextData.deviceId;
-            nextData.sync = normalizeSyncStatus(snapshot, nextData.sync);
-            nextData.synced = nextData.sync === 'ON-GRID';
-            nextData.status = snapshot.status || nextData.status;
-
-            for (const key of numericKeys) {
-                if (snapshot[key] !== undefined && snapshot[key] !== null && snapshot[key] !== '') {
-                    const parsed = Number(snapshot[key]);
-                    if (Number.isFinite(parsed)) nextData[key] = parsed;
-                }
-            }
-
-            const coolantValue = readCoolantValue(snapshot);
-            if (coolantValue !== undefined) {
-                const parsedCoolant = Number(coolantValue);
-                if (Number.isFinite(parsedCoolant)) nextData.coolant = parsedCoolant;
-            }
-
-            const ampValue = readAmpValue(snapshot);
-            if (ampValue !== undefined) {
-                const parsedAmp = Number(ampValue);
-                if (Number.isFinite(parsedAmp)) nextData.amp = parsedAmp;
-            }
-
-            const powerValue = readPowerValue(snapshot);
-            if (powerValue !== undefined) {
-                const parsedPower = Number(powerValue);
-                if (Number.isFinite(parsedPower)) nextData.power = parsedPower;
-            } else if (nextData.volt && nextData.amp) {
-                nextData.power = (nextData.volt * nextData.amp) / 1000;
-            }
-
-            const tempValue = firstDefined(snapshot.temp, snapshot.temperature);
-            if (tempValue !== undefined) {
-                const parsedTemp = Number(tempValue);
-                if (Number.isFinite(parsedTemp)) nextData.temp = parsedTemp;
-            }
-
-            latestData = nextData;
         };
 
         mqttClient.on('connect', () => {
@@ -459,8 +505,7 @@ function initMQTT() {
             const raw = message.toString();
             try {
                 const snapshot = JSON.parse(raw);
-                applySnapshot(snapshot);
-                await persistLatestSnapshot(new Date());
+                await persistLatestSnapshot(snapshot, new Date());
             } catch (err) {
                 console.warn('Invalid JSON on gen/data:', raw);
             }
@@ -515,6 +560,7 @@ async function checkAndSaveAlerts(data) {
 // ─── CONNECT DB sebelum setiap request ───────────────────────────────────────
 app.use(async (req, res, next) => {
     try {
+        if (req.method === 'GET' && req.path === '/api/ingest/batch') return next();
         await connectDB();
         next();
     } catch (err) {
@@ -525,6 +571,108 @@ app.use(async (req, res, next) => {
 
 // ─── API ROUTES ───────────────────────────────────────────────────────────────
 
+app.get('/api/ingest/batch', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Endpoint aktif. Browser memakai GET hanya untuk cek status; ESP32 harus mengirim data dengan HTTP POST.',
+        method: 'POST',
+        path: '/api/ingest/batch',
+        contentType: 'application/json',
+        acceptedBody: {
+            deviceId: 'ESP32_GENERATOR_01',
+            source: 'esp32_sd_backup_10min',
+            intervalMs: 600000,
+            records: [
+                {
+                    recordId: 'ESP32_GENERATOR_01-1-123456',
+                    localSeq: 1,
+                    timestamp: new Date().toISOString(),
+                    rpm: 1500,
+                    tps: 25,
+                    map: 80,
+                    iat: 35,
+                    clt: 75,
+                    afr: 14.7,
+                    batt: 12.8,
+                    fuel: 70,
+                    freq: 50.0,
+                    volt: 220,
+                    currentA: 10,
+                    powerKW: 2.2,
+                    phase_diff: 0,
+                    synced: false
+                }
+            ]
+        }
+    });
+});
+
+app.post('/api/ingest/batch', async (req, res) => {
+    try {
+        const body = req.body || {};
+        const records = Array.isArray(body.records)
+            ? body.records
+            : (body.record && typeof body.record === 'object')
+                ? [body.record]
+                : [];
+
+        if (!records.length) {
+            return res.status(400).json({
+                success: false,
+                error: 'Body harus berisi records[] atau record object.'
+            });
+        }
+
+        const maxBatch = Math.min(records.length, 1000);
+        const savedIds = [];
+        let lastSaved = null;
+
+        for (let i = 0; i < maxBatch; i++) {
+            const record = records[i];
+            if (!record || typeof record !== 'object') continue;
+
+            const saved = await persistGeneratorSnapshot(
+                {
+                    ...record,
+                    deviceId: record.deviceId || body.deviceId,
+                    source: body.source || record.source,
+                    timestamp: record.timestamp || body.timestamp
+                },
+                { source: body.source || 'esp32_sd_backup_10min' }
+            );
+
+            if (saved) {
+                savedIds.push(saved._id);
+                lastSaved = saved;
+            }
+        }
+
+        if (!savedIds.length) {
+            return res.status(400).json({ success: false, error: 'Tidak ada record valid untuk disimpan.' });
+        }
+
+        try {
+            await syncActiveTimeHistory(latestData);
+            await checkAndSaveAlerts(latestData);
+        } catch (sideEffectError) {
+            console.warn('Post-ingest side effect warning:', sideEffectError.message);
+        }
+
+        res.status(201).json({
+            success: true,
+            ackedRecords: savedIds.length,
+            accepted: savedIds.length,
+            receivedRecords: records.length,
+            processedRecords: maxBatch,
+            truncated: records.length > maxBatch,
+            lastId: lastSaved?._id || null,
+            lastTimestamp: latestData.timestamp
+        });
+    } catch (err) {
+        console.error('Batch ingest error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 app.post('/api/auth/login', async (req, res) => {
     try {
