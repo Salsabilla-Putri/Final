@@ -4280,6 +4280,25 @@ void reinitSdFromCommand() {
   needFullRedraw = true;
 }
 
+void rebuildSyncQueueFromSdCommand() {
+  if (!sdOK) {
+    Serial.println(F("[SYNC] SD not ready. Coba command: sd reinit"));
+    return;
+  }
+
+  Serial.println(F("[SYNC] Rebuild queue dari /database.csv dimulai. Semua record SD akan di-upsert ulang ke MongoDB."));
+  uint32_t queued = rebuildSdSyncQueueFromDatabaseCsv();
+  Serial.print(F("[SYNC] Queue rebuilt dari SD. pending="));
+  Serial.println(queued);
+
+  if (queued > 0) {
+    if (requestSdSyncToMongoDB()) Serial.println(F("[SYNC] Upload queued. Karena recordId upsert, data yang sudah ada tidak akan duplikat."));
+    else Serial.println(F("[SYNC] Upload sudah antre/berjalan."));
+  }
+
+  printSdSyncStatus();
+}
+
 void resetSDDatabase() {
   if (!sdOK) { Serial.println(F("[DB] SD not ready.")); return; }
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
@@ -4331,6 +4350,7 @@ void processSerialCommand(String cmd) {
     else Serial.println(F("[MONGO] send request sudah antre/masih berjalan. Serial dan display tetap responsif."));
     printSdSyncStatus();
   }
+  else if (cmd == "sync rebuild" || cmd == "sync sd" || cmd == "sync full" || cmd == "rebuild sync") rebuildSyncQueueFromSdCommand();
   else if (cmd == "monitor overview" || cmd == "serial monitor" || cmd == "monitor all" || cmd == "status all") printSerialMonitoringOverview();
   else if (cmd == "monitor overview on" || cmd == "serial monitor on" || cmd == "monitor all on") { serialLogEnabled = true; serialMonitorOverviewEnabled = true; Serial.println(F("[SERIAL] overview ON. Ringkasan RAW+AGG+MQTT+BUFFER tampil berkala.")); }
   else if (cmd == "monitor overview off" || cmd == "serial monitor off" || cmd == "monitor all off") { serialMonitorOverviewEnabled = false; Serial.println(F("[SERIAL] overview OFF.")); }
