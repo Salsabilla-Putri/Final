@@ -2595,7 +2595,7 @@ void syncSdQueueToMongoDB() {
   sdSyncLastAckResponseRecords = 0;
   sdSyncLastMqttOk = false;
 
-  if (!sdOK || !wifiOK || !mqtt.connected()) return;
+  if (!sdOK || !wifiOK) return;
   if (!SD.exists(SD_SYNC_FILE)) {
     sdSyncPendingCached = 0;
     sdSyncPendingCacheTruncated = false;
@@ -2629,19 +2629,19 @@ void syncSdQueueToMongoDB() {
     sdSyncLastRunChunks++;
     sdSyncLastRunRecords += recordsCount;
 
-    mqtt.loop();
-    bool mqttOk = mqtt.publish(MQTT_TOPIC, payload.c_str());
+    bool mqttOk = false;
+    if (mqtt.connected()) {
+      mqtt.loop();
+      mqttOk = mqtt.publish(MQTT_TOPIC, payload.c_str());
+    }
     sdSyncLastMqttOk = mqttOk;
     if (mqttOk) sdSyncMqttPublishSuccessCount++;
-    else {
-      sdSyncMqttPublishFailCount++;
-      sdSyncFailCount++;
-      return;
-    }
+    else sdSyncMqttPublishFailCount++;
 
-    // HTTP POST dipakai sebagai ACK aplikasi. Queue SD hanya dihapus jika server
-    // benar-benar memberi 2xx. Jika HTTP/MongoDB/server gagal, record tetap di SD
-    // dan publish MQTT berikutnya aman karena backend melakukan upsert recordId.
+    // HTTP POST adalah jalur ACK dan fallback penyimpanan. Queue SD hanya dihapus
+    // jika server benar-benar memberi 2xx dan meng-ACK jumlah record yang sama.
+    // Jika MQTT broker sedang putus tetapi HTTP/MongoDB bisa diakses, data tetap
+    // masuk MongoDB via ACK endpoint dan tidak hilang dari SD sebelum ACK valid.
     bool ackOk = postSdSyncPayloadForAck(payload, recordsCount);
     if (!ackOk) {
       sdSyncFailCount++;
@@ -4092,6 +4092,7 @@ void printSdSyncStatus() {
   if (sdSyncLastAttemptMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - sdSyncLastAttemptMs) / 1000UL); Serial.println(F(" s ago")); }
   Serial.println(F("STATUS: pending=0 dan last ACK code 2xx berarti SD sudah sinkron."));
+  Serial.println(F("INFO  : Jika MQTT FAIL tetapi HTTP ACK OK, MongoDB tetap bertambah via ACK endpoint."));
   Serial.println(F("NOTE  : HTTP code -2 berarti CLOUD_INGEST_URL masih localhost/default."));
   Serial.println(F("TIP   : Default CLOUD_INGEST_URL memakai server Render production."));
   Serial.println(F("===================================================="));
