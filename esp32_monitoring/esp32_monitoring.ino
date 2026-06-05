@@ -1808,6 +1808,51 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   return json;
 }
 
+bool splitSimpleCsvLine(const String &line, String fields[], uint8_t expectedFields) {
+  uint8_t idx = 0;
+  int start = 0;
+
+  for (uint16_t i = 0; i <= line.length(); i++) {
+    if (i == line.length() || line.charAt(i) == ',') {
+      if (idx >= expectedFields) return false;
+      fields[idx++] = line.substring(start, i);
+      fields[idx - 1].trim();
+      start = i + 1;
+    }
+  }
+
+  return idx == expectedFields;
+}
+
+String buildJsonRecordParametersOnlyFromCsvLine(const String &line) {
+  const uint8_t FIELD_COUNT = 17;
+  String f[FIELD_COUNT];
+  if (!splitSimpleCsvLine(line, f, FIELD_COUNT)) return "";
+  if (!f[0].length()) return "";
+
+  String json = "{";
+  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  json += "\"recordId\":\"" + f[0] + "\",";
+  json += "\"localSeq\":" + f[1] + ",";
+  json += "\"timestamp\":\"" + f[2] + "\",";
+  json += "\"rpm\":" + f[3] + ",";
+  json += "\"tps\":" + f[4] + ",";
+  json += "\"map\":" + f[5] + ",";
+  json += "\"iat\":" + f[6] + ",";
+  json += "\"clt\":" + f[7] + ",";
+  json += "\"afr\":" + f[8] + ",";
+  json += "\"batt\":" + f[9] + ",";
+  json += "\"fuel\":" + f[10] + ",";
+  json += "\"freq\":" + f[11] + ",";
+  json += "\"volt\":" + f[12] + ",";
+  json += "\"currentA\":" + f[13] + ",";
+  json += "\"powerKW\":" + f[14] + ",";
+  json += "\"phase_diff\":" + f[15] + ",";
+  json += "\"synced\":" + String(f[16].toInt() == 1 ? "true" : "false");
+  json += "}";
+  return json;
+}
+
 
 String buildJsonParameterBatchPayload() {
   // Untuk estimasi database, cukup hitung record parameter utama yang benar-benar disimpan.
@@ -2376,6 +2421,60 @@ bool rewriteSdSyncQueueAfterAck(uint16_t ackedLines) {
   sdSyncPendingCacheAtMs = millis();
 
   return true;
+}
+
+uint32_t rebuildSdSyncQueueFromDatabaseCsvNoLock() {
+  deselectAllSPI();
+
+  File db = SD.open(DB_FILE, FILE_READ);
+  if (!db) return 0;
+
+  File tmp = SD.open(SD_SYNC_TMP_FILE, FILE_WRITE);
+  if (!tmp) {
+    db.close();
+    return 0;
+  }
+
+  uint32_t queued = 0;
+  bool firstLine = true;
+  while (db.available()) {
+    String line = db.readStringUntil('\n');
+    line.trim();
+
+    if (firstLine) {
+      firstLine = false;
+      continue; // skip CSV header
+    }
+    if (!line.length()) continue;
+
+    String json = buildJsonRecordParametersOnlyFromCsvLine(line);
+    if (!json.length()) continue;
+
+    tmp.println(json);
+    queued++;
+    if ((queued % 50) == 0) vTaskDelay(pdMS_TO_TICKS(1));
+  }
+
+  db.close();
+  tmp.close();
+
+  SD.remove(SD_SYNC_FILE);
+  if (!SD.rename(SD_SYNC_TMP_FILE, SD_SYNC_FILE)) {
+    return 0;
+  }
+
+  sdSyncPendingCached = queued;
+  sdSyncPendingCacheTruncated = false;
+  sdSyncPendingCacheAtMs = millis();
+  return queued;
+}
+
+uint32_t rebuildSdSyncQueueFromDatabaseCsv() {
+  if (!sdOK) return 0;
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(2000)) != pdTRUE) return 0;
+  uint32_t queued = rebuildSdSyncQueueFromDatabaseCsvNoLock();
+  xSemaphoreGive(sdMutex);
+  return queued;
 }
 
 uint16_t extractJsonUintField(const String &json, const char* key) {
@@ -3924,7 +4023,7 @@ void handleTouchNavigation() {
 // ============================================================
 void printSerialHelp() {
   Serial.println();
-  Serial.println(F("GENSYS CMD: help | spec/acq | db/database | db estimate | sync | sync now | perf/performance | perf acq | fft | latest"));
+  Serial.println(F("GENSYS CMD: help | spec/acq | db/database | db estimate | sync | sync now | sync rebuild | perf/performance | perf acq | fft | latest"));
   Serial.println(F("SERIAL    : monitor overview | monitor overview on/off | raw uart | db payload | db payload full"));
   Serial.println(F("SERIAL    : monitoring payload | monitoring payload full | db payload on/off | monitoring payload on/off | sync ticker on/off"));
   Serial.println(F("TEST CMD  : test once | test once reset | test once last | test once status | test once off | perf reset"));
@@ -4402,6 +4501,25 @@ void reinitSdFromCommand() {
   needFullRedraw = true;
 }
 
+void rebuildSyncQueueFromSdCommand() {
+  if (!sdOK) {
+    Serial.println(F("[SYNC] SD not ready. Coba command: sd reinit"));
+    return;
+  }
+
+  Serial.println(F("[SYNC] Rebuild queue dari /database.csv dimulai. Semua record SD akan di-upsert ulang ke MongoDB."));
+  uint32_t queued = rebuildSdSyncQueueFromDatabaseCsv();
+  Serial.print(F("[SYNC] Queue rebuilt dari SD. pending="));
+  Serial.println(queued);
+
+  if (queued > 0) {
+    if (requestSdSyncToMongoDB()) Serial.println(F("[SYNC] Upload queued. Karena recordId upsert, data yang sudah ada tidak akan duplikat."));
+    else Serial.println(F("[SYNC] Upload sudah antre/berjalan."));
+  }
+
+  printSdSyncStatus();
+}
+
 void resetSDDatabase() {
   if (!sdOK) { Serial.println(F("[DB] SD not ready.")); return; }
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
@@ -4453,6 +4571,7 @@ void processSerialCommand(String cmd) {
     else Serial.println(F("[SYNC] request sudah antre/masih berjalan. Serial dan display tetap responsif."));
     printSdSyncStatus();
   }
+  else if (cmd == "sync rebuild" || cmd == "sync sd" || cmd == "sync full" || cmd == "rebuild sync") rebuildSyncQueueFromSdCommand();
   else if (cmd == "monitor overview" || cmd == "serial monitor" || cmd == "monitor all" || cmd == "status all") printSerialMonitoringOverview();
   else if (cmd == "monitor overview on" || cmd == "serial monitor on" || cmd == "monitor all on") { serialLogEnabled = true; serialMonitorOverviewEnabled = true; Serial.println(F("[SERIAL] overview ON. Ringkasan RAW+AGG+MQTT+SYNC tampil berkala.")); }
   else if (cmd == "monitor overview off" || cmd == "serial monitor off" || cmd == "monitor all off") { serialMonitorOverviewEnabled = false; Serial.println(F("[SERIAL] overview OFF.")); }
