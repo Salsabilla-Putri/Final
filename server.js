@@ -1350,24 +1350,59 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis/database. Payload dapat berupa 1 record atau wrapper
-        // records[] dari SD queue ESP32. Semua record dimasukkan ke buffer MongoDB batch
-        // dengan upsert recordId agar retry SD tidak membuat duplikat.
+        // gen/data: jalur historis/database. ESP32 mengirim payload batch setiap 5 menit
+        // dengan bentuk { records: [...] }. Jangan simpan wrapper payload sebagai 1 dokumen;
+        // baca payload.records lalu tulis semua record ke MongoDB dengan insertMany.
         if (topic === 'gen/data') {
-            const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
+            const records = Array.isArray(parsed.records) ? parsed.records : [];
+            if (!records.length) {
+                console.warn('⚠️ gen/data ignored: payload.records[] is required');
+                return;
+            }
+
+            const generatorDocs = [];
+            const fftDocs = [];
+
             for (const record of records) {
                 if (!record || typeof record !== 'object') continue;
+
                 const snapshot = normalizeGeneratorPayload({
                     ...record,
                     deviceId: record.deviceId || parsed.deviceId,
-                    source: parsed.source || record.source,
+                    source: record.source || parsed.source,
                     timestamp: record.timestamp || parsed.timestamp
                 });
-                addGeneratorDataToBatch(snapshot);
+
+                generatorDocs.push(buildGeneratorDbDocument({
+                    ...snapshot,
+                    recordId: record.recordId,
+                    localSeq: record.localSeq
+                }));
 
                 const recordFftDoc = normalizeFftPayload(record, snapshot.deviceId);
-                if (recordFftDoc) addFftDataToBatch(recordFftDoc);
+                if (recordFftDoc) fftDocs.push(recordFftDoc);
             }
+
+            if (!generatorDocs.length && !fftDocs.length) {
+                console.warn(`⚠️ gen/data ignored: no valid records in payload.records[] | received=${records.length}`);
+                return;
+            }
+
+            if (!isDbReady()) {
+                await ensureDbReady();
+            }
+
+            if (generatorDocs.length > 0) {
+                await GeneratorData.insertMany(generatorDocs, { ordered: false });
+            }
+
+            if (fftDocs.length > 0) {
+                await FFTData.insertMany(fftDocs, { ordered: false });
+            }
+
+            console.log(
+                `💾 MQTT gen/data insertMany saved | received=${records.length} | generator=${generatorDocs.length} records | fft=${fftDocs.length} records`
+            );
         }
 
     } catch (error) {
