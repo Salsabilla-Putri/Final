@@ -1392,8 +1392,27 @@ mqttClient.on('message', async (topic, message) => {
                 await ensureDbReady();
             }
 
+            let insertedGenerator = 0;
+            let matchedGenerator = 0;
+
             if (generatorDocs.length > 0) {
-                await GeneratorData.insertMany(generatorDocs, { ordered: false });
+                const operations = generatorDocs.map((doc) => {
+                    if (doc.recordId) {
+                        return {
+                            updateOne: {
+                                filter: { recordId: doc.recordId },
+                                update: { $setOnInsert: doc },
+                                upsert: true
+                            }
+                        };
+                    }
+
+                    return { insertOne: { document: doc } };
+                });
+
+                const result = await GeneratorData.bulkWrite(operations, { ordered: false });
+                insertedGenerator = (result.insertedCount || 0) + (result.upsertedCount || 0);
+                matchedGenerator = result.matchedCount || 0;
             }
 
             if (fftDocs.length > 0) {
@@ -1401,7 +1420,7 @@ mqttClient.on('message', async (topic, message) => {
             }
 
             console.log(
-                `💾 MQTT gen/data insertMany saved | received=${records.length} | generator=${generatorDocs.length} records | fft=${fftDocs.length} records`
+                `💾 MQTT gen/data bulkWrite saved | received=${records.length} | generator=${generatorDocs.length} records | inserted=${insertedGenerator} | duplicate=${matchedGenerator} | fft=${fftDocs.length} records`
             );
         }
 
