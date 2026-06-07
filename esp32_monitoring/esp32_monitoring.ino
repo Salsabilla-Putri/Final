@@ -37,9 +37,7 @@
 #define ESP_ARDUINO_VERSION_MAJOR 2
 #endif
 
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  #include "esp_eap_client.h"
-#else
+#if ESP_ARDUINO_VERSION_MAJOR < 3
   #include "esp_wpa2.h"
 #endif
 
@@ -3318,7 +3316,12 @@ bool isEduroamCredentialConfigured() {
 void disableEduroamEnterpriseMode() {
 #if USE_EDUROAM_FIRST
   #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    esp_eap_client_disable();
+    // Arduino-ESP32 core 3.x menangani WPA2-Enterprise melalui overload
+    // WiFi.begin(..., WPA2_AUTH_PEAP, ...). Beberapa paket core 3.x tidak
+    // mengekspor API disable EAP, sehingga jangan panggil API itu
+    // langsung. WiFi.disconnect()/WiFi.mode(WIFI_OFF) di stopWiFiCleanly()
+    // dipakai untuk membersihkan state sebelum fallback WiFiManager.
+    return;
   #else
     esp_wifi_sta_wpa2_ent_disable();
   #endif
