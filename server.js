@@ -811,11 +811,11 @@ mqttClient.on('error', (error) => {
 // MONGODB BATCH SAVE
 // Realtime data tetap diterima setiap 1 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
-// setiap 10 menit atau saat buffer mencapai 300 record.
+// setiap 10 menit atau saat buffer mencapai 600 record.
 // ============================================================
 
 const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
-const DB_BATCH_MAX_RECORDS = parseInt(process.env.DB_BATCH_MAX_RECORDS || '300', 10);
+const DB_BATCH_MAX_RECORDS = parseInt(process.env.DB_BATCH_MAX_RECORDS || '600', 10);
 
 let generatorBatchBuffer = [];
 let fftBatchBuffer = [];
@@ -1381,7 +1381,7 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis/database. ESP32 mengirim payload batch setiap 2 menit
+        // gen/data: jalur historis/database. ESP32 mengirim payload batch setiap 10 menit
         // dengan bentuk { records: [...] }. Jangan simpan wrapper payload sebagai 1 dokumen;
         // baca payload.records lalu tulis semua record ke MongoDB dengan bulkWrite/upsert.
         if (topic === 'gen/data') {

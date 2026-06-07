@@ -155,7 +155,7 @@
 // ============================================================
 // Tujuan:
 // - Mencegah MQTT disconnected saat runtime.
-// - Mengirim MongoDB sebagai 1 payload batch setiap 2 menit.
+// - Mengirim MongoDB/history batch setiap 10 menit.
 // - Menjaga koneksi WiFi lebih stabil.
 // - Mengurangi risiko heap fragmentation akibat String JSON.
 
@@ -189,9 +189,9 @@
 
 // Cloud/MongoDB path:
 // Tidak memakai HTTP POST /api/ingest/batch.
-// Record parameter-only dikumpulkan di RAM dan dikirim sebagai 1 payload batch
+// Record parameter-only dikumpulkan di RAM dan dikirim sebagai batch/chunk
 // melalui MQTT_TOPIC = gen/data setiap 10 menit.
-// Backend harus subscribe topic gen/data dan melakukan insertMany(payload.records) ke MongoDB.
+// Backend harus subscribe topic gen/data dan melakukan bulkWrite(payload.records) ke MongoDB.
 
 // NTP WIB.
 const char* NTP_SERVER_1 = "pool.ntp.org";
@@ -295,19 +295,23 @@ const char* FFT_CSV_HEADER =
 // MONGODB BATCH CONFIG
 // ============================================================
 // Realtime dashboard tetap 1 detik.
-// MongoDB/history dikirim batch setiap 2 menit.
+// MongoDB/history dikirim batch setiap 10 menit.
 
-#define MONGODB_BATCH_INTERVAL_MS 120000UL   // 2 menit, lebih aman untuk heap ESP32 + eduroam
-#define MONGODB_BATCH_RECORDS     120        // 1 record/detik x 120 detik
+#define MONGODB_BATCH_INTERVAL_MS 600000UL   // 10 menit
+#define MONGODB_BATCH_RECORDS     600        // 1 record/detik x 600 detik
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
 // MQTT broker/cloud sering menolak payload besar. Agar data benar-benar masuk
-// ke server.js + MongoDB, 120 record per 2 menit dikirim sebagai 12 publish
-// kecil berisi 10 record. Total data tetap 120 record per siklus batch.
+// ke server.js + MongoDB, 600 record per 10 menit dikirim sebagai 60 publish
+// kecil berisi 10 record. Total data tetap 600 record per siklus batch.
 #define MONGODB_UPLOAD_CHUNK_RECORDS 10
 #define MONGODB_UPLOAD_CHUNK_DELAY_MS 250UL
 
+// TEST DATABASE: tetap tulis database.csv/fft.csv di SD walaupun WiFi/MQTT normal.
+// Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
+#define SD_SAVE_ONLINE_FOR_DB_TEST 1
+
 // SAFE MODE NOTE:
-// Dipilih 2 menit/120 record karena lebih aman untuk WPA2-Enterprise eduroam.
+// Dipilih 10 menit/600 record untuk pengujian pengiriman database jangka panjang.
 // Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
 // saat EAP handshake dan MQTT batch publish.
 
@@ -448,10 +452,10 @@ struct StorageRecord {
 // - Akuisisi parameter real-time: 0.1 s sampai 1.0 s
 // - Task sampling internal ESP32-2: 20 ms
 // - Record monitoring lokal/SD: 1 s
-// - Target database online versi aman: 2 menit
+// - Target database online: 10 menit
 #define SPEC_ACQ_MIN_INTERVAL_MS       100UL
 #define SPEC_ACQ_MAX_INTERVAL_MS       1000UL
-#define SPEC_DATABASE_TARGET_MS        120000UL
+#define SPEC_DATABASE_TARGET_MS        600000UL
 #define PERF_U32_MAX_VALUE             0xFFFFFFFFUL
 
 struct PerfMinMax {
@@ -697,7 +701,7 @@ uint64_t sdCachedUsedBytes = 0;
 uint64_t sdCachedFreeBytes = 0;
 unsigned long dbCachedAtMs = 0;
 
-// Statistik pengiriman buffer RAM MongoDB 2 menit.
+// Statistik pengiriman buffer RAM MongoDB 10 menit.
 // Tidak ada sinkronisasi SD -> MongoDB; MongoDB hanya memakai buffer RAM baru.
 uint32_t mongoUploadLastBatchRecords = 0;
 uint32_t mongoUploadLastPayloadBytes = 0;
@@ -2467,7 +2471,7 @@ bool addRecordToMongoDbBuffer(const StorageRecord &r) {
     accepted = true;
   } else {
     // Buffer MongoDB penuh. Kondisi ini biasanya terjadi saat jaringan/MQTT/server
-    // bermasalah sehingga batch 2 menit belum berhasil dikirim. Record berikutnya
+    // bermasalah sehingga batch 10 menit belum berhasil dikirim. Record berikutnya
     // harus dicadangkan ke SD agar tidak hilang.
     mongoDbBufferOverflowCount++;
     accepted = false;
@@ -2615,7 +2619,7 @@ bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
     return false;
   }
 
-  // Karena batch 120 record lebih ringan untuk heap ESP32, jangan pakai mqtt.publish()
+  // Karena payload database dikirim streaming per chunk kecil, jangan pakai mqtt.publish()
   // yang bergantung pada buffer internal PubSubClient. Gunakan streaming:
   // beginPublish() -> write() per chunk -> endPublish().
   if (ESP.getFreeHeap() < HEAP_MIN_FREE_BYTES || ESP.getMaxAllocHeap() < (uint32_t)MONGO_BATCH_STREAM_CHUNK_BYTES) {
@@ -2694,7 +2698,7 @@ bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
 void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi:
-  // - mengirim total 120 record setiap 2 menit,
+  // - mengirim total 600 record setiap 10 menit,
   // - default MQTT dipecah 10 record/publish agar tidak ditolak broker/cloud,
   // - tiap publish berisi payload.records[],
   // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
@@ -2791,7 +2795,7 @@ void sendMongoDbBufferToMongoDB() {
     }
 
     Serial.println();
-    Serial.println(F("╔════════════ MONGO MQTT 2-MIN CHUNK UPLOAD ════════════╗"));
+    Serial.println(F("╔════════════ MONGO MQTT 10-MIN CHUNK UPLOAD ════════════╗"));
     Serial.print(F("[MONGO-MQTT] Topic          : "));
     Serial.println(MQTT_TOPIC);
     Serial.print(F("[MONGO-MQTT] Chunk          : "));
@@ -3272,16 +3276,15 @@ String buildFftCsvLine(const StorageRecord &r) {
 
 
 void saveSnapshotToSD() {
-  // Fungsi ini tetap dipanggil setiap 1 detik, tetapi SD hanya ditulis jika:
+  // Fungsi ini tetap dipanggil setiap 1 detik. Untuk pengujian database,
+  // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke database.csv/fft.csv
+  // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap dikirim ke server.js
+  // lewat gen/data setiap 10 menit.
+  //
+  // Untuk operasi harian, set SD_SAVE_ONLINE_FOR_DB_TEST=0 agar SD hanya ditulis jika:
   // 1) WiFi/MQTT/server bermasalah,
   // 2) buffer RAM MongoDB penuh/tidak bisa menerima record,
   // 3) test-once mode sedang aktif.
-  //
-  // Saat koneksi normal:
-  // - record masuk RAM buffer MongoDB,
-  // - realtime publish tetap ke gen/realtime tiap 1 detik,
-  // - database MongoDB/history dikirim batch ke gen/data tiap 2 menit,
-  // - SD tidak ditulis agar umur SD lebih panjang dan tidak ada duplikasi lokal.
 
   if (testOnceMode && (!testOnceAggDone || testOnceSdDone)) return;
 
@@ -3293,7 +3296,7 @@ void saveSnapshotToSD() {
 
   uint32_t saveStart = micros();
 
-  bool backupNeeded = testOnceMode;
+  bool backupNeeded = testOnceMode || (SD_SAVE_ONLINE_FOR_DB_TEST == 1);
   uint8_t validRecords = 0;
 
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
@@ -3391,7 +3394,9 @@ void saveSnapshotToSD() {
     sdSaveSuccessCount++;
 
     if (serialDatabasePayloadEnabled && hasLastDatabasePayloadCache) {
-      Serial.println(F("[SD-BACKUP] Record disimpan karena jaringan/MQTT/server/buffer bermasalah."));
+      Serial.println(SD_SAVE_ONLINE_FOR_DB_TEST == 1
+        ? F("[SD-BACKUP] TEST DB: record tetap disimpan walaupun jaringan/MQTT normal.")
+        : F("[SD-BACKUP] Record disimpan karena jaringan/MQTT/server/buffer bermasalah."));
     }
 
     if (testOnceMode && !testOnceSdDone) {
@@ -3400,7 +3405,7 @@ void saveSnapshotToSD() {
       Serial.println(F("╔════════════ TEST-ONCE LOCAL SD BACKUP ════════════╗"));
       Serial.printf("[TEST] 1 record backup tersimpan ke %s dan FFT ke %s. lastRow=%lu bytes\n",
                     DB_FILE, FFT_FILE, (unsigned long)dbLastLineBytes);
-      Serial.println(F("[TEST] Pada mode normal, SD hanya ditulis jika WiFi/MQTT/server bermasalah."));
+      Serial.println(F("[TEST] SD_SAVE_ONLINE_FOR_DB_TEST=1: SD tetap ditulis walaupun WiFi/MQTT normal."));
       Serial.println(F("╚═══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -4773,7 +4778,7 @@ void printPaperValidationReport() {
   bool mqttReliabilityPass = (mqttReliabilityPct >= 99.0f || (mqttOk == 0 && mqttFail == 0));
   bool packetLossPass = (uartLossPct < 1.0f);
   bool deadlinePass = (sensorMissedDeadlines == 0);
-  bool mongoBatchPass = (MONGODB_BATCH_INTERVAL_MS == 120000UL);
+  bool mongoBatchPass = (MONGODB_BATCH_INTERVAL_MS == SPEC_DATABASE_TARGET_MS);
   bool localInterfacePass = (perfAvgStat(acqMon.tftDrawUs) > 0.0f || lastTftDrawMs > 0);
 
   Serial.println();
@@ -5126,11 +5131,11 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ Deadline SensorTask 20 ms   : ")); Serial.println(passFailText(deadlinePass));
   Serial.print  (F("║ Kualitas data UART          : ")); Serial.println(passFailText(qualityPass));
   Serial.print  (F("║ Penyimpanan lokal 7 hari    : ")); Serial.println(passFailText(localSavePass && sdOK));
-  Serial.print  (F("║ Interval database 2 menit   : ")); Serial.println(passFailText(databaseTargetPass));
+  Serial.print  (F("║ Interval database 10 menit  : ")); Serial.println(passFailText(databaseTargetPass));
   Serial.print  (F("║ OVERALL REAL-TIME MONITOR   : ")); Serial.println(passFailText(realtimePass));
 
   if (!databaseTargetPass) {
-    Serial.println(F("║ CATATAN: MONGODB_BATCH_INTERVAL_MS belum 2 menit. Cek nilai macro timing.        ║"));
+    Serial.println(F("║ CATATAN: MONGODB_BATCH_INTERVAL_MS belum 10 menit. Cek nilai macro timing.       ║"));
   }
 
   Serial.println(F("╚═════════════════════════════════════════════════════════════════════╝"));
@@ -5163,9 +5168,9 @@ void printPerformanceReport() {
   const uint32_t cloudRecordBytes = getMongoRecordBytesNoFft();
   const uint32_t cloudAvgSentRecordBytes = getMongoAvgSentRecordBytesNoFft();
   const float cloudBytesPerSec = (float)cloudAvgSentRecordBytes * (1000.0f / (float)localSaveInterval);
-  const float cloudBatchCapacityPer2Min = (float)MONGODB_BATCH_RECORDS;
-  const float cloudBatchGeneratedPer10Min = (600000.0f / (float)localSaveInterval) * STORAGE_BATCH_SIZE;
-  const float cloudBatchPayloadEstimate = (float)cloudAvgSentRecordBytes * min(cloudBatchGeneratedPer10Min, cloudBatchCapacityPer2Min);
+  const float cloudBatchCapacityPer10Min = (float)MONGODB_BATCH_RECORDS;
+  const float cloudBatchGeneratedPer10Min = ((float)MONGODB_BATCH_INTERVAL_MS / (float)localSaveInterval) * STORAGE_BATCH_SIZE;
+  const float cloudBatchPayloadEstimate = (float)cloudAvgSentRecordBytes * min(cloudBatchGeneratedPer10Min, cloudBatchCapacityPer10Min);
   const uint64_t cloudPayload10y = estimateMongoPayloadBytesNoFft10Years(cloudAvgSentRecordBytes);
   const uint64_t cloudStorage10y = estimateMongoStorageBytesNoFft10Years(cloudAvgSentRecordBytes);
 
@@ -5522,7 +5527,9 @@ void setup() {
   // ============================================================
   // STRING RESERVE TO REDUCE HEAP FRAGMENTATION
   // ============================================================
-  for (uint16_t i = 0; i < MONGODB_BUFFER_RECORDS; i++) {
+  // Jangan reserve seluruh 600 slot karena akan memakai heap besar di awal.
+  // Reserve hanya sebesar 1 chunk publish; slot lain dialokasi saat terisi.
+  for (uint16_t i = 0; i < MONGODB_UPLOAD_CHUNK_RECORDS && i < MONGODB_BUFFER_RECORDS; i++) {
     mongoDbBuffer[i].reserve(384);
   }
 
