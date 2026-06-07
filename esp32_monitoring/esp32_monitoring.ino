@@ -300,6 +300,11 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_BATCH_INTERVAL_MS 120000UL   // 2 menit, lebih aman untuk heap ESP32 + eduroam
 #define MONGODB_BATCH_RECORDS     120        // 1 record/detik x 120 detik
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
+// MQTT broker/cloud sering menolak payload besar. Agar data benar-benar masuk
+// ke server.js + MongoDB, 120 record per 2 menit dikirim sebagai 12 publish
+// kecil berisi 10 record. Total data tetap 120 record per siklus batch.
+#define MONGODB_UPLOAD_CHUNK_RECORDS 10
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 250UL
 
 // SAFE MODE NOTE:
 // Dipilih 2 menit/120 record karena lebih aman untuk WPA2-Enterprise eduroam.
@@ -2505,13 +2510,14 @@ void clearMongoDbBufferNoLock(uint16_t countToClear) {
   mongoDbBufferCount -= countToClear;
 }
 
-uint16_t buildMongoDbBufferPayload(String &payload) {
+uint16_t buildMongoDbBufferPayload(String &payload, uint16_t maxRecords = MONGODB_BATCH_RECORDS, uint16_t chunkIndex = 0) {
   payload = "";
 
   if (mongoBufferMutex && xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(150)) != pdTRUE) return 0;
 
   uint16_t recordsCount = mongoDbBufferCount;
   if (recordsCount > MONGODB_BATCH_RECORDS) recordsCount = MONGODB_BATCH_RECORDS;
+  if (recordsCount > maxRecords) recordsCount = maxRecords;
 
   // Estimasi kasar: 1 record parameter-only ±250-360 byte.
   // Payload akhir berisi metadata batch + array records.
@@ -2525,6 +2531,9 @@ uint16_t buildMongoDbBufferPayload(String &payload) {
   payload += "\"batchIntervalMs\":" + String(MONGODB_BATCH_INTERVAL_MS) + ",";
   payload += "\"targetBatchRecords\":" + String(MONGODB_BATCH_RECORDS) + ",";
   payload += "\"recordCount\":" + String(recordsCount) + ",";
+  payload += "\"chunkIndex\":" + String(chunkIndex) + ",";
+  payload += "\"chunkMaxRecords\":" + String(maxRecords) + ",";
+  payload += "\"bufferRecordsBeforeChunk\":" + String(mongoDbBufferCount) + ",";
   payload += "\"sentAt\":\"" + getIsoTimestampWIBms() + "\",";
   payload += "\"records\":[";
   for (uint16_t i = 0; i < recordsCount; i++) {
@@ -2684,11 +2693,12 @@ bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
 
 void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
-  // Implementasi sekarang:
-  // - 1 payload JSON batch dikirim ke MQTT_TOPIC = gen/data,
-  // - isi payload: metadata + array "records" berisi ±120 data parameter-only,
-  // - realtime dashboard tetap dikirim terpisah ke MQTT_REALTIME_TOPIC = gen/realtime,
-  // - sisa buffer tidak dihapus jika publish batch gagal.
+  // Implementasi:
+  // - mengirim total 120 record setiap 2 menit,
+  // - default MQTT dipecah 10 record/publish agar tidak ditolak broker/cloud,
+  // - tiap publish berisi payload.records[],
+  // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
+  // - record yang gagal tetap disimpan untuk retry berikutnya.
 
   mongoUploadLastAttemptMs = millis();
   mongoUploadLastAckedRecords = 0;
@@ -2732,95 +2742,134 @@ void sendMongoDbBufferToMongoDB() {
     return;
   }
 
-  String batchPayload;
-  uint16_t recordsCount = buildMongoDbBufferPayload(batchPayload);
-
-  if (recordsCount == 0) {
-    return;
+  uint16_t queuedAtStart = 0;
+  if (mongoBufferMutex != NULL) {
+    if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(150)) == pdTRUE) {
+      queuedAtStart = mongoDbBufferCount;
+      xSemaphoreGive(mongoBufferMutex);
+    }
+  } else {
+    queuedAtStart = mongoDbBufferCount;
   }
 
-  mongoUploadLastBatchRecords = recordsCount;
-  mongoUploadLastRunChunks = 1;
-  mongoUploadLastRunRecords = recordsCount;
-  mongoUploadLastPayloadBytes = batchPayload.length();
+  if (queuedAtStart == 0) return;
+  if (queuedAtStart > MONGODB_BATCH_RECORDS) queuedAtStart = MONGODB_BATCH_RECORDS;
 
-  mongoDbLastPayloadBytes = batchPayload.length();
+  mongoUploadLastBatchRecords = queuedAtStart;
+  mongoUploadLastRunRecords = queuedAtStart;
 
-  if ((uint32_t)batchPayload.length() > MONGO_BATCH_MAX_PAYLOAD_BYTES) {
-    mongoUploadFailCount++;
-    mongoUploadLastHttpCode = -99;
+  uint16_t totalSentRecords = 0;
+  uint16_t chunkIndex = 0;
+  while (totalSentRecords < queuedAtStart) {
+    uint16_t remainingTarget = queuedAtStart - totalSentRecords;
+    uint16_t chunkLimit = remainingTarget > MONGODB_UPLOAD_CHUNK_RECORDS
+                          ? MONGODB_UPLOAD_CHUNK_RECORDS
+                          : remainingTarget;
+
+    String batchPayload;
+    uint16_t recordsCount = buildMongoDbBufferPayload(batchPayload, chunkLimit, chunkIndex);
+
+    if (recordsCount == 0) {
+      break;
+    }
+
+    mongoUploadLastRunChunks++;
+    mongoUploadLastPayloadBytes += batchPayload.length();
+    mongoDbLastPayloadBytes += batchPayload.length();
+
+    if ((uint32_t)batchPayload.length() > MONGO_BATCH_MAX_PAYLOAD_BYTES) {
+      mongoUploadLastHttpCode = -99;
+      Serial.println();
+      Serial.println(F("╔════════════ MONGO MQTT BATCH ERROR ════════════╗"));
+      Serial.print(F("[MONGO-MQTT] Chunk payload bytes : "));
+      Serial.println(batchPayload.length());
+      Serial.print(F("[MONGO-MQTT] Max allowed         : "));
+      Serial.println(MONGO_BATCH_MAX_PAYLOAD_BYTES);
+      Serial.println(F("[MONGO-MQTT] Solusi: turunkan MONGODB_UPLOAD_CHUNK_RECORDS atau kecilkan field JSON."));
+      Serial.println(F("╚═════════════════════════════════════════════════╝"));
+      break;
+    }
 
     Serial.println();
-    Serial.println(F("╔════════════ MONGO MQTT BATCH ERROR ════════════╗"));
-    Serial.print(F("[MONGO-MQTT] Payload bytes : "));
+    Serial.println(F("╔════════════ MONGO MQTT 2-MIN CHUNK UPLOAD ════════════╗"));
+    Serial.print(F("[MONGO-MQTT] Topic          : "));
+    Serial.println(MQTT_TOPIC);
+    Serial.print(F("[MONGO-MQTT] Chunk          : "));
+    Serial.print(chunkIndex + 1);
+    Serial.print(F(" | records="));
+    Serial.println(recordsCount);
+    Serial.print(F("[MONGO-MQTT] Total target   : "));
+    Serial.println(queuedAtStart);
+    Serial.print(F("[MONGO-MQTT] Payload bytes  : "));
     Serial.println(batchPayload.length());
-    Serial.print(F("[MONGO-MQTT] Max allowed   : "));
-    Serial.println(MONGO_BATCH_MAX_PAYLOAD_BYTES);
-    Serial.println(F("[MONGO-MQTT] Solusi: kecilkan field JSON atau naikkan MONGO_BATCH_MAX_PAYLOAD_BYTES jika heap cukup."));
-    Serial.println(F("╚═════════════════════════════════════════════════╝"));
-    return;
-  }
+    Serial.print(F("[MONGO-MQTT] Interval       : "));
+    Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL);
+    Serial.println(F(" s"));
+    Serial.print(F("[MONGO-MQTT] RSSI           : "));
+    Serial.print(WiFi.RSSI());
+    Serial.println(F(" dBm"));
+    Serial.print(F("[MONGO-MQTT] Free heap      : "));
+    Serial.println(ESP.getFreeHeap());
+    Serial.print(F("[MONGO-MQTT] Max alloc heap : "));
+    Serial.println(ESP.getMaxAllocHeap());
+    Serial.println(F("╚════════════════════════════════════════════════════════╝"));
 
-  Serial.println();
-  Serial.println(F("╔════════════ MONGO MQTT 10-MIN BATCH UPLOAD ════════════╗"));
-  Serial.print(F("[MONGO-MQTT] Topic          : "));
-  Serial.println(MQTT_TOPIC);
-  Serial.print(F("[MONGO-MQTT] Records/batch  : "));
-  Serial.println(recordsCount);
-  Serial.print(F("[MONGO-MQTT] Payload bytes  : "));
-  Serial.println(batchPayload.length());
-  Serial.print(F("[MONGO-MQTT] Interval       : "));
-  Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL);
-  Serial.println(F(" s"));
-  Serial.print(F("[MONGO-MQTT] RSSI           : "));
-  Serial.print(WiFi.RSSI());
-  Serial.println(F(" dBm"));
-  Serial.print(F("[MONGO-MQTT] Free heap      : "));
-  Serial.println(ESP.getFreeHeap());
-  Serial.print(F("[MONGO-MQTT] Max alloc heap : "));
-  Serial.println(ESP.getMaxAllocHeap());
-  Serial.println(F("╚════════════════════════════════════════════════════════╝"));
+    bool ok = publishMongoBufferBatchToMqtt(batchPayload);
 
-  bool ok = publishMongoBufferBatchToMqtt(batchPayload);
+    if (!ok) {
+      mongoUploadFailCount++;
+      mongoUploadLastMqttOk = false;
+      Serial.print(F("[MONGO-MQTT] Chunk failed. Remaining buffer kept. state/code="));
+      Serial.println(mongoUploadLastHttpCode);
+      break;
+    }
 
-  if (ok) {
     if (mongoBufferMutex != NULL) {
       if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
         clearMongoDbBufferNoLock(recordsCount);
         xSemaphoreGive(mongoBufferMutex);
       } else {
-        // Publish sudah berhasil, tetapi buffer gagal dikunci untuk dibersihkan.
-        // Ini jarang terjadi; batch berikutnya mungkin mengirim ulang data yang sama.
         mongoUploadFailCount++;
         mongoUploadLastHttpCode = -204;
+        mongoUploadLastMqttOk = false;
         Serial.println(F("[MONGO-MQTT] WARNING: publish OK, but failed to lock buffer for clear."));
-        return;
+        break;
       }
     } else {
       clearMongoDbBufferNoLock(recordsCount);
     }
 
+    totalSentRecords += recordsCount;
     mongoUploadSuccessRecords += recordsCount;
-    mongoUploadLastAckedRecords = recordsCount;
-    mongoUploadLastAckResponseRecords = recordsCount;
+    mongoUploadLastAckedRecords += recordsCount;
+    mongoUploadLastAckResponseRecords += recordsCount;
     mongoUploadLastMqttOk = true;
 
-    mongoDbLastSentRecords = recordsCount;
+    mongoDbLastSentRecords += recordsCount;
     mongoDbTotalSentRecords += recordsCount;
-    mongoDbLastAckResponseRecords = recordsCount;
+    mongoDbLastAckResponseRecords += recordsCount;
     mongoDbLastSendMs = millis();
 
-    Serial.print(F("[MONGO-MQTT] Batch sent OK: "));
+    Serial.print(F("[MONGO-MQTT] Chunk sent OK: "));
     Serial.print(recordsCount);
-    Serial.print(F(" records to "));
-    Serial.println(MQTT_TOPIC);
-  } else {
-    mongoUploadFailCount++;
-    mongoUploadLastMqttOk = false;
+    Serial.print(F(" records. Total sent this cycle="));
+    Serial.print(totalSentRecords);
+    Serial.print(F(" / "));
+    Serial.println(queuedAtStart);
 
-    Serial.print(F("[MONGO-MQTT] Batch failed. Buffer kept. state/code="));
-    Serial.println(mongoUploadLastHttpCode);
+    chunkIndex++;
+    mqtt.loop();
+    vTaskDelay(pdMS_TO_TICKS(MONGODB_UPLOAD_CHUNK_DELAY_MS));
   }
+
+  if (totalSentRecords > 0) {
+    Serial.print(F("[MONGO-MQTT] Upload cycle sent "));
+    Serial.print(totalSentRecords);
+    Serial.print(F(" / "));
+    Serial.print(queuedAtStart);
+    Serial.println(F(" records."));
+  }
+
 }
 // ============================================================
 // MONGODB BUFFER TASK
