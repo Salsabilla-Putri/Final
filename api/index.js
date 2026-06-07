@@ -624,32 +624,48 @@ app.post('/api/ingest/batch', async (req, res) => {
         }
 
         const maxBatch = Math.min(records.length, 1000);
-        const savedIds = [];
-        let lastSaved = null;
+        const source = body.source || 'esp32_sd_backup_10min';
+        const docs = [];
 
         for (let i = 0; i < maxBatch; i++) {
             const record = records[i];
             if (!record || typeof record !== 'object') continue;
 
-            const saved = await persistGeneratorSnapshot(
-                {
-                    ...record,
-                    deviceId: record.deviceId || body.deviceId,
-                    source: body.source || record.source,
-                    timestamp: record.timestamp || body.timestamp
-                },
-                { source: body.source || 'esp32_sd_backup_10min' }
-            );
+            const normalized = normalizeGeneratorSnapshot({
+                ...record,
+                deviceId: record.deviceId || body.deviceId,
+                source: record.source || body.source,
+                timestamp: record.timestamp || body.timestamp
+            });
 
-            if (saved) {
-                savedIds.push(saved._id);
-                lastSaved = saved;
-            }
+            if (!normalized) continue;
+            docs.push({ ...normalized, source });
         }
 
-        if (!savedIds.length) {
+        if (!docs.length) {
             return res.status(400).json({ success: false, error: 'Tidak ada record valid untuk disimpan.' });
         }
+
+        const operations = docs.map((doc) => {
+            if (doc.recordId) {
+                return {
+                    updateOne: {
+                        filter: { recordId: doc.recordId },
+                        update: { $setOnInsert: doc },
+                        upsert: true
+                    }
+                };
+            }
+
+            return { insertOne: { document: doc } };
+        });
+
+        const result = await GeneratorData.bulkWrite(operations, { ordered: false });
+        const lastSaved = docs[docs.length - 1];
+        latestData = { ...latestData, ...lastSaved };
+
+        const inserted = (result.insertedCount || 0) + (result.upsertedCount || 0);
+        const matchedExisting = result.matchedCount || 0;
 
         try {
             await syncActiveTimeHistory(latestData);
@@ -660,12 +676,15 @@ app.post('/api/ingest/batch', async (req, res) => {
 
         res.status(201).json({
             success: true,
-            ackedRecords: savedIds.length,
-            accepted: savedIds.length,
+            ackedRecords: docs.length,
+            accepted: docs.length,
             receivedRecords: records.length,
             processedRecords: maxBatch,
             truncated: records.length > maxBatch,
-            lastId: lastSaved?._id || null,
+            inserted,
+            matchedExisting,
+            duplicate: matchedExisting,
+            lastRecordId: lastSaved?.recordId || null,
             lastTimestamp: latestData.timestamp
         });
     } catch (err) {
