@@ -170,7 +170,8 @@
 #define WIFI_RECONNECT_MIN_MS        10000UL
 #define WIFI_RECONNECT_MAX_MS        60000UL
 #define WIFI_CONNECT_POLL_MS         500UL
-#define WIFI_EDUROAM_MAX_ATTEMPTS    2
+#define WIFI_CONNECT_TERMINAL_FAIL_MS 1500UL
+#define WIFI_EDUROAM_MAX_ATTEMPTS    1
 
 // Jika RSSI lebih lemah dari nilai ini, batch MongoDB ditunda.
 // Realtime tetap bisa jalan, tetapi history tidak dipaksa upload.
@@ -3443,12 +3444,19 @@ const char* wifiModeText() {
   return "OFFLINE";
 }
 
+bool isTerminalWiFiFailure(wl_status_t st) {
+  return st == WL_NO_SSID_AVAIL ||
+         st == WL_CONNECT_FAILED ||
+         st == WL_CONNECTION_LOST;
+}
+
 bool waitForWiFiConnection(const __FlashStringHelper* label, unsigned long timeoutMs) {
   unsigned long startAttempt = millis();
   wl_status_t lastStatus = (wl_status_t)255;
 
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < timeoutMs) {
     wl_status_t st = WiFi.status();
+    unsigned long elapsedMs = millis() - startAttempt;
 
     if (st != lastStatus) {
       Serial.print(label);
@@ -3457,6 +3465,18 @@ bool waitForWiFiConnection(const __FlashStringHelper* label, unsigned long timeo
       Serial.print(F(" / "));
       Serial.println(wifiStatusText(st));
       lastStatus = st;
+    }
+
+    // Untuk eduroam, status WL_CONNECTION_LOST / WL_CONNECT_FAILED biasanya
+    // berarti autentikasi enterprise gagal. Jangan tunggu timeout penuh dan
+    // jangan ulangi eduroam berkali-kali; langsung fallback ke AP WiFiManager.
+    if (elapsedMs >= WIFI_CONNECT_TERMINAL_FAIL_MS && isTerminalWiFiFailure(st)) {
+      Serial.print(label);
+      Serial.print(F(" terminal failure, fallback now: "));
+      Serial.print((int)st);
+      Serial.print(F(" / "));
+      Serial.println(wifiStatusText(st));
+      break;
     }
 
     Serial.print('.');
@@ -3669,7 +3689,7 @@ void setupWiFiManager() {
     }
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal. Masuk fallback AP WiFiManager."));
+  Serial.println(F("[WIFI] Eduroam gagal/ditolak. Tidak mengulang eduroam; masuk fallback AP WiFiManager."));
 #else
   Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung membuka fallback AP WiFiManager."));
 #endif
