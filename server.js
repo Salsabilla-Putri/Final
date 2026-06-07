@@ -538,6 +538,29 @@ const mqttClient = mqtt
     })
     : createDisabledMqttClient();
 
+const mqttIngestStats = {
+    connectedAt: null,
+    lastMessageAt: null,
+    lastTopic: null,
+    lastPayloadBytes: 0,
+    lastRecordCount: 0,
+    receivedMessages: 0,
+    invalidJsonMessages: 0,
+    ignoredMessages: 0,
+    savedMessages: 0,
+    insertedRecords: 0,
+    duplicateRecords: 0,
+    lastInsertedRecords: 0,
+    lastDuplicateRecords: 0,
+    lastErrorAt: null,
+    lastError: null
+};
+
+function updateMqttIngestError(error) {
+    mqttIngestStats.lastErrorAt = new Date();
+    mqttIngestStats.lastError = error?.message || String(error);
+}
+
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
@@ -763,7 +786,8 @@ setInterval(async () => {
 }, 10000);
 
 mqttClient.on('connect', () => {
-    console.log('✅ Connected to MQTT Broker (shiftr.io)');
+    mqttIngestStats.connectedAt = new Date();
+    console.log(`✅ Connected to MQTT Broker: ${process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883'}`);
     mqttClient.subscribe('gen/realtime', (err) => {
         if (err) console.error('❌ Subscribe error (gen/realtime):', err.message);
         else console.log('📡 Subscribed to gen/realtime');
@@ -1314,12 +1338,19 @@ mqttClient.on('message', async (topic, message) => {
         if (topic !== 'gen/realtime' && topic !== 'gen/data') return;
 
         const raw = message.toString();
+        mqttIngestStats.receivedMessages++;
+        mqttIngestStats.lastMessageAt = new Date();
+        mqttIngestStats.lastTopic = topic;
+        mqttIngestStats.lastPayloadBytes = Buffer.byteLength(raw);
+
         let parsed;
 
         try {
             parsed = JSON.parse(raw);
         } catch (parseError) {
-            console.warn(`⚠️ Invalid JSON on ${topic}:`, raw);
+            mqttIngestStats.invalidJsonMessages++;
+            updateMqttIngestError(parseError);
+            console.warn(`⚠️ Invalid JSON on ${topic}:`, raw.slice(0, 500));
             return;
         }
 
@@ -1350,12 +1381,16 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis/database. ESP32 mengirim payload batch setiap 5 menit
+        // gen/data: jalur historis/database. ESP32 mengirim payload batch setiap 2 menit
         // dengan bentuk { records: [...] }. Jangan simpan wrapper payload sebagai 1 dokumen;
-        // baca payload.records lalu tulis semua record ke MongoDB dengan insertMany.
+        // baca payload.records lalu tulis semua record ke MongoDB dengan bulkWrite/upsert.
         if (topic === 'gen/data') {
             const records = Array.isArray(parsed.records) ? parsed.records : [];
+            mqttIngestStats.lastRecordCount = records.length;
+            console.log(`📥 MQTT gen/data received | bytes=${mqttIngestStats.lastPayloadBytes} | records=${records.length}`);
+
             if (!records.length) {
+                mqttIngestStats.ignoredMessages++;
                 console.warn('⚠️ gen/data ignored: payload.records[] is required');
                 return;
             }
@@ -1384,6 +1419,7 @@ mqttClient.on('message', async (topic, message) => {
             }
 
             if (!generatorDocs.length && !fftDocs.length) {
+                mqttIngestStats.ignoredMessages++;
                 console.warn(`⚠️ gen/data ignored: no valid records in payload.records[] | received=${records.length}`);
                 return;
             }
@@ -1413,6 +1449,13 @@ mqttClient.on('message', async (topic, message) => {
                 const result = await GeneratorData.bulkWrite(operations, { ordered: false });
                 insertedGenerator = (result.insertedCount || 0) + (result.upsertedCount || 0);
                 matchedGenerator = result.matchedCount || 0;
+                mqttIngestStats.savedMessages++;
+                mqttIngestStats.insertedRecords += insertedGenerator;
+                mqttIngestStats.duplicateRecords += matchedGenerator;
+                mqttIngestStats.lastInsertedRecords = insertedGenerator;
+                mqttIngestStats.lastDuplicateRecords = matchedGenerator;
+                mqttIngestStats.lastError = null;
+                mqttIngestStats.lastErrorAt = null;
             }
 
             if (fftDocs.length > 0) {
@@ -1425,8 +1468,21 @@ mqttClient.on('message', async (topic, message) => {
         }
 
     } catch (error) {
+        updateMqttIngestError(error);
         console.error('❌ MQTT Message Error:', error);
     }
+});
+
+app.get('/api/mqtt-ingest/status', (req, res) => {
+    res.json({
+        success: true,
+        mqttAvailable: Boolean(mqtt),
+        mqttConnected: typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false,
+        broker: process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883',
+        subscribedTopics: ['gen/realtime', 'gen/data'],
+        dbReady: isDbReady(),
+        stats: mqttIngestStats
+    });
 });
 
 // --- API ENDPOINTS ---

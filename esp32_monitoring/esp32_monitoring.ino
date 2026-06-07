@@ -300,11 +300,11 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_BATCH_INTERVAL_MS 120000UL   // 2 menit, lebih aman untuk heap ESP32 + eduroam
 #define MONGODB_BATCH_RECORDS     120        // 1 record/detik x 120 detik
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
-// Target default: 120 record dikirim langsung dalam 1 publish MQTT.
-// Jika broker/WiFi/heap tidak kuat untuk payload besar, turunkan nilai ini
-// misalnya ke 10 agar 120 record dipecah menjadi 12 publish kecil.
-#define MONGODB_UPLOAD_CHUNK_RECORDS MONGODB_BATCH_RECORDS
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 0UL
+// MQTT broker/cloud sering menolak payload besar. Agar data benar-benar masuk
+// ke server.js + MongoDB, 120 record per 2 menit dikirim sebagai 12 publish
+// kecil berisi 10 record. Total data tetap 120 record per siklus batch.
+#define MONGODB_UPLOAD_CHUNK_RECORDS 10
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 250UL
 
 // SAFE MODE NOTE:
 // Dipilih 2 menit/120 record karena lebih aman untuk WPA2-Enterprise eduroam.
@@ -2694,8 +2694,8 @@ bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
 void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi:
-  // - default mengirim 120 record langsung dalam 1 publish MQTT setiap 2 menit,
-  // - MONGODB_UPLOAD_CHUNK_RECORDS bisa diturunkan jika broker/WiFi/heap tidak kuat,
+  // - mengirim total 120 record setiap 2 menit,
+  // - default MQTT dipecah 10 record/publish agar tidak ditolak broker/cloud,
   // - tiap publish berisi payload.records[],
   // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
   // - record yang gagal tetap disimpan untuk retry berikutnya.
