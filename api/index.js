@@ -454,50 +454,88 @@ async function syncActiveTimeHistory(data) {
 }
 
 function initMQTT() {
-    if (!process.env.MQTT_BROKER) return;
+    const brokerUrl = process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883';
+
     // FIX: Jangan init MQTT jika broker masih placeholder
-    if (process.env.MQTT_BROKER.includes('<host>')) {
+    if (brokerUrl.includes('<host>')) {
         console.warn('MQTT_BROKER masih placeholder, skip MQTT init');
         return;
     }
+
     try {
-        const mqttClient = mqtt.connect(process.env.MQTT_BROKER, {
-            username: process.env.MQTT_USERNAME,
-            password: process.env.MQTT_PASSWORD,
-            connectTimeout: 5000,
-            reconnectPeriod: 0
+        const mqttClient = mqtt.connect(brokerUrl, {
+            clientId: 'api-' + Math.random().toString(16).slice(2, 8),
+            username: process.env.MQTT_USERNAME || 'generatorta20',
+            password: process.env.MQTT_PASSWORD || 'TA252601020',
+            keepalive: 60,
+            connectTimeout: 10000,
+            reconnectPeriod: 3000
         });
+
         const persistLatestSnapshot = async (rawSnapshot, eventTimestamp = new Date()) => {
             const nowMs = eventTimestamp.getTime();
             if (nowMs - lastPersistAt < 1000 && !Array.isArray(rawSnapshot?.records)) return;
             lastPersistAt = nowMs;
+
             try {
+                await connectDB();
+
                 const records = Array.isArray(rawSnapshot?.records) ? rawSnapshot.records : [rawSnapshot];
-                let savedCount = 0;
+                const source = rawSnapshot?.source || 'mqtt_gen_data';
+                const docs = [];
+
                 for (const record of records) {
-                    const saved = await persistGeneratorSnapshot(
-                        {
-                            ...record,
-                            deviceId: record?.deviceId || rawSnapshot?.deviceId,
-                            source: rawSnapshot?.source || record?.source,
-                            timestamp: record?.timestamp || rawSnapshot?.timestamp
-                        },
-                        { source: rawSnapshot?.source || 'mqtt_gen_data' }
-                    );
-                    if (saved) savedCount++;
+                    if (!record || typeof record !== 'object') continue;
+
+                    const normalized = normalizeGeneratorSnapshot({
+                        ...record,
+                        deviceId: record.deviceId || rawSnapshot?.deviceId,
+                        source: record.source || source,
+                        timestamp: record.timestamp || rawSnapshot?.timestamp
+                    });
+
+                    if (normalized) docs.push({ ...normalized, source });
                 }
-                if (savedCount > 0) {
-                    await syncActiveTimeHistory(latestData);
-                    await checkAndSaveAlerts(latestData);
+
+                if (!docs.length) {
+                    console.warn(`⚠️ MQTT gen/data ignored: no valid records | received=${records.length}`);
+                    return;
                 }
+
+                const operations = docs.map((doc) => {
+                    if (doc.recordId) {
+                        return {
+                            updateOne: {
+                                filter: { recordId: doc.recordId },
+                                update: { $setOnInsert: doc },
+                                upsert: true
+                            }
+                        };
+                    }
+
+                    return { insertOne: { document: doc } };
+                });
+
+                const result = await GeneratorData.bulkWrite(operations, { ordered: false });
+                latestData = { ...latestData, ...docs[docs.length - 1] };
+
+                await syncActiveTimeHistory(latestData);
+                await checkAndSaveAlerts(latestData);
+
+                const inserted = (result.insertedCount || 0) + (result.upsertedCount || 0);
+                const duplicate = result.matchedCount || 0;
+                console.log(`💾 MQTT gen/data saved | received=${records.length} | accepted=${docs.length} | inserted=${inserted} | duplicate=${duplicate}`);
             } catch (e) {
                 console.error('DB Save Error:', e.message);
             }
         };
 
         mqttClient.on('connect', () => {
-            console.log('✅ MQTT Connected');
-            mqttClient.subscribe('gen/data');
+            console.log(`✅ MQTT Connected: ${brokerUrl}`);
+            mqttClient.subscribe('gen/data', (err) => {
+                if (err) console.error('❌ Subscribe error (gen/data):', err.message);
+                else console.log('📡 Subscribed to gen/data');
+            });
         });
         mqttClient.on('message', async (topic, message) => {
             if (topic !== 'gen/data') return;
@@ -624,32 +662,48 @@ app.post('/api/ingest/batch', async (req, res) => {
         }
 
         const maxBatch = Math.min(records.length, 1000);
-        const savedIds = [];
-        let lastSaved = null;
+        const source = body.source || 'esp32_sd_backup_10min';
+        const docs = [];
 
         for (let i = 0; i < maxBatch; i++) {
             const record = records[i];
             if (!record || typeof record !== 'object') continue;
 
-            const saved = await persistGeneratorSnapshot(
-                {
-                    ...record,
-                    deviceId: record.deviceId || body.deviceId,
-                    source: body.source || record.source,
-                    timestamp: record.timestamp || body.timestamp
-                },
-                { source: body.source || 'esp32_sd_backup_10min' }
-            );
+            const normalized = normalizeGeneratorSnapshot({
+                ...record,
+                deviceId: record.deviceId || body.deviceId,
+                source: record.source || body.source,
+                timestamp: record.timestamp || body.timestamp
+            });
 
-            if (saved) {
-                savedIds.push(saved._id);
-                lastSaved = saved;
-            }
+            if (!normalized) continue;
+            docs.push({ ...normalized, source });
         }
 
-        if (!savedIds.length) {
+        if (!docs.length) {
             return res.status(400).json({ success: false, error: 'Tidak ada record valid untuk disimpan.' });
         }
+
+        const operations = docs.map((doc) => {
+            if (doc.recordId) {
+                return {
+                    updateOne: {
+                        filter: { recordId: doc.recordId },
+                        update: { $setOnInsert: doc },
+                        upsert: true
+                    }
+                };
+            }
+
+            return { insertOne: { document: doc } };
+        });
+
+        const result = await GeneratorData.bulkWrite(operations, { ordered: false });
+        const lastSaved = docs[docs.length - 1];
+        latestData = { ...latestData, ...lastSaved };
+
+        const inserted = (result.insertedCount || 0) + (result.upsertedCount || 0);
+        const matchedExisting = result.matchedCount || 0;
 
         try {
             await syncActiveTimeHistory(latestData);
@@ -660,12 +714,15 @@ app.post('/api/ingest/batch', async (req, res) => {
 
         res.status(201).json({
             success: true,
-            ackedRecords: savedIds.length,
-            accepted: savedIds.length,
+            ackedRecords: docs.length,
+            accepted: docs.length,
             receivedRecords: records.length,
             processedRecords: maxBatch,
             truncated: records.length > maxBatch,
-            lastId: lastSaved?._id || null,
+            inserted,
+            matchedExisting,
+            duplicate: matchedExisting,
+            lastRecordId: lastSaved?.recordId || null,
             lastTimestamp: latestData.timestamp
         });
     } catch (err) {
