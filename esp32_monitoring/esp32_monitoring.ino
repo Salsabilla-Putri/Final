@@ -155,7 +155,7 @@
 // ============================================================
 // Tujuan:
 // - Mencegah MQTT disconnected saat runtime.
-// - Mengirim MongoDB sebagai 1 payload batch setiap 5 menit.
+// - Mengirim MongoDB sebagai 1 payload batch setiap 2 menit.
 // - Menjaga koneksi WiFi lebih stabil.
 // - Mengurangi risiko heap fragmentation akibat String JSON.
 
@@ -170,7 +170,6 @@
 #define WIFI_RECONNECT_MIN_MS        10000UL
 #define WIFI_RECONNECT_MAX_MS        60000UL
 #define WIFI_CONNECT_POLL_MS         500UL
-#define WIFI_CONNECT_TERMINAL_FAIL_MS 1500UL
 #define WIFI_EDUROAM_MAX_ATTEMPTS    1
 
 // Jika RSSI lebih lemah dari nilai ini, batch MongoDB ditunda.
@@ -181,7 +180,7 @@
 // Nilai ini tetap dipakai sebagai batas payload realtime biasa.
 // Batch besar tidak memakai mqtt.publish() agar tidak perlu buffer internal PubSubClient besar.
 #define MONGO_BATCH_STREAM_CHUNK_BYTES 512
-#define MONGO_BATCH_MAX_PAYLOAD_BYTES  120000UL
+#define MONGO_BATCH_MAX_PAYLOAD_BYTES  80000UL
 
 // Proteksi heap.
 #define HEAP_MIN_FREE_BYTES          25000UL
@@ -191,7 +190,7 @@
 // Cloud/MongoDB path:
 // Tidak memakai HTTP POST /api/ingest/batch.
 // Record parameter-only dikumpulkan di RAM dan dikirim sebagai 1 payload batch
-// melalui MQTT_TOPIC = gen/data setiap 5 menit.
+// melalui MQTT_TOPIC = gen/data setiap 10 menit.
 // Backend harus subscribe topic gen/data dan melakukan insertMany(payload.records) ke MongoDB.
 
 // NTP WIB.
@@ -257,7 +256,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 // ============================================================
 // SD CARD
 // ============================================================
-#define SD_MISO 19
+#define SD_MISO 12
 #define SD_MOSI 13
 #define SD_SCK  14
 #define SD_CS   26
@@ -296,11 +295,16 @@ const char* FFT_CSV_HEADER =
 // MONGODB BATCH CONFIG
 // ============================================================
 // Realtime dashboard tetap 1 detik.
-// MongoDB/history dikirim batch setiap 5 menit.
+// MongoDB/history dikirim batch setiap 2 menit.
 
-#define MONGODB_BATCH_INTERVAL_MS 300000UL   // 5 menit
-#define MONGODB_BATCH_RECORDS     300        // 1 record/detik x 300 detik
+#define MONGODB_BATCH_INTERVAL_MS 120000UL   // 2 menit, lebih aman untuk heap ESP32 + eduroam
+#define MONGODB_BATCH_RECORDS     120        // 1 record/detik x 120 detik
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
+
+// SAFE MODE NOTE:
+// Dipilih 2 menit/120 record karena lebih aman untuk WPA2-Enterprise eduroam.
+// Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
+// saat EAP handshake dan MQTT batch publish.
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
@@ -439,10 +443,10 @@ struct StorageRecord {
 // - Akuisisi parameter real-time: 0.1 s sampai 1.0 s
 // - Task sampling internal ESP32-2: 20 ms
 // - Record monitoring lokal/SD: 1 s
-// - Target database online sesuai dokumen pengujian: 5 menit
+// - Target database online versi aman: 2 menit
 #define SPEC_ACQ_MIN_INTERVAL_MS       100UL
 #define SPEC_ACQ_MAX_INTERVAL_MS       1000UL
-#define SPEC_DATABASE_TARGET_MS        300000UL
+#define SPEC_DATABASE_TARGET_MS        120000UL
 #define PERF_U32_MAX_VALUE             0xFFFFFFFFUL
 
 struct PerfMinMax {
@@ -688,7 +692,7 @@ uint64_t sdCachedUsedBytes = 0;
 uint64_t sdCachedFreeBytes = 0;
 unsigned long dbCachedAtMs = 0;
 
-// Statistik pengiriman buffer RAM MongoDB 5 menit.
+// Statistik pengiriman buffer RAM MongoDB 2 menit.
 // Tidak ada sinkronisasi SD -> MongoDB; MongoDB hanya memakai buffer RAM baru.
 uint32_t mongoUploadLastBatchRecords = 0;
 uint32_t mongoUploadLastPayloadBytes = 0;
@@ -706,6 +710,14 @@ uint32_t mongoDbTotalSentRecords = 0;
 uint32_t mongoDbLastPayloadBytes = 0;
 uint16_t mongoDbLastAckResponseRecords = 0;
 unsigned long mongoDbLastSendMs = 0;
+
+// Statistik SD sebagai backup saja. SD tidak ditulis saat WiFi+MQTT normal dan buffer MongoDB sehat.
+uint32_t sdBackupRecordCount = 0;
+uint32_t sdBackupSkipOnlineCount = 0;
+uint32_t sdBackupBecauseNetworkCount = 0;
+uint32_t sdBackupBecauseBufferFullCount = 0;
+uint32_t sdBackupBecauseMongoFailCount = 0;
+
 
 // ── DB size ticker (setiap detik) ──────────────────────────────
 bool     dbSizeTickerEnabled  = false;
@@ -2315,7 +2327,7 @@ void printSerialMonitoringOverview() {
   Serial.print(F("║ last bytes     : ")); Serial.println(hasLastMqttPayloadCache ? lastMqttPayloadCache.length() : 0);
 
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
-  Serial.println(F("║ 4) MONGODB 5-MIN RAM BUFFER                              ║"));
+  Serial.println(F("║ 4) MONGODB 10-MIN RAM BUFFER                              ║"));
   Serial.print(F("║ buffer count   : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print(F("║ interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print(F("║ target batch   : ")); Serial.println(MONGODB_BUFFER_RECORDS);
@@ -2433,26 +2445,49 @@ void publishRealtimeData() {
 // SD CARD
 // ============================================================
 
-void addRecordToMongoDbBuffer(const StorageRecord &r) {
+bool addRecordToMongoDbBuffer(const StorageRecord &r) {
   String json = buildJsonRecordParametersOnly(r);
-  if (!json.length()) return;
+  if (!json.length()) return false;
 
   if (mongoBufferMutex && xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
     mongoDbBufferOverflowCount++;
-    return;
+    return false;
   }
+
+  bool accepted = false;
 
   if (mongoDbBufferCount < MONGODB_BUFFER_RECORDS) {
     mongoDbBuffer[mongoDbBufferCount++] = json;
     mongoDbBufferedTotal++;
+    accepted = true;
   } else {
-    // Buffer MongoDB penuh. Data lokal tetap aman di /database.csv, tetapi tidak
-    // ditambahkan ke buffer RAM agar payload batch 5 menit tetap bounded 300 record.
+    // Buffer MongoDB penuh. Kondisi ini biasanya terjadi saat jaringan/MQTT/server
+    // bermasalah sehingga batch 2 menit belum berhasil dikirim. Record berikutnya
+    // harus dicadangkan ke SD agar tidak hilang.
     mongoDbBufferOverflowCount++;
+    accepted = false;
   }
 
   if (mongoBufferMutex) xSemaphoreGive(mongoBufferMutex);
+  return accepted;
 }
+
+bool shouldBackupRecordToSD(bool mongoBufferAccepted) {
+  bool wifiBad = (WiFi.status() != WL_CONNECTED) || !wifiOK;
+  bool mqttBad = !mqtt.connected();
+  bool bufferFullOrRejected = (!mongoBufferAccepted) || (mongoDbBufferCount >= MONGODB_BUFFER_RECORDS);
+  bool recentMongoFailure = (mongoUploadLastAttemptMs > 0 &&
+                             !mongoUploadLastMqttOk &&
+                             mongoUploadLastHttpCode != 0 &&
+                             (millis() - mongoUploadLastAttemptMs) < MONGODB_BATCH_INTERVAL_MS);
+
+  if (wifiBad || mqttBad) sdBackupBecauseNetworkCount++;
+  if (bufferFullOrRejected) sdBackupBecauseBufferFullCount++;
+  if (recentMongoFailure) sdBackupBecauseMongoFailCount++;
+
+  return wifiBad || mqttBad || bufferFullOrRejected || recentMongoFailure;
+}
+
 
 void clearMongoDbBufferNoLock(uint16_t countToClear) {
   if (countToClear >= mongoDbBufferCount) {
@@ -2571,7 +2606,7 @@ bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
     return false;
   }
 
-  // Karena batch 300 record bisa puluhan KB, jangan pakai mqtt.publish()
+  // Karena batch 120 record lebih ringan untuk heap ESP32, jangan pakai mqtt.publish()
   // yang bergantung pada buffer internal PubSubClient. Gunakan streaming:
   // beginPublish() -> write() per chunk -> endPublish().
   if (ESP.getFreeHeap() < HEAP_MIN_FREE_BYTES || ESP.getMaxAllocHeap() < (uint32_t)MONGO_BATCH_STREAM_CHUNK_BYTES) {
@@ -2651,7 +2686,7 @@ void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi sekarang:
   // - 1 payload JSON batch dikirim ke MQTT_TOPIC = gen/data,
-  // - isi payload: metadata + array "records" berisi ±300 data parameter-only,
+  // - isi payload: metadata + array "records" berisi ±120 data parameter-only,
   // - realtime dashboard tetap dikirim terpisah ke MQTT_REALTIME_TOPIC = gen/realtime,
   // - sisa buffer tidak dihapus jika publish batch gagal.
 
@@ -2727,7 +2762,7 @@ void sendMongoDbBufferToMongoDB() {
   }
 
   Serial.println();
-  Serial.println(F("╔════════════ MONGO MQTT 5-MIN BATCH UPLOAD ════════════╗"));
+  Serial.println(F("╔════════════ MONGO MQTT 10-MIN BATCH UPLOAD ════════════╗"));
   Serial.print(F("[MONGO-MQTT] Topic          : "));
   Serial.println(MQTT_TOPIC);
   Serial.print(F("[MONGO-MQTT] Records/batch  : "));
@@ -3188,7 +3223,17 @@ String buildFftCsvLine(const StorageRecord &r) {
 
 
 void saveSnapshotToSD() {
-  // Test-once mode: local database/SD hanya ditulis 1 kali setelah aggregate tersedia.
+  // Fungsi ini tetap dipanggil setiap 1 detik, tetapi SD hanya ditulis jika:
+  // 1) WiFi/MQTT/server bermasalah,
+  // 2) buffer RAM MongoDB penuh/tidak bisa menerima record,
+  // 3) test-once mode sedang aktif.
+  //
+  // Saat koneksi normal:
+  // - record masuk RAM buffer MongoDB,
+  // - realtime publish tetap ke gen/realtime tiap 1 detik,
+  // - database MongoDB/history dikirim batch ke gen/data tiap 2 menit,
+  // - SD tidak ditulis agar umur SD lebih panjang dan tidak ada duplikasi lokal.
+
   if (testOnceMode && (!testOnceAggDone || testOnceSdDone)) return;
 
   bool hasData = false;
@@ -3199,26 +3244,46 @@ void saveSnapshotToSD() {
 
   uint32_t saveStart = micros();
 
-  // Jalur MongoDB tidak lagi mengambil ulang data dari SD. Setiap record agregasi langsung
-  // masuk buffer RAM MongoDB, lalu buffer ini dikirim batch sesesuai interval batch.
+  bool backupNeeded = testOnceMode;
+  uint8_t validRecords = 0;
+
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
-    if (storageBatch[i].valid) addRecordToMongoDbBuffer(storageBatch[i]);
+    if (!storageBatch[i].valid) continue;
+    validRecords++;
+
+    bool acceptedToMongoRam = addRecordToMongoDbBuffer(storageBatch[i]);
+    if (shouldBackupRecordToSD(acceptedToMongoRam)) {
+      backupNeeded = true;
+    }
   }
 
-  if (!sdOK) {
+  if (!backupNeeded) {
+    sdBackupSkipOnlineCount += validRecords;
+
     perfSdSaveUs = micros() - saveStart;
     perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
     return;
   }
 
-  // Ambil mutex satu kali untuk seluruh transaksi SD: pastikan header, tulis database.csv,
-  // lalu tulis fft.csv. Buffer MongoDB sudah diisi sebelum akses SD agar upload online
-  // tidak bergantung pada kondisi SD card.
+  if (!sdOK) {
+    sdSaveFailCount++;
+    sdLastFileErrorMs = millis();
+
+    perfSdSaveUs = micros() - saveStart;
+    perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
+
+    if (serialDatabasePayloadEnabled) {
+      Serial.println(F("[SD-BACKUP] Backup dibutuhkan, tetapi SD NOT READY."));
+    }
+    return;
+  }
+
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
     if (!ensureSdCsvFilesExistNoLock()) {
       sdSaveFailCount++;
       sdLastFileErrorMs = millis();
       xSemaphoreGive(sdMutex);
+
       perfSdSaveUs = micros() - saveStart;
       perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
       return;
@@ -3236,14 +3301,12 @@ void saveSnapshotToSD() {
       if (file) file.close();
       if (fftFile) fftFile.close();
 
-      Serial.print(F("[SD] Gagal membuka CSV append (database/fft). consecutiveFail="));
+      Serial.print(F("[SD-BACKUP] Gagal membuka CSV append (database/fft). consecutiveFail="));
       Serial.println(sdConsecutiveOpenFail);
 
-      // Jangan langsung sdOK=false karena open bisa gagal sesaat pada SPI sharing TFT+SD.
-      // Tandai NOT READY hanya jika gagal berturut-turut.
       if (sdConsecutiveOpenFail >= 5) {
         sdOK = false;
-        Serial.println(F("[SD] Append gagal 5x berturut-turut. SD ditandai NOT READY dan akan retry init otomatis."));
+        Serial.println(F("[SD-BACKUP] Append gagal 5x berturut-turut. SD ditandai NOT READY dan akan retry init otomatis."));
       }
 
       xSemaphoreGive(sdMutex);
@@ -3257,13 +3320,17 @@ void saveSnapshotToSD() {
 
     for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
       if (!storageBatch[i].valid) continue;
+
       String line = buildCsvLine(storageBatch[i]);
       String fftLine = buildFftCsvLine(storageBatch[i]);
       String queueJson = buildJsonRecordParametersOnly(storageBatch[i]);
+
       file.println(line);
       fftFile.println(fftLine);
+
       dbLastLineBytes = line.length() + 2;
       dbTotalWrittenBytes += dbLastLineBytes;
+      sdBackupRecordCount++;
       cacheLastDatabasePayload(storageBatch[i], line, queueJson);
     }
 
@@ -3273,21 +3340,27 @@ void saveSnapshotToSD() {
     fftFile.close();
 
     sdSaveSuccessCount++;
+
+    if (serialDatabasePayloadEnabled && hasLastDatabasePayloadCache) {
+      Serial.println(F("[SD-BACKUP] Record disimpan karena jaringan/MQTT/server/buffer bermasalah."));
+    }
+
     if (testOnceMode && !testOnceSdDone) {
       testOnceSdDone = true;
       Serial.println();
-      Serial.println(F("╔════════════ TEST-ONCE LOCAL SD DB ════════════╗"));
-      Serial.printf("[TEST] 1 record tersimpan ke %s dan FFT ke %s. lastRow=%lu bytes\n",
+      Serial.println(F("╔════════════ TEST-ONCE LOCAL SD BACKUP ════════════╗"));
+      Serial.printf("[TEST] 1 record backup tersimpan ke %s dan FFT ke %s. lastRow=%lu bytes\n",
                     DB_FILE, FFT_FILE, (unsigned long)dbLastLineBytes);
-      Serial.println(F("[TEST] Record juga dimasukkan ke buffer MongoDB RAM untuk batch 5 menit."));
-      Serial.println(F("╚═══════════════════════════════════════════════╝"));
+      Serial.println(F("[TEST] Pada mode normal, SD hanya ditulis jika WiFi/MQTT/server bermasalah."));
+      Serial.println(F("╚═══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
+
     xSemaphoreGive(sdMutex);
   } else {
     sdSaveFailCount++;
     sdLastFileErrorMs = millis();
-    Serial.println(F("[SD] SD sedang dipakai task lain. Save 1 detik ini dilewati dan akan dicoba pada siklus berikutnya."));
+    Serial.println(F("[SD-BACKUP] SD sedang dipakai task lain. Backup 1 detik ini dilewati."));
   }
 
   perfSdSaveUs = micros() - saveStart;
@@ -3444,19 +3517,12 @@ const char* wifiModeText() {
   return "OFFLINE";
 }
 
-bool isTerminalWiFiFailure(wl_status_t st) {
-  return st == WL_NO_SSID_AVAIL ||
-         st == WL_CONNECT_FAILED ||
-         st == WL_CONNECTION_LOST;
-}
-
 bool waitForWiFiConnection(const __FlashStringHelper* label, unsigned long timeoutMs) {
   unsigned long startAttempt = millis();
   wl_status_t lastStatus = (wl_status_t)255;
 
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < timeoutMs) {
     wl_status_t st = WiFi.status();
-    unsigned long elapsedMs = millis() - startAttempt;
 
     if (st != lastStatus) {
       Serial.print(label);
@@ -3465,18 +3531,6 @@ bool waitForWiFiConnection(const __FlashStringHelper* label, unsigned long timeo
       Serial.print(F(" / "));
       Serial.println(wifiStatusText(st));
       lastStatus = st;
-    }
-
-    // Untuk eduroam, status WL_CONNECTION_LOST / WL_CONNECT_FAILED biasanya
-    // berarti autentikasi enterprise gagal. Jangan tunggu timeout penuh dan
-    // jangan ulangi eduroam berkali-kali; langsung fallback ke AP WiFiManager.
-    if (elapsedMs >= WIFI_CONNECT_TERMINAL_FAIL_MS && isTerminalWiFiFailure(st)) {
-      Serial.print(label);
-      Serial.print(F(" terminal failure, fallback now: "));
-      Serial.print((int)st);
-      Serial.print(F(" / "));
-      Serial.println(wifiStatusText(st));
-      break;
     }
 
     Serial.print('.');
@@ -3506,12 +3560,12 @@ void printWiFiConnectedInfo(const __FlashStringHelper* label) {
 bool connectEduroam(bool eraseCredentials = true) {
 #if USE_EDUROAM_FIRST
   Serial.println();
-  Serial.println("╔══════════════ EDUROAM WIFI INIT ══════════════╗");
+  Serial.println("╔══════════════ EDUROAM WIFI INIT BOOT-ONLY ══════════════╗");
 
   if (!isEduroamCredentialConfigured()) {
     Serial.println("[EDUROAM] SKIP: credential belum valid / masih placeholder.");
     Serial.println("[EDUROAM] Fallback ke WiFiManager portal.");
-    Serial.println("╚════════════════════════════════════════════════╝");
+    Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return false;
   }
 
@@ -3521,6 +3575,9 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.print("[EDUROAM] Username : "); Serial.println(EDUROAM_USERNAME);
   Serial.println("[EDUROAM] Password : ********");
 
+  // Urutan ini mengikuti kode eduroam yang sebelumnya stabil:
+  // mode STA -> disable sleep -> disconnect bersih -> disable EAP lama -> begin EAP.
+  // Fungsi ini hanya boleh dipanggil saat boot. Runtime reconnect cukup WiFi.reconnect().
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -3566,7 +3623,7 @@ bool connectEduroam(bool eraseCredentials = true) {
     wifiConnectionMode = WIFI_MODE_EDUROAM;
 
     printWiFiConnectedInfo(F("[EDUROAM]"));
-    Serial.println("╚════════════════════════════════════════════════╝");
+    Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return true;
   }
 
@@ -3580,24 +3637,18 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.println(wifiStatusText(WiFi.status()));
   Serial.println("[EDUROAM] Cleaning enterprise mode before WiFiManager...");
 
-  // Jangan panggil stopWiFiCleanly() di sini karena setupWiFiManager()
-  // akan melakukan satu kali clean stop sebelum membuka WiFiManager.
-  // Double stop tepat sebelum startConfigPortal() pernah memicu panic
-  // LoadProhibited pada beberapa kombinasi core ESP32 + WiFiManager.
-  disableEduroamEnterpriseMode();
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false, false);
-  delay(500);
+  // Setelah gagal, bersihkan EAP satu kali lalu fallback ke WiFiManager.
+  // Jangan coba eduroam ulang dalam loop karena dapat membuat driver EAP tidak stabil.
+  prepareNormalWiFiMode();
 
   Serial.println("[EDUROAM] Fallback to WiFiManager portal.");
-  Serial.println("╚════════════════════════════════════════════════╝");
+  Serial.println("╚═══════════════════════════════════════════════════════════╝");
 
   return false;
 #else
   return false;
 #endif
 }
-
 
 bool connectWiFiManagerFallback() {
   Serial.println();
@@ -3672,32 +3723,32 @@ void setupWiFiManager() {
   wifiConnectionMode = WIFI_MODE_OFFLINE;
 
 #if USE_EDUROAM_FIRST
-  Serial.println(F("[WIFI] Mode utama: eduroam WPA2-Enterprise"));
+  Serial.println(F("[WIFI] Mode utama: eduroam WPA2-Enterprise boot-only"));
   Serial.print(F("[WIFI] Target SSID: "));
   Serial.println(EDUROAM_SSID);
 
-  for (uint8_t attempt = 1; attempt <= WIFI_EDUROAM_MAX_ATTEMPTS; attempt++) {
-    Serial.print(F("[WIFI] Eduroam attempt "));
-    Serial.print(attempt);
-    Serial.print(F("/"));
-    Serial.println(WIFI_EDUROAM_MAX_ATTEMPTS);
-
-    if (connectEduroam()) {
-      Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
-      Serial.println(F("╚══════════════════════════════════════════════╝"));
-      return;
-    }
+  // Eduroam hanya dicoba 1 kali saat boot. Ini mengikuti kode lama yang stabil.
+  // Jika gagal, sistem fallback ke WiFiManager. Saat runtime, jangan panggil
+  // connectEduroam() lagi; cukup WiFi.reconnect().
+  if (connectEduroam(true)) {
+    Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal/ditolak. Tidak mengulang eduroam; masuk fallback AP WiFiManager."));
+  Serial.println(F("[WIFI] Eduroam gagal saat boot. Masuk fallback AP WiFiManager."));
 #else
   Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung membuka fallback AP WiFiManager."));
 #endif
 
+  // connectEduroam() yang gagal sudah memanggil prepareNormalWiFiMode().
+  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum portal.
+#if !USE_EDUROAM_FIRST
   prepareNormalWiFiMode();
+#endif
 
   if (connectWiFiManagerFallback()) {
-    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER PORTAL"));
+    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER / SAVED WIFI"));
     Serial.println(F("╚══════════════════════════════════════════════╝"));
     return;
   }
@@ -3820,13 +3871,9 @@ void checkWiFiStatus() {
       applyWiFiStabilityConfig();
 
       if (wifiConnectionMode == WIFI_MODE_EDUROAM) {
-#if USE_EDUROAM_FIRST
-        Serial.println(F("[WIFI] Reconnect using eduroam WPA2-Enterprise..."));
-        connectEduroam(false);
-#else
-        Serial.println(F("[WIFI] Eduroam disabled, reconnect using active credential..."));
+        Serial.println(F("[WIFI] Reconnect using existing eduroam session only."));
+        Serial.println(F("[WIFI] connectEduroam() is NOT called during runtime to avoid EAP driver abort."));
         WiFi.reconnect();
-#endif
       } else {
         Serial.println(F("[WIFI] Reconnect using active WiFiManager credential..."));
         WiFi.reconnect();
@@ -4565,7 +4612,7 @@ void resetPaperValidationCounters() {
   Serial.println(F("╔════════════════ PAPER VALIDATION START ════════════════╗"));
   Serial.println(F("║ Counter pengujian paper di-reset.                     ║"));
   Serial.println(F("║ Jalankan sistem selama durasi uji, lalu ketik: paper  ║"));
-  Serial.println(F("║ Rekomendasi: 5-5 menit untuk UART/MQTT/SD, 5 menit  ║"));
+  Serial.println(F("║ Rekomendasi: 5-10 menit untuk UART/MQTT/SD, 10 menit  ║"));
   Serial.println(F("║ untuk validasi batch MongoDB.                         ║"));
   Serial.println(F("╚════════════════════════════════════════════════════════╝"));
 }
@@ -4639,8 +4686,8 @@ void printPaperValidationReport() {
   uint32_t mongoSent = mongoDbTotalSentRecords - paperStartMongoSent;
   uint32_t mongoFail = mongoUploadFailCount - paperStartMongoFail;
 
-  float expectedSdRecords = runtimeSec * 1000.0f / (float)localSaveInterval;
-  float sdReliabilityPct = safePercentFloat((float)sdOk, expectedSdRecords);
+  float expectedSdRecords = (float)(sdOk + sdFail); // SD sekarang hanya backup saat jaringan/server bermasalah.
+  float sdReliabilityPct = (expectedSdRecords <= 0.0f) ? 100.0f : safePercentFloat((float)sdOk, expectedSdRecords);
   if (sdReliabilityPct > 100.0f) sdReliabilityPct = 100.0f;
 
   float frameSuccessPct = safePercentFloat((float)frameValid, (float)frameReceived);
@@ -4677,7 +4724,7 @@ void printPaperValidationReport() {
   bool mqttReliabilityPass = (mqttReliabilityPct >= 99.0f || (mqttOk == 0 && mqttFail == 0));
   bool packetLossPass = (uartLossPct < 1.0f);
   bool deadlinePass = (sensorMissedDeadlines == 0);
-  bool mongoBatchPass = (MONGODB_BATCH_INTERVAL_MS == 600000UL);
+  bool mongoBatchPass = (MONGODB_BATCH_INTERVAL_MS == 120000UL);
   bool localInterfacePass = (perfAvgStat(acqMon.tftDrawUs) > 0.0f || lastTftDrawMs > 0);
 
   Serial.println();
@@ -4698,9 +4745,12 @@ void printPaperValidationReport() {
   Serial.print  (F("║ MQTT delivery reliability    : ")); Serial.print(mqttReliabilityPct, 2); Serial.println(F(" %")); 
 
   Serial.println(F("╠════════════ DATA MANAGEMENT EVALUATION ═══════════╣"));
-  Serial.print  (F("║ SD logging interval          : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
-  Serial.print  (F("║ Expected SD records          : ")); Serial.println(expectedSdRecords, 0);
-  Serial.print  (F("║ Stored SD records OK/FAIL    : ")); Serial.print(sdOk); Serial.print(F(" / ")); Serial.println(sdFail);
+  Serial.print  (F("║ SD backup policy             : ")); Serial.println(F("ONLY when WiFi/MQTT/server/buffer problem"));
+  Serial.print  (F("║ SD check interval            : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
+  Serial.print  (F("║ Expected SD backup records   : ")); Serial.println(expectedSdRecords, 0);
+  Serial.print  (F("║ Stored SD backup OK/FAIL     : ")); Serial.print(sdOk); Serial.print(F(" / ")); Serial.println(sdFail);
+  Serial.print  (F("║ SD backup records total      : ")); Serial.println(sdBackupRecordCount);
+  Serial.print  (F("║ SD skipped online total      : ")); Serial.println(sdBackupSkipOnlineCount);
   Serial.print  (F("║ SD logging reliability       : ")); Serial.print(sdReliabilityPct, 2); Serial.println(F(" %"));
   Serial.print  (F("║ Last CSV row size            : ")); Serial.print(dbLastLineBytes); Serial.println(F(" B/record"));
   Serial.print  (F("║ Current SD Card size         : ")); Serial.println(formatBytes(dbCachedFileSizeBytes));
@@ -4751,7 +4801,7 @@ void printSerialHelp() {
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | rx monitor on/off | db reset | db reset confirm"));
   Serial.println(F("MQTT JSON : mqtt payload | mqtt payload now | mqtt payload on | mqtt payload off"));
   Serial.println(F("ALIAS     : json mqtt | json mqtt now | json mqtt on | json mqtt off"));
-  Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 5-5 menit, lalu ketik 'perf' atau 'db'."));
+  Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 2-5 menit, lalu ketik 'perf' atau 'db'."));
 }
 
 String buildCloudEstimateRecordOnly() {
@@ -4833,7 +4883,7 @@ void printMongoBufferStatus() {
   uint16_t bufferCount = mongoDbBufferCount;
 
   Serial.println();
-  Serial.println(F("================ MONGODB 5-MIN BUFFER ================"));
+  Serial.println(F("================ MONGODB 10-MIN BUFFER ================"));
   Serial.print  (F("  buffer records : ")); Serial.print(bufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("  interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print  (F("  topic          : ")); Serial.println(MQTT_TOPIC);
@@ -4890,6 +4940,11 @@ void printDatabaseReport() {
   Serial.print  (F("  write rate      : ")); Serial.println(formatBytes((uint64_t)sdBytesPerSec) + F("/s"));
   Serial.print  (F("  est. 7 days     : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("  save OK/FAIL    : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
+  Serial.print  (F("  backup records  : ")); Serial.println(sdBackupRecordCount);
+  Serial.print  (F("  skipped online  : ")); Serial.println(sdBackupSkipOnlineCount);
+  Serial.print  (F("  backup reason   : NET=")); Serial.print(sdBackupBecauseNetworkCount);
+  Serial.print(F(" BUF=")); Serial.print(sdBackupBecauseBufferFullCount);
+  Serial.print(F(" MONGO=")); Serial.println(sdBackupBecauseMongoFailCount);
   Serial.print  (F("  buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("  MQTT send OK/FAIL: ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
   Serial.print  (F("  last MQTT state    : ")); Serial.println(mongoUploadLastHttpCode);
@@ -5022,11 +5077,11 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ Deadline SensorTask 20 ms   : ")); Serial.println(passFailText(deadlinePass));
   Serial.print  (F("║ Kualitas data UART          : ")); Serial.println(passFailText(qualityPass));
   Serial.print  (F("║ Penyimpanan lokal 7 hari    : ")); Serial.println(passFailText(localSavePass && sdOK));
-  Serial.print  (F("║ Interval database 5 menit  : ")); Serial.println(passFailText(databaseTargetPass));
+  Serial.print  (F("║ Interval database 2 menit   : ")); Serial.println(passFailText(databaseTargetPass));
   Serial.print  (F("║ OVERALL REAL-TIME MONITOR   : ")); Serial.println(passFailText(realtimePass));
 
   if (!databaseTargetPass) {
-    Serial.println(F("║ CATATAN: MONGODB_BATCH_INTERVAL_MS belum 5 menit. Cek nilai macro timing.        ║"));
+    Serial.println(F("║ CATATAN: MONGODB_BATCH_INTERVAL_MS belum 2 menit. Cek nilai macro timing.        ║"));
   }
 
   Serial.println(F("╚═════════════════════════════════════════════════════════════════════╝"));
@@ -5059,9 +5114,9 @@ void printPerformanceReport() {
   const uint32_t cloudRecordBytes = getMongoRecordBytesNoFft();
   const uint32_t cloudAvgSentRecordBytes = getMongoAvgSentRecordBytesNoFft();
   const float cloudBytesPerSec = (float)cloudAvgSentRecordBytes * (1000.0f / (float)localSaveInterval);
-  const float cloudBatchCapacityPer10Min = (float)MONGODB_BATCH_RECORDS;
+  const float cloudBatchCapacityPer2Min = (float)MONGODB_BATCH_RECORDS;
   const float cloudBatchGeneratedPer10Min = (600000.0f / (float)localSaveInterval) * STORAGE_BATCH_SIZE;
-  const float cloudBatchPayloadEstimate = (float)cloudAvgSentRecordBytes * min(cloudBatchGeneratedPer10Min, cloudBatchCapacityPer10Min);
+  const float cloudBatchPayloadEstimate = (float)cloudAvgSentRecordBytes * min(cloudBatchGeneratedPer10Min, cloudBatchCapacityPer2Min);
   const uint64_t cloudPayload10y = estimateMongoPayloadBytesNoFft10Years(cloudAvgSentRecordBytes);
   const uint64_t cloudStorage10y = estimateMongoStorageBytesNoFft10Years(cloudAvgSentRecordBytes);
 
