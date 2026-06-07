@@ -3599,8 +3599,8 @@ bool connectWiFiManagerFallback() {
   WiFi.mode(WIFI_STA);
   delay(1000);
 
-  WiFiManager wm;
-  wm.setDebugOutput(true);
+  static WiFiManager wm;
+  wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
   wm.setConnectTimeout(30);
   wm.setConnectRetries(1);
