@@ -86,6 +86,10 @@
 #define WIFI_MANAGER_TIMEOUT_SEC 180
 #endif
 
+#ifndef WIFI_MANAGER_SETTLE_MS
+#define WIFI_MANAGER_SETTLE_MS 1500UL
+#endif
+
 // Set 1 hanya jika ingin reset/portal WiFiManager dipaksa muncul.
 // Pada mode eduroam-first, nilai ini hanya berpengaruh saat fallback portal.
 #ifndef FORCE_WIFI_PORTAL
@@ -3385,7 +3389,9 @@ const char* wifiStatusText(wl_status_t st);
 void stopWiFiCleanly(bool eraseCredentials) {
   Serial.println(F("[WIFI] Stopping current STA connection..."));
 
-  mqtt.disconnect();
+  if (mqtt.connected()) {
+    mqtt.disconnect();
+  }
   mqttOK = false;
 
   WiFi.setAutoReconnect(false);
@@ -3393,10 +3399,10 @@ void stopWiFiCleanly(bool eraseCredentials) {
   delay(800);
 
   WiFi.mode(WIFI_OFF);
-  delay(800);
+  delay(WIFI_MANAGER_SETTLE_MS);
 
   WiFi.mode(WIFI_STA);
-  delay(500);
+  delay(800);
 
   applyWiFiStabilityConfig();
 
@@ -3554,12 +3560,14 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.println(wifiStatusText(WiFi.status()));
   Serial.println("[EDUROAM] Cleaning enterprise mode before WiFiManager...");
 
-  // Penting: hentikan total proses koneksi eduroam yang masih pending.
-  // Jika langsung masuk WiFiManager saat STA masih connecting, ESP-IDF dapat memberi error:
-  // E wifi:sta is coneting, return error
+  // Jangan panggil stopWiFiCleanly() di sini karena setupWiFiManager()
+  // akan melakukan satu kali clean stop sebelum membuka WiFiManager.
+  // Double stop tepat sebelum startConfigPortal() pernah memicu panic
+  // LoadProhibited pada beberapa kombinasi core ESP32 + WiFiManager.
   disableEduroamEnterpriseMode();
-  delay(300);
-  stopWiFiCleanly(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  delay(500);
 
   Serial.println("[EDUROAM] Fallback to WiFiManager portal.");
   Serial.println("╚════════════════════════════════════════════════╝");
@@ -3580,20 +3588,20 @@ bool connectWiFiManagerFallback() {
   mqttOK = false;
   wifiOK = false;
 
-  // Portal harus boleh menyimpan credential agar koneksi fallback
-  // dari WiFiManager dapat dipakai ulang oleh WiFi.reconnect().
+  // prepareNormalWiFiMode() sudah membersihkan STA/enterprise state.
+  // Di sini jangan disconnect ulang tepat sebelum portal karena beberapa
+  // board/core dapat panic ketika WiFiManager mulai AP setelah STA baru
+  // saja dihentikan dua kali berturut-turut.
   WiFi.persistent(true);
   WiFi.setAutoReconnect(false);
-  WiFi.mode(WIFI_STA);
-  delay(500);
-  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_AP_STA);
   delay(500);
 
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  WiFiManager wm;
-  wm.setDebugOutput(true);
+  static WiFiManager wm;
+  wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
   wm.setConnectTimeout(20);
   wm.setConnectRetries(1);
