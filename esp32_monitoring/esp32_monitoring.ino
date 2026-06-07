@@ -37,9 +37,7 @@
 #define ESP_ARDUINO_VERSION_MAJOR 2
 #endif
 
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  #include "esp_eap_client.h"
-#else
+#if ESP_ARDUINO_VERSION_MAJOR < 3
   #include "esp_wpa2.h"
 #endif
 
@@ -67,13 +65,14 @@
 #define DEBUG_RX_OK  0
 
 // ============================================================
-// FIXED WIFI + WIFI MANAGER FALLBACK
+// EDUROAM WPA2-ENTERPRISE + WIFI MANAGER FALLBACK
 // ============================================================
 // Mode utama:
-// 1) ESP32 mencoba konek langsung ke WiFi fixed SSID "hai".
-// 2) Saved AP lama, termasuk eduroam, akan dihapus saat boot.
-// 3) Jika fixed WiFi gagal, ESP32 membuka portal WiFiManager.
-// 4) WiFiManager tidak memakai autoConnect(), sehingga tidak mencoba saved AP eduroam.
+// 1) ESP32 mencoba konek ke eduroam dengan WPA2-Enterprise PEAP.
+// 2) Jika eduroam gagal/timeout, mode enterprise dimatikan dengan bersih.
+// 3) Setelah itu ESP32 membuka AP portal WiFiManager sebagai fallback.
+// 4) WiFiManager memakai startConfigPortal(), bukan autoConnect(), agar
+//    tidak otomatis mencoba credential lama yang mungkin salah.
 
 #ifndef WIFI_MANAGER_AP_NAME
 #define WIFI_MANAGER_AP_NAME "GenTrack-Monitor-AP"
@@ -87,31 +86,22 @@
 #define WIFI_MANAGER_TIMEOUT_SEC 180
 #endif
 
+#ifndef WIFI_MANAGER_SETTLE_MS
+#define WIFI_MANAGER_SETTLE_MS 1500UL
+#endif
+
 // Set 1 hanya jika ingin reset/portal WiFiManager dipaksa muncul.
-// Pada mode fixed WiFi, nilai ini tidak dipakai untuk koneksi utama.
+// Pada mode eduroam-first, nilai ini hanya berpengaruh saat fallback portal.
 #ifndef FORCE_WIFI_PORTAL
 #define FORCE_WIFI_PORTAL 0
 #endif
 
-// Eduroam dimatikan total.
+// Default aktif: coba eduroam WPA2-Enterprise terlebih dahulu.
 #ifndef USE_EDUROAM_FIRST
-#define USE_EDUROAM_FIRST 0
+#define USE_EDUROAM_FIRST 1
 #endif
 
-#ifndef FIXED_WIFI_SSID
-#define FIXED_WIFI_SSID "hai"
-#endif
-
-#ifndef FIXED_WIFI_PASS
-#define FIXED_WIFI_PASS "hello123"
-#endif
-
-#ifndef FIXED_WIFI_TIMEOUT_MS
-#define FIXED_WIFI_TIMEOUT_MS 25000UL
-#endif
-
-// Konfigurasi eduroam tetap dibiarkan agar fungsi lama tidak error compile,
-// tetapi tidak akan pernah dipakai karena USE_EDUROAM_FIRST = 0.
+// Konfigurasi eduroam WPA2-Enterprise PEAP.
 #ifndef EDUROAM_SSID
 #define EDUROAM_SSID       "eduroam"
 #endif
@@ -179,6 +169,8 @@
 #define WIFI_RUNTIME_CHECK_MS        3000UL
 #define WIFI_RECONNECT_MIN_MS        10000UL
 #define WIFI_RECONNECT_MAX_MS        60000UL
+#define WIFI_CONNECT_POLL_MS         500UL
+#define WIFI_EDUROAM_MAX_ATTEMPTS    2
 
 // Jika RSSI lebih lemah dari nilai ini, batch MongoDB ditunda.
 // Realtime tetap bisa jalan, tetapi history tidak dipaksa upload.
@@ -218,8 +210,15 @@ HardwareSerial LinkSerial(2);
 String linkRxBuffer = "";
 
 // ESP32-1 sinkronisasi mengirim frame setiap 100 ms = 10 Hz.
+// Buffer hardware/software dibuat lebih besar agar frame tidak hilang saat
+// WiFi/TFT/SD sedang sibuk atau saat fallback WiFiManager berjalan.
 #define LINK_EXPECTED_FRAME_INTERVAL_MS 100UL
 #define LINK_EXPECTED_FRAME_HZ          10
+#define LINK_SERIAL_RX_BUFFER_BYTES     4096
+#define LINK_LINE_BUFFER_MAX_CHARS      512
+#define LINK_RX_TASK_STACK_WORDS        6144
+#define LINK_RX_TASK_PRIORITY           3
+#define LINK_RX_TASK_DELAY_MS           2
 
 // ============================================================
 // TFT + TOUCH
@@ -477,6 +476,9 @@ struct AcquisitionMonitorStats {
   uint32_t frameReceived = 0;
   uint32_t frameValid = 0;
   uint32_t frameParseFailed = 0;
+  uint32_t rxNoiseBytes = 0;
+  uint32_t rxOverflowReset = 0;
+  uint32_t rxResyncCount = 0;
   uint32_t lostFrame = 0;
   uint32_t duplicateFrame = 0;
   uint32_t newSeqSamples = 0;
@@ -1316,6 +1318,50 @@ void handleCompleteRxLine(String line) {
   }
 }
 
+void handleLinkSerialChar(char c) {
+  // Terima '\n', '\r', atau '\r\n' sebagai terminator agar kompatibel
+  // dengan Serial.print(), Serial.println(), dan pengirim UART custom.
+  if (c == '\n' || c == '\r') {
+    if (linkRxBuffer.length() > 0) {
+      handleCompleteRxLine(linkRxBuffer);
+      linkRxBuffer = "";
+    }
+    return;
+  }
+
+  // '$' adalah start-of-frame. Jika ada buffer parsial, berarti frame lama
+  // terpotong; resync ke frame baru tanpa menunggu overflow.
+  if (c == '$') {
+    if (linkRxBuffer.length() > 0) {
+      acqMon.rxResyncCount++;
+    }
+    linkRxBuffer = "$";
+    return;
+  }
+
+  // Abaikan byte noise sebelum start-of-frame agar parser tidak gagal terus.
+  if (linkRxBuffer.length() == 0) {
+    acqMon.rxNoiseBytes++;
+    return;
+  }
+
+  // Hanya simpan karakter printable ASCII CSV. Byte lain dianggap noise.
+  if ((uint8_t)c < 32 || (uint8_t)c > 126) {
+    acqMon.rxNoiseBytes++;
+    return;
+  }
+
+  linkRxBuffer += c;
+
+  // Proteksi jika terminator hilang: reset buffer dan tunggu '$' berikutnya.
+  if (linkRxBuffer.length() > LINK_LINE_BUFFER_MAX_CHARS) {
+    linkRxBuffer = "";
+    rxBufferResetCount++;
+    parseFailCount++;
+    acqMon.rxOverflowReset++;
+  }
+}
+
 void readLinkSerialManual() {
   uint32_t readStart = micros();
 
@@ -1329,35 +1375,22 @@ void readLinkSerialManual() {
   }
 
   while (LinkSerial.available()) {
-    char c = (char)LinkSerial.read();
-
-    if (c == '$') {
-      linkRxBuffer = "$";
-      continue;
-    }
-
-    if (linkRxBuffer.length() == 0) continue;
-
-    if (c == '\n') {
-      handleCompleteRxLine(linkRxBuffer);
-      linkRxBuffer = "";
-      continue;
-    }
-
-    if (c != '\r') {
-      linkRxBuffer += c;
-    }
-
-    if (linkRxBuffer.length() > 260) {
-      linkRxBuffer = "";
-      rxBufferResetCount++;
-      parseFailCount++;
-    }
+    handleLinkSerialChar((char)LinkSerial.read());
   }
 
   perfUartReadUs = micros() - readStart;
   perfUpdateStat(acqMon.uartReadUs, perfUartReadUs);
 }
+
+void UartRxTask(void *pvParameters) {
+  (void)pvParameters;
+
+  while (true) {
+    readLinkSerialManual();
+    vTaskDelay(pdMS_TO_TICKS(LINK_RX_TASK_DELAY_MS));
+  }
+}
+
 
 // ============================================================
 // AGGREGATION
@@ -1825,8 +1858,6 @@ void SensorTask50Hz(void *pvParameters) {
   while (true) {
     recordSensorIntervalTick();
     uint32_t taskStart = micros();
-
-    readLinkSerialManual();
 
     RawData sample;
     bool hasSample = false;
@@ -3289,7 +3320,12 @@ bool isEduroamCredentialConfigured() {
 void disableEduroamEnterpriseMode() {
 #if USE_EDUROAM_FIRST
   #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    esp_wifi_sta_enterprise_disable();
+    // Arduino-ESP32 core 3.x menangani WPA2-Enterprise melalui overload
+    // WiFi.begin(..., WPA2_AUTH_PEAP, ...). Beberapa paket core 3.x tidak
+    // mengekspor API disable EAP, sehingga jangan panggil API itu
+    // langsung. WiFi.disconnect()/WiFi.mode(WIFI_OFF) di stopWiFiCleanly()
+    // dipakai untuk membersihkan state sebelum fallback WiFiManager.
+    return;
   #else
     esp_wifi_sta_wpa2_ent_disable();
   #endif
@@ -3353,7 +3389,9 @@ const char* wifiStatusText(wl_status_t st);
 void stopWiFiCleanly(bool eraseCredentials) {
   Serial.println(F("[WIFI] Stopping current STA connection..."));
 
-  mqtt.disconnect();
+  if (mqtt.connected()) {
+    mqtt.disconnect();
+  }
   mqttOK = false;
 
   WiFi.setAutoReconnect(false);
@@ -3361,10 +3399,10 @@ void stopWiFiCleanly(bool eraseCredentials) {
   delay(800);
 
   WiFi.mode(WIFI_OFF);
-  delay(800);
+  delay(WIFI_MANAGER_SETTLE_MS);
 
   WiFi.mode(WIFI_STA);
-  delay(500);
+  delay(800);
 
   applyWiFiStabilityConfig();
 
@@ -3400,12 +3438,52 @@ const char* wifiStatusText(wl_status_t st) {
 }
 
 const char* wifiModeText() {
-  if (wifiConnectionMode == WIFI_MODE_EDUROAM) return "EDUROAM";
-  if (wifiConnectionMode == WIFI_MODE_MANAGER) return "FIXED WIFI / WIFI MANAGER";
+  if (wifiConnectionMode == WIFI_MODE_EDUROAM) return "EDUROAM WPA2-ENTERPRISE";
+  if (wifiConnectionMode == WIFI_MODE_MANAGER) return "WIFI MANAGER PORTAL";
   return "OFFLINE";
 }
 
-bool connectEduroam() {
+bool waitForWiFiConnection(const __FlashStringHelper* label, unsigned long timeoutMs) {
+  unsigned long startAttempt = millis();
+  wl_status_t lastStatus = (wl_status_t)255;
+
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < timeoutMs) {
+    wl_status_t st = WiFi.status();
+
+    if (st != lastStatus) {
+      Serial.print(label);
+      Serial.print(F(" status changed: "));
+      Serial.print((int)st);
+      Serial.print(F(" / "));
+      Serial.println(wifiStatusText(st));
+      lastStatus = st;
+    }
+
+    Serial.print('.');
+    delay(WIFI_CONNECT_POLL_MS);
+    yield();
+  }
+
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
+
+void printWiFiConnectedInfo(const __FlashStringHelper* label) {
+  Serial.print(label);
+  Serial.println(F(" connected."));
+  Serial.print(label);
+  Serial.print(F(" SSID : "));
+  Serial.println(WiFi.SSID());
+  Serial.print(label);
+  Serial.print(F(" IP   : "));
+  Serial.println(WiFi.localIP());
+  Serial.print(label);
+  Serial.print(F(" RSSI : "));
+  Serial.print(WiFi.RSSI());
+  Serial.println(F(" dBm"));
+}
+
+bool connectEduroam(bool eraseCredentials = true) {
 #if USE_EDUROAM_FIRST
   Serial.println();
   Serial.println("╔══════════════ EDUROAM WIFI INIT ══════════════╗");
@@ -3427,7 +3505,7 @@ bool connectEduroam() {
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  WiFi.disconnect(true, true);
+  WiFi.disconnect(eraseCredentials, eraseCredentials);
   delay(1000);
 
   disableEduroamEnterpriseMode();
@@ -3463,35 +3541,11 @@ bool connectEduroam() {
   WiFi.begin(EDUROAM_SSID);
 #endif
 
-  unsigned long startAttempt = millis();
-  wl_status_t lastStatus = WL_IDLE_STATUS;
-
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startAttempt < EDUROAM_TIMEOUT_MS) {
-    wl_status_t st = WiFi.status();
-
-    if (st != lastStatus) {
-      Serial.print("[EDUROAM] WiFi status changed: ");
-      Serial.print((int)st);
-      Serial.print(" / ");
-      Serial.println(wifiStatusText(st));
-      lastStatus = st;
-    }
-
-    Serial.print(".");
-    delay(500);
-  }
-
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
+  if (waitForWiFiConnection(F("[EDUROAM]"), EDUROAM_TIMEOUT_MS)) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_EDUROAM;
 
-    Serial.println("[EDUROAM] Connected successfully.");
-    Serial.print("[EDUROAM] SSID : "); Serial.println(WiFi.SSID());
-    Serial.print("[EDUROAM] IP   : "); Serial.println(WiFi.localIP());
-    Serial.print("[EDUROAM] RSSI : "); Serial.print(WiFi.RSSI()); Serial.println(" dBm");
+    printWiFiConnectedInfo(F("[EDUROAM]"));
     Serial.println("╚════════════════════════════════════════════════╝");
     return true;
   }
@@ -3506,12 +3560,14 @@ bool connectEduroam() {
   Serial.println(wifiStatusText(WiFi.status()));
   Serial.println("[EDUROAM] Cleaning enterprise mode before WiFiManager...");
 
-  // Penting: hentikan total proses koneksi eduroam yang masih pending.
-  // Jika langsung masuk WiFiManager saat STA masih connecting, ESP-IDF dapat memberi error:
-  // E wifi:sta is coneting, return error
+  // Jangan panggil stopWiFiCleanly() di sini karena setupWiFiManager()
+  // akan melakukan satu kali clean stop sebelum membuka WiFiManager.
+  // Double stop tepat sebelum startConfigPortal() pernah memicu panic
+  // LoadProhibited pada beberapa kombinasi core ESP32 + WiFiManager.
   disableEduroamEnterpriseMode();
-  delay(300);
-  stopWiFiCleanly(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  delay(500);
 
   Serial.println("[EDUROAM] Fallback to WiFiManager portal.");
   Serial.println("╚════════════════════════════════════════════════╝");
@@ -3523,110 +3579,29 @@ bool connectEduroam() {
 }
 
 
-bool connectFixedWiFi() {
-  Serial.println();
-  Serial.println(F("╔════════════ FIXED WIFI INIT SAFE ════════════╗"));
-  Serial.print(F("[WIFI] SSID     : "));
-  Serial.println(FIXED_WIFI_SSID);
-  Serial.println(F("[WIFI] Password : ********"));
-
-  // SAFE MODE:
-  // Jangan panggil mqtt.disconnect() dan enterprise disable di tahap ini.
-  // Pada beberapa ESP32, pemanggilan sebelum WiFi driver siap dapat memicu
-  // Guru Meditation LoadProhibited tepat setelah print password.
-  mqttOK = false;
-  wifiOK = false;
-  wifiConnectionMode = WIFI_MODE_OFFLINE;
-
-  WiFi.persistent(false);        // jangan simpan AP baru ke NVS
-  WiFi.setAutoReconnect(false);
-  WiFi.mode(WIFI_STA);
-  delay(500);
-
-  // Putus koneksi aktif tanpa erase credential NVS.
-  // WiFi.begin(ssid, pass) tetap memaksa konek ke SSID hai, bukan eduroam.
-  WiFi.disconnect(false, false);
-  delay(500);
-
-  WiFi.setSleep(false);
-  esp_wifi_set_ps(WIFI_PS_NONE);
-  WiFi.setAutoReconnect(true);
-
-  Serial.println(F("[WIFI] Connecting to fixed WiFi...") );
-  WiFi.begin(FIXED_WIFI_SSID, FIXED_WIFI_PASS);
-
-  unsigned long startAttempt = millis();
-  wl_status_t lastStatus = WL_IDLE_STATUS;
-
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startAttempt < FIXED_WIFI_TIMEOUT_MS) {
-    wl_status_t st = WiFi.status();
-
-    if (st != lastStatus) {
-      Serial.print(F("[WIFI] Status changed: "));
-      Serial.print((int)st);
-      Serial.print(F(" / "));
-      Serial.println(wifiStatusText(st));
-      lastStatus = st;
-    }
-
-    Serial.print('.');
-    delay(500);
-  }
-
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    wifiOK = true;
-    wifiConnectionMode = WIFI_MODE_MANAGER;
-    applyWiFiStabilityConfig();
-
-    Serial.println(F("[WIFI] Connected to fixed WiFi."));
-    Serial.print(F("[WIFI] SSID : "));
-    Serial.println(WiFi.SSID());
-    Serial.print(F("[WIFI] IP   : "));
-    Serial.println(WiFi.localIP());
-    Serial.print(F("[WIFI] RSSI : "));
-    Serial.print(WiFi.RSSI());
-    Serial.println(F(" dBm"));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return true;
-  }
-
-  wifiOK = false;
-  wifiConnectionMode = WIFI_MODE_OFFLINE;
-
-  Serial.println(F("[WIFI] Fixed WiFi failed / timeout."));
-  Serial.print(F("[WIFI] Final status: "));
-  Serial.print((int)WiFi.status());
-  Serial.print(F(" / "));
-  Serial.println(wifiStatusText(WiFi.status()));
-  Serial.println(F("╚══════════════════════════════════════════════╝"));
-
-  return false;
-}
-
 bool connectWiFiManagerFallback() {
   Serial.println();
   Serial.println(F("╔════════════ WIFI MANAGER PORTAL FALLBACK SAFE ════════════╗"));
-  Serial.println(F("[WIFI MANAGER] Fixed WiFi gagal. Membuka portal fallback."));
-  Serial.println(F("[WIFI MANAGER] autoConnect tidak dipakai, jadi saved eduroam tidak dicoba."));
+  Serial.println(F("[WIFI MANAGER] Eduroam gagal. Membuka portal fallback."));
+  Serial.println(F("[WIFI MANAGER] startConfigPortal dipakai agar tidak auto-connect credential lama."));
 
   mqttOK = false;
   wifiOK = false;
 
-  WiFi.persistent(false);
+  // prepareNormalWiFiMode() sudah membersihkan STA/enterprise state.
+  // Di sini jangan disconnect ulang tepat sebelum portal karena beberapa
+  // board/core dapat panic ketika WiFiManager mulai AP setelah STA baru
+  // saja dihentikan dua kali berturut-turut.
+  WiFi.persistent(true);
   WiFi.setAutoReconnect(false);
-  WiFi.mode(WIFI_STA);
-  delay(500);
-  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_AP_STA);
   delay(500);
 
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  WiFiManager wm;
-  wm.setDebugOutput(true);
+  static WiFiManager wm;
+  wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
   wm.setConnectTimeout(20);
   wm.setConnectRetries(1);
@@ -3635,27 +3610,23 @@ bool connectWiFiManagerFallback() {
   wm.resetSettings();
 #endif
 
-  // startConfigPortal tidak mencoba saved AP lama.
+  // startConfigPortal hanya membuka AP portal dan tidak menjalankan autoConnect().
   bool res = wm.startConfigPortal(WIFI_MANAGER_AP_NAME, WIFI_MANAGER_AP_PASS);
 
   if (res && WiFi.status() == WL_CONNECTED) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_MANAGER;
     applyWiFiStabilityConfig();
+    WiFi.persistent(false);
 
-    Serial.print(F("[WIFI MANAGER] Connected. SSID: "));
-    Serial.println(WiFi.SSID());
-    Serial.print(F("[WIFI MANAGER] IP: "));
-    Serial.println(WiFi.localIP());
-    Serial.print(F("[WIFI MANAGER] RSSI: "));
-    Serial.print(WiFi.RSSI());
-    Serial.println(F(" dBm"));
+    printWiFiConnectedInfo(F("[WIFI MANAGER]"));
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return true;
   }
 
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
+  WiFi.persistent(false);
 
   Serial.println(F("[WIFI MANAGER] Failed / timeout. System tetap jalan offline."));
   Serial.print(F("[WIFI MANAGER] Final WiFi status: "));
@@ -3675,19 +3646,30 @@ void setupWiFiManager() {
   mqttOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
 
-  Serial.println(F("[WIFI] Mode utama: fixed WiFi"));
+#if USE_EDUROAM_FIRST
+  Serial.println(F("[WIFI] Mode utama: eduroam WPA2-Enterprise"));
   Serial.print(F("[WIFI] Target SSID: "));
-  Serial.println(FIXED_WIFI_SSID);
+  Serial.println(EDUROAM_SSID);
 
-  // Prioritas utama: langsung konek ke SSID hai.
-  if (connectFixedWiFi()) {
-    Serial.println(F("[WIFI] Mode koneksi: FIXED WIFI"));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return;
+  for (uint8_t attempt = 1; attempt <= WIFI_EDUROAM_MAX_ATTEMPTS; attempt++) {
+    Serial.print(F("[WIFI] Eduroam attempt "));
+    Serial.print(attempt);
+    Serial.print(F("/"));
+    Serial.println(WIFI_EDUROAM_MAX_ATTEMPTS);
+
+    if (connectEduroam()) {
+      Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
+      Serial.println(F("╚══════════════════════════════════════════════╝"));
+      return;
+    }
   }
 
-  // Jika SSID hai gagal, baru buka portal WiFiManager.
-  Serial.println(F("[WIFI] Fixed WiFi gagal. Masuk fallback WiFiManager portal."));
+  Serial.println(F("[WIFI] Eduroam gagal. Masuk fallback AP WiFiManager."));
+#else
+  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung membuka fallback AP WiFiManager."));
+#endif
+
+  prepareNormalWiFiMode();
 
   if (connectWiFiManagerFallback()) {
     Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER PORTAL"));
@@ -3807,11 +3789,25 @@ void checkWiFiStatus() {
       Serial.println(wifiReconnectBackoffMs);
       Serial.print(F("[WIFI] Status     : "));
       Serial.println((int)st);
-      Serial.println(F("[WIFI] Reconnect using saved credential..."));
-      Serial.println(F("╚════════════════════════════════════════════════╝"));
+      Serial.print(F("[WIFI] Mode       : "));
+      Serial.println(wifiModeText());
 
       applyWiFiStabilityConfig();
-      WiFi.reconnect();
+
+      if (wifiConnectionMode == WIFI_MODE_EDUROAM) {
+#if USE_EDUROAM_FIRST
+        Serial.println(F("[WIFI] Reconnect using eduroam WPA2-Enterprise..."));
+        connectEduroam(false);
+#else
+        Serial.println(F("[WIFI] Eduroam disabled, reconnect using active credential..."));
+        WiFi.reconnect();
+#endif
+      } else {
+        Serial.println(F("[WIFI] Reconnect using active WiFiManager credential..."));
+        WiFi.reconnect();
+      }
+
+      Serial.println(F("╚════════════════════════════════════════════════╝"));
 
       wifiReconnectBackoffMs *= 2;
       if (wifiReconnectBackoffMs > WIFI_RECONNECT_MAX_MS) {
@@ -3824,6 +3820,9 @@ void checkWiFiStatus() {
 
   // WiFi connected.
   wifiReconnectBackoffMs = WIFI_RECONNECT_MIN_MS;
+  if (wifiConnectionMode == WIFI_MODE_OFFLINE) {
+    wifiConnectionMode = (WiFi.SSID() == EDUROAM_SSID) ? WIFI_MODE_EDUROAM : WIFI_MODE_MANAGER;
+  }
 
   if (!wasWifiOk && wifiOK) {
     Serial.println();
@@ -4962,6 +4961,10 @@ void printAcquisitionSpecReport() {
   Serial.print(sensorAvgMs, 2); Serial.println(F(" ms"));
   Serial.print  (F("║ UART frame avg              : "));
   Serial.print(frameAvgMs, 2); Serial.println(F(" ms"));
+  Serial.print  (F("║ UART noise/overflow/resync  : "));
+  Serial.print(acqMon.rxNoiseBytes); Serial.print(F(" / "));
+  Serial.print(acqMon.rxOverflowReset); Serial.print(F(" / "));
+  Serial.println(acqMon.rxResyncCount);
   Serial.print  (F("║ Last 1s aggregation interval: ")); Serial.print(lastFastAggIntervalMs); Serial.println(F(" ms"));
   Serial.print  (F("║ Last 1s aggregation samples : ")); Serial.print(lastFastAggSamples); Serial.println(F(" sample"));
 
@@ -5047,6 +5050,10 @@ void printPerformanceReport() {
   Serial.print  (F("║ UART throughput              : ")); Serial.print(frameRateHz, 2); Serial.print(F(" frame/s | ")); Serial.print(rxBytesPerSec, 1); Serial.println(F(" B/s"));
   Serial.print  (F("║ Raw frame current            : ")); Serial.print(acqMon.lastRawFrameBytes); Serial.println(F(" B"));
   Serial.print  (F("║ Frame RX valid/fail          : ")); Serial.print(acqMon.frameValid); Serial.print(F(" / ")); Serial.println(acqMon.frameParseFailed);
+  Serial.print  (F("║ UART noise/overflow/resync   : "));
+  Serial.print(acqMon.rxNoiseBytes); Serial.print(F(" / "));
+  Serial.print(acqMon.rxOverflowReset); Serial.print(F(" / "));
+  Serial.println(acqMon.rxResyncCount);
   Serial.print  (F("║ Frame success rate           : ")); Serial.print(frameSuccessRate, 2); Serial.println(F(" %"));
   Serial.print  (F("║ Lost / duplicate frame       : ")); Serial.print(acqMon.lostFrame); Serial.print(F(" / ")); Serial.println(acqMon.duplicateFrame);
   Serial.print  (F("║ Buffer reset                 : ")); Serial.println((uint32_t)rxBufferResetCount);
@@ -5395,7 +5402,7 @@ void setup() {
   lastSdCsvLineCache.reserve(384);
   lastSdQueueJsonCache.reserve(512);
   serialCmd.reserve(128);
-  linkRxBuffer.reserve(300);
+  linkRxBuffer.reserve(LINK_LINE_BUFFER_MAX_CHARS + 1);
 
   if (dataMutex == NULL) Serial.println("[ERROR] dataMutex gagal dibuat.");
   if (sdMutex == NULL) Serial.println("[ERROR] sdMutex gagal dibuat.");
@@ -5405,8 +5412,19 @@ void setup() {
 
   deselectAllSPI();
 
+  LinkSerial.setRxBufferSize(LINK_SERIAL_RX_BUFFER_BYTES);
   LinkSerial.begin(LINK_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
-  LinkSerial.setTimeout(50);
+  LinkSerial.setTimeout(20);
+
+  xTaskCreatePinnedToCore(
+    UartRxTask,
+    "UartRxTask",
+    LINK_RX_TASK_STACK_WORDS,
+    NULL,
+    LINK_RX_TASK_PRIORITY,
+    NULL,
+    1
+  );
 
   // ============================================================
   // SD INIT SEBELUM TFT INIT
@@ -5457,7 +5475,7 @@ void setup() {
     reconnectMQTT();
   }
 
-  drawBootSplashStep("Starting sensor and FFT tasks...", 94);
+  drawBootSplashStep("Starting sensor, UART, and FFT tasks...", 94);
   xTaskCreatePinnedToCore(
     SensorTask50Hz,
     "SensorTask50Hz",
