@@ -87,7 +87,7 @@
 #endif
 
 #ifndef WIFI_MANAGER_SETTLE_MS
-#define WIFI_MANAGER_SETTLE_MS 1500UL
+#define WIFI_MANAGER_SETTLE_MS 3000UL
 #endif
 
 // Set 1 hanya jika ingin reset/portal WiFiManager dipaksa muncul.
@@ -3589,28 +3589,33 @@ bool connectWiFiManagerFallback() {
   wifiOK = false;
 
   // prepareNormalWiFiMode() sudah membersihkan STA/enterprise state.
-  // Di sini jangan disconnect ulang tepat sebelum portal karena beberapa
-  // board/core dapat panic ketika WiFiManager mulai AP setelah STA baru
-  // saja dihentikan dua kali berturut-turut.
-  WiFi.persistent(true);
+  // Pakai urutan konservatif sesuai contoh WiFiManager: kembali ke STA,
+  // jangan paksa AP_STA, jangan disconnect ulang, dan jangan panggil
+  // esp_wifi_set_ps() tepat sebelum startConfigPortal(). Pada beberapa
+  // board/core, perubahan mode AP_STA manual setelah enterprise gagal dapat
+  // memicu abort sebelum AP portal sempat aktif.
+  WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
-  WiFi.mode(WIFI_AP_STA);
-  delay(500);
-
-  WiFi.setSleep(false);
-  esp_wifi_set_ps(WIFI_PS_NONE);
+  WiFi.mode(WIFI_STA);
+  delay(1000);
 
   static WiFiManager wm;
   wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
-  wm.setConnectTimeout(20);
+  wm.setConnectTimeout(30);
   wm.setConnectRetries(1);
 
 #if FORCE_WIFI_PORTAL
   wm.resetSettings();
 #endif
 
-  // startConfigPortal hanya membuka AP portal dan tidak menjalankan autoConnect().
+  Serial.print(F("[WIFI MANAGER] AP SSID : "));
+  Serial.println(WIFI_MANAGER_AP_NAME);
+  Serial.print(F("[WIFI MANAGER] AP PASS : "));
+  Serial.println(WIFI_MANAGER_AP_PASS);
+  Serial.println(F("[WIFI MANAGER] Starting config portal now..."));
+
+  // startConfigPortal membuka AP portal dan tidak menjalankan autoConnect().
   bool res = wm.startConfigPortal(WIFI_MANAGER_AP_NAME, WIFI_MANAGER_AP_PASS);
 
   if (res && WiFi.status() == WL_CONNECTED) {
