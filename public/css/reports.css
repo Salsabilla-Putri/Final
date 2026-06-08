@@ -270,7 +270,7 @@ body {
 
 /* === CHART CONTAINER === */
 .chart-container {
-    display: none; height: 400px; margin-top: 20px; position: relative;
+    display: none; min-height: 700px; margin-top: 20px; position: relative;
 }
 .chart-header {
     display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;

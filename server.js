@@ -276,7 +276,7 @@ const activeTimeHistorySchema = new mongoose.Schema({
     source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' },
     calc: {
         rpmThreshold: { type: Number, default: 0 },
-        rule: { type: String, default: 'status=RUNNING OR rpm>threshold' },
+        rule: { type: String, default: 'ECU connected' },
         sampledAt: { type: Date, default: Date.now }
     }
 }, { timestamps: true });
@@ -623,7 +623,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'ECU connected', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -700,7 +700,7 @@ async function syncActiveTimeHistory(data) {
     const eventTime = safeEventTime(data?.timestamp);
     const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
     const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
-    const isRunning = isEcuConnected && isEngineRunning(data);
+    const isRunning = isEcuConnected;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     let session = activeSessions.get(key);
@@ -725,7 +725,7 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
         });
         return;
     }
@@ -740,7 +740,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
             });
             return;
         }
@@ -748,7 +748,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
