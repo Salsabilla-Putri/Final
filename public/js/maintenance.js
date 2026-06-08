@@ -301,16 +301,40 @@ function showNotif(msg, type) {
     }
 }
 
+function getFilteredTasksForExport() {
+    const now = new Date();
+    if (currentFilter === 'overdue') return allTasks.filter(t => t.status !== 'completed' && new Date(t.dueDate) < now);
+    if (currentFilter !== 'all') return allTasks.filter(t => t.status === currentFilter);
+    return allTasks.filter(t => t.status !== 'completed');
+}
+
+function escapeCsvCell(value) {
+    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
 function exportCSV() {
+    const rows = getFilteredTasksForExport();
+    if (!rows.length) return alert('No maintenance data to export for the selected filter');
+
     let csv = "Task,Type,Priority,Cost,DueDate,Status,Technician\n";
-    allTasks.forEach(t => {
-      csv += `"${t.task}",${t.type},${t.priority},${t.cost || 0},${t.dueDate},${t.status},"${t.assignedTo}"\n`;
+    rows.forEach(t => {
+      const dueDate = t.dueDate ? new Date(t.dueDate).toLocaleDateString('id-ID') : '-';
+      csv += [
+        escapeCsvCell(t.task),
+        escapeCsvCell(t.type),
+        escapeCsvCell(t.priority),
+        escapeCsvCell(t.cost || 0),
+        escapeCsvCell(dueDate),
+        escapeCsvCell(t.status),
+        escapeCsvCell(t.assignedTo)
+      ].join(',') + "\n";
     });
-    const blob = new Blob([csv], { type: 'text/csv' });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'maintenance_schedule.csv';
+    a.href = url; a.download = `maintenance_schedule_${currentFilter}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
+    window.URL.revokeObjectURL(url);
 }
 
 // --- INIT ---

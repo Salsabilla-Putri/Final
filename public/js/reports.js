@@ -1445,11 +1445,61 @@ function downloadBlob(content, type, filename) {
     window.URL.revokeObjectURL(url);
 }
 
+function formatExportNumber(value, digits = 2) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toFixed(digits) : '';
+}
+
+function calculateStatsFromRows(rows, sensorKey) {
+    const values = (Array.isArray(rows) ? rows : [])
+        .map((row) => Number(row?.[sensorKey]))
+        .filter((value) => Number.isFinite(value));
+    if (!values.length) return { count: 0, avg: null, min: null, max: null };
+    const sum = values.reduce((total, value) => total + value, 0);
+    return {
+        count: values.length,
+        avg: sum / values.length,
+        min: Math.min(...values),
+        max: Math.max(...values)
+    };
+}
+
+function getExportSensorStats(sensorKey, rows) {
+    const dbStats = reportStatsBySensor?.[sensorKey];
+    const rowStats = calculateStatsFromRows(rows, sensorKey);
+    return {
+        count: Number(dbStats?.count) || rowStats.count,
+        avg: Number.isFinite(Number(dbStats?.avg)) ? Number(dbStats.avg) : rowStats.avg,
+        min: Number.isFinite(Number(dbStats?.min)) ? Number(dbStats.min) : rowStats.min,
+        max: Number.isFinite(Number(dbStats?.max)) ? Number(dbStats.max) : rowStats.max
+    };
+}
+
+function buildExportStatsRows(rows) {
+    return Object.keys(SENSORS).map((sensorKey) => {
+        const stats = getExportSensorStats(sensorKey, rows);
+        return `
+            <tr>
+                <td>${escapeExportCell(SENSORS[sensorKey].name)}</td>
+                <td>${escapeExportCell(sensorKey)}</td>
+                <td>${escapeExportCell(SENSORS[sensorKey].unit)}</td>
+                <td>${stats.count}</td>
+                <td>${formatExportNumber(stats.avg)}</td>
+                <td>${formatExportNumber(stats.min)}</td>
+                <td>${formatExportNumber(stats.max)}</td>
+                <td>${periodAlertCount}</td>
+            </tr>`;
+    }).join('');
+}
+
 function exportTrendExcel() {
     const context = getTrendExportContext();
     if (!context || context.rows.length === 0) { alert('No chart data available to export'); return; }
 
     const { sensorKey, config, rows } = context;
+    const selectedStats = getExportSensorStats(sensorKey, rows);
+    const dateFrom = document.getElementById('dateFrom')?.value || 'all';
+    const dateTo = document.getElementById('dateTo')?.value || dateFrom;
     const tableRows = rows.map((row) => {
         const date = new Date(row.timestamp);
         const value = Number(row[sensorKey]);
@@ -1463,163 +1513,40 @@ function exportTrendExcel() {
 
     const htmlTable = `
         <table border="1">
+            <thead><tr><th colspan="2">Applied Filters</th></tr></thead>
+            <tbody>
+                <tr><td>Device ID</td><td>${escapeExportCell(getReportDeviceId())}</td></tr>
+                <tr><td>Date From</td><td>${escapeExportCell(dateFrom)}</td></tr>
+                <tr><td>Date To</td><td>${escapeExportCell(dateTo)}</td></tr>
+                <tr><td>Selected Parameter</td><td>${escapeExportCell(config.name)} (${escapeExportCell(sensorKey)})</td></tr>
+            </tbody>
+        </table>
+        <br>
+        <table border="1">
             <thead>
-                <tr><th>Timestamp</th><th>${escapeExportCell(config.name)}</th><th>Unit</th></tr>
+                <tr><th colspan="6">Selected Parameter Statistics</th></tr>
+                <tr><th>Parameter</th><th>Readings</th><th>AVG</th><th>MIN</th><th>MAX</th><th>Alerts</th></tr>
             </thead>
-            <tbody>${tableRows}</tbody>
-        </table>`;
-
-    downloadBlob(
-        `\ufeff${htmlTable}`,
-        'application/vnd.ms-excel;charset=utf-8;',
-        getTrendExportFilename('xls')
-    );
-}
-
-function getChartCanvas() {
-    const canvas = document.getElementById('mainChart');
-    if (!myChart || !canvas) { alert('No chart data available to export'); return null; }
-    return canvas;
-}
-
-function exportTrendImage() {
-    const canvas = getChartCanvas();
-    if (!canvas) return;
-    downloadDataUrl(canvas.toDataURL('image/png'), getTrendExportFilename('png'));
-}
-
-function downloadDataUrl(dataUrl, filename) {
-    const a = document.createElement('a');
-    a.href = dataUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-}
-
-function base64ToUint8Array(base64) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-}
-
-function concatUint8Arrays(parts) {
-    const total = parts.reduce((sum, part) => sum + part.length, 0);
-    const out = new Uint8Array(total);
-    let offset = 0;
-    parts.forEach((part) => { out.set(part, offset); offset += part.length; });
-    return out;
-}
-
-function createChartPdfBlob(canvas) {
-    const encoder = new TextEncoder();
-    const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-    const imageBytes = base64ToUint8Array(jpegDataUrl.split(',')[1]);
-    const pageWidth = 842;
-    const pageHeight = 595;
-    const margin = 36;
-    const maxWidth = pageWidth - (margin * 2);
-    const maxHeight = pageHeight - (margin * 2);
-    const ratio = Math.min(maxWidth / canvas.width, maxHeight / canvas.height);
-    const drawWidth = canvas.width * ratio;
-    const drawHeight = canvas.height * ratio;
-    const x = (pageWidth - drawWidth) / 2;
-    const y = (pageHeight - drawHeight) / 2;
-    const content = `q\n${drawWidth.toFixed(2)} 0 0 ${drawHeight.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ\n`;
-
-    const objects = [
-        encoder.encode('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'),
-        encoder.encode('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'),
-        encoder.encode('3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n'),
-        concatUint8Arrays([
-            encoder.encode(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>\nstream\n`),
-            imageBytes,
-            encoder.encode('\nendstream\nendobj\n')
-        ]),
-        encoder.encode(`5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}endstream\nendobj\n`)
-    ];
-
-    const header = encoder.encode('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
-    const offsets = [];
-    let currentOffset = header.length;
-    objects.forEach((obj) => { offsets.push(currentOffset); currentOffset += obj.length; });
-
-    const xrefOffset = currentOffset;
-    const xrefRows = ['xref', `0 ${objects.length + 1}`, '0000000000 65535 f ']
-        .concat(offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n `))
-        .join('\n');
-    const trailer = `\n${xrefRows}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-    return new Blob([header, ...objects, encoder.encode(trailer)], { type: 'application/pdf' });
-}
-
-function exportTrendPdf() {
-    const canvas = getChartCanvas();
-    if (!canvas) return;
-    downloadBlob(createChartPdfBlob(canvas), 'application/pdf', getTrendExportFilename('pdf'));
-}
-
-function exportTrendChart(format) {
-    if (format === 'excel') exportTrendExcel();
-    else if (format === 'png') exportTrendImage();
-    else if (format === 'pdf') exportTrendPdf();
-}
-
-
-function getTrendExportContext() {
-    if (!currentData || currentData.length === 0) return null;
-    const sensorKey = selectedSensors.find((key) => SENSORS[key]) || 'rpm';
-    const config = SENSORS[sensorKey] || SENSORS.rpm;
-    const prepared = prepareChartData(currentData);
-    return { sensorKey, config, rows: prepared.displayData || [], labels: prepared.labels || [] };
-}
-
-function getTrendExportFilename(extension) {
-    const dateFrom = document.getElementById('dateFrom')?.value || 'all';
-    const dateTo = document.getElementById('dateTo')?.value || dateFrom;
-    const sensor = selectedSensors.find((key) => SENSORS[key]) || 'sensor';
-    return `sensor_trend_${sensor}_${dateFrom}_to_${dateTo}.${extension}`;
-}
-
-function escapeExportCell(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-function downloadBlob(content, type, filename) {
-    const blob = content instanceof Blob ? content : new Blob([content], { type });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-}
-
-function exportTrendExcel() {
-    const context = getTrendExportContext();
-    if (!context || context.rows.length === 0) { alert('No chart data available to export'); return; }
-
-    const { sensorKey, config, rows } = context;
-    const tableRows = rows.map((row) => {
-        const date = new Date(row.timestamp);
-        const value = Number(row[sensorKey]);
-        return `
-            <tr>
-                <td>${escapeExportCell(Number.isNaN(date.getTime()) ? row.timestamp : date.toLocaleString('id-ID'))}</td>
-                <td>${Number.isFinite(value) ? value : ''}</td>
-                <td>${escapeExportCell(config.unit)}</td>
-            </tr>`;
-    }).join('');
-
-    const htmlTable = `
+            <tbody>
+                <tr>
+                    <td>${escapeExportCell(config.name)}</td>
+                    <td>${selectedStats.count}</td>
+                    <td>${formatExportNumber(selectedStats.avg)}</td>
+                    <td>${formatExportNumber(selectedStats.min)}</td>
+                    <td>${formatExportNumber(selectedStats.max)}</td>
+                    <td>${periodAlertCount}</td>
+                </tr>
+            </tbody>
+        </table>
+        <br>
+        <table border="1">
+            <thead>
+                <tr><th colspan="8">Sensor Card Statistics</th></tr>
+                <tr><th>Sensor</th><th>Key</th><th>Unit</th><th>Readings</th><th>AVG</th><th>MIN</th><th>MAX</th><th>Alerts</th></tr>
+            </thead>
+            <tbody>${buildExportStatsRows(rows)}</tbody>
+        </table>
+        <br>
         <table border="1">
             <thead>
                 <tr><th>Timestamp</th><th>${escapeExportCell(config.name)}</th><th>Unit</th></tr>
