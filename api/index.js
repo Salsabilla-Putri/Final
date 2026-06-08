@@ -64,7 +64,7 @@ const generatorDataSchema = new mongoose.Schema({
     rpm: Number, volt: Number, amp: Number, power: Number,
     freq: Number, temp: Number, coolant: Number, fuel: Number,
     sync: String, synced: Boolean, status: String, oil: Number, iat: Number,
-    map: Number, batt: Number, afr: Number, tps: Number
+    map: Number, batt: Number, afr: Number, tps: Number, phaseAngle: Number
 }, { versionKey: false });
 const GeneratorData = mongoose.models.GeneratorData || mongoose.model('GeneratorData', generatorDataSchema, 'generatordatas');
 
@@ -420,6 +420,12 @@ function normalizeGeneratorSnapshot(rawPayload = {}, defaults = latestData) {
             const parsed = parseFiniteNumber(snapshot[key]);
             if (parsed !== undefined) nextData[key] = parsed;
         }
+    }
+
+    const phaseValue = firstDefined(snapshot.phaseAngle, snapshot.phase_angle, snapshot.phaseDiff, snapshot.phase_diff, snapshot.phase);
+    if (phaseValue !== undefined) {
+        const parsedPhase = parseFiniteNumber(phaseValue);
+        if (parsedPhase !== undefined) nextData.phaseAngle = parsedPhase;
     }
 
     const coolantValue = readCoolantValue(snapshot);

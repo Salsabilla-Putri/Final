@@ -27,6 +27,30 @@ function normalizeSyncStatus(data = {}) {
     return rawSync || '--';
 }
 
+
+function getPowerSourceStatus(data = {}) {
+    const syncStatus = normalizeSyncStatus(data);
+    if (syncStatus === 'ON-GRID') {
+        return { label: 'PLN', detail: 'Supply PLN tersambung', ok: true };
+    }
+    if (syncStatus === 'OFF-GRID') {
+        return { label: 'GENSET', detail: 'Supply generator tersambung', ok: true };
+    }
+    return { label: '--', detail: 'Supply belum terdeteksi', ok: false };
+}
+
+function updatePowerSourceStatus(data) {
+    const supply = getPowerSourceStatus(data);
+    const overviewEl = document.getElementById('val-supply');
+    if (overviewEl) overviewEl.innerText = supply.label;
+
+    const detailEl = document.getElementById('engSupply');
+    if (detailEl) {
+        detailEl.innerText = supply.detail;
+        detailEl.className = supply.ok ? 'st-ok' : 'st-err';
+    }
+}
+
 function updateSyncStatus(id, data) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -86,6 +110,7 @@ async function updateSensorData() {
 
             // Engine Status
             updateSyncStatus('engSync', data);
+            updatePowerSourceStatus(data);
             updateStatus('engStat', isRun,  'Running', 'Stopped');
 
             const fuel   = Math.round(displayData.fuel || 0);
@@ -115,6 +140,7 @@ async function _handleDisconnect() {
     if (_disconnectReported) return;
     _disconnectReported = true;
     console.warn('ESP32 disconnect detected — closing active session');
+    updatePowerSourceStatus({ sync: '' });
     try {
         await fetch(`${API_URL}/active-session/close`, {
             method : 'POST',
