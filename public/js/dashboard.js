@@ -36,7 +36,7 @@ function getEngineRunning(data = {}) {
 }
 
 function formatLastUpdated(date = new Date()) {
-    return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
+    return date.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
 }
 
 function setDataStatus({ live = false, timestamp = null } = {}) {
@@ -363,52 +363,58 @@ async function initChart() {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) { activeChartLoading = false; return; }
 
-    const days       = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
-    const WIB_OFFSET = 7 * 60 * 60 * 1000; // UTC+7 dalam ms
-    const now        = new Date();
-
-    // Bangun map { 'YYYY-MM-DD': jamAktif } untuk 7 hari terakhir (WIB)
+    const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const WIB_OFFSET = 7 * 60 * 60 * 1000;
+    const now = new Date();
     const dayMap = {};
+
     for (let i = 6; i >= 0; i--) {
-        const d   = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
+        const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
         const key = d.toISOString().slice(0, 10);
         dayMap[key] = 0;
     }
 
     try {
-        const startDate = new Date(now.getTime() - 7 * 86400000).toISOString();
-        const res  = await fetch(`${API_URL}/generator-active-time/history?limit=500&startDate=${encodeURIComponent(startDate)}`);
+        const res = await fetch(`${API_URL}/generator-active-time/daily?days=7`);
         const json = await res.json();
 
         if (json.success && Array.isArray(json.data)) {
-            json.data.forEach(r => {
-                const start = new Date(r.startedAt);
-                // Untuk sesi terbuka, gunakan effectiveEndedAt/effectiveDurationMs dari server.
-                // Ini mencegah chart menghitung waktu disconnect sebagai jam aktif.
-                const end   = r.effectiveEndedAt ? new Date(r.effectiveEndedAt) : (r.endedAt ? new Date(r.endedAt) : now);
-
-                if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
-
-                // Pecah sesi yang melintas batas hari
-                _splitSessionByDay(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
-                    if (dayMap.hasOwnProperty(dateKey)) {
-                        dayMap[dateKey] += hours;
-                    }
-                });
+            json.data.forEach((row) => {
+                if (Object.prototype.hasOwnProperty.call(dayMap, row.date)) {
+                    dayMap[row.date] = Number(row.hours) || 0;
+                }
             });
+        } else {
+            throw new Error(json.error || 'Daily active time unavailable');
         }
     } catch (e) {
-        console.warn('Active time fetch error', e);
-        // Render chart tetap muncul, hanya semua nilai 0
+        console.warn('Daily active time fetch error, fallback to session history', e);
+        try {
+            const startDate = new Date(now.getTime() - 7 * 86400000).toISOString();
+            const res = await fetch(`${API_URL}/generator-active-time/history?limit=500&startDate=${encodeURIComponent(startDate)}`);
+            const json = await res.json();
+            if (json.success && Array.isArray(json.data)) {
+                json.data.forEach(r => {
+                    const start = new Date(r.startedAt);
+                    const end = r.effectiveEndedAt ? new Date(r.effectiveEndedAt) : (r.endedAt ? new Date(r.endedAt) : now);
+                    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
+                    _splitSessionByDay(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
+                        if (Object.prototype.hasOwnProperty.call(dayMap, dateKey)) dayMap[dateKey] += hours;
+                    });
+                });
+            }
+        } catch (fallbackError) {
+            console.warn('Active time history fallback error', fallbackError);
+        }
     }
 
-    const todayKey   = new Date(now.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
-    const labels     = [];
+    const todayKey = new Date(now.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
+    const labels = [];
     const dataPoints = [];
-    let   todayHours = 0;
+    let todayHours = 0;
 
     Object.keys(dayMap).sort().forEach(key => {
-        const d   = new Date(key + 'T12:00:00+07:00');
+        const d = new Date(key + 'T12:00:00+07:00');
         labels.push(days[d.getDay()]);
         const val = parseFloat(Math.min(24, dayMap[key]).toFixed(2));
         dataPoints.push(val);
@@ -422,7 +428,7 @@ async function initChart() {
         data: {
             labels,
             datasets: [{
-                label          : 'Jam Aktif',
+                label          : 'ECU Connected',
                 data           : dataPoints,
                 backgroundColor: dataPoints.map((_, i) => i === 6 ? '#f97316' : 'rgba(23,69,165,0.8)'),
                 borderRadius   : 8,
@@ -434,13 +440,13 @@ async function initChart() {
             maintainAspectRatio  : false,
             plugins: {
                 legend : { display: false },
-                tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} jam aktif` } }
+                tooltip: { callbacks: { label: ctx => ` ECU connected ${ctx.parsed.y} jam` } }
             },
             scales: {
                 y: {
                     beginAtZero : true,
                     suggestedMax: 8,
-                    title       : { display: true, text: 'Jam' },
+                    title       : { display: true, text: 'Jam ECU Connected' },
                     ticks       : { callback: v => v + 'h' },
                     grid        : { color: 'rgba(0,0,0,0.05)' }
                 },
@@ -449,7 +455,6 @@ async function initChart() {
         }
     });
 
-    // Update teks "Aktif Hari Ini"
     const tEl = document.getElementById('engToday');
     if (tEl) tEl.innerText = fmtHours(todayHours);
     activeChartLoading = false;
