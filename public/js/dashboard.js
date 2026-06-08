@@ -1,5 +1,6 @@
 const API_URL = '/api';
 let activeChart = null;
+let activeChartLoading = false;
 
 // --- UTILS ---
 const formatTime = (d) => new Date(d).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
@@ -238,8 +239,10 @@ function fmtHours(h) {
  * dipecah per-hari secara proporsional.
  */
 async function initChart() {
+    if (activeChartLoading) return;
+    activeChartLoading = true;
     const ctx = document.getElementById('chartActive')?.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) { activeChartLoading = false; return; }
 
     const days       = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
     const WIB_OFFSET = 7 * 60 * 60 * 1000; // UTC+7 dalam ms
@@ -330,6 +333,7 @@ async function initChart() {
     // Update teks "Aktif Hari Ini"
     const tEl = document.getElementById('engToday');
     if (tEl) tEl.innerText = fmtHours(todayHours);
+    activeChartLoading = false;
 }
 
 /**
@@ -380,8 +384,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initChart();
     setInterval(updateDashboard, 1000);
 
-    // Refresh chart setiap 5 menit
-    setInterval(initChart, 5 * 60 * 1000);
+    // Refresh active time lebih sering agar sesi terbuka/tertutup cepat terlihat di history.
+    setInterval(initChart, 30 * 1000);
 
     // Trigger recalculate sesi hari ini di server setiap 10 menit
     async function triggerTodayRecalculate() {

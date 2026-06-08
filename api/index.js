@@ -237,7 +237,86 @@ let latestData = {
 let lastPersistAt = 0;
 
 let activeSessions = new Map();
-const ACTIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+const ACTIVE_SESSION_TIMEOUT_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
+
+function safeEventTime(value) {
+    const dt = value ? new Date(value) : new Date();
+    return Number.isNaN(dt.getTime()) ? new Date() : dt;
+}
+
+function getSessionSampledAt(row) {
+    const sampledAt = row?.calc?.sampledAt ? new Date(row.calc.sampledAt) : null;
+    if (sampledAt && !Number.isNaN(sampledAt.getTime())) return sampledAt;
+    const startedAt = row?.startedAt ? new Date(row.startedAt) : null;
+    return startedAt && !Number.isNaN(startedAt.getTime()) ? startedAt : new Date();
+}
+
+function getEffectiveSessionEnd(row, referenceTime = new Date()) {
+    const endedAt = row?.endedAt ? new Date(row.endedAt) : null;
+    if (endedAt && !Number.isNaN(endedAt.getTime())) return endedAt;
+
+    const sampledAt = getSessionSampledAt(row);
+    const reference = safeEventTime(referenceTime);
+    const elapsedSinceSample = reference.getTime() - sampledAt.getTime();
+    return elapsedSinceSample > ACTIVE_SESSION_TIMEOUT_MS ? sampledAt : reference;
+}
+
+function decorateActiveTimeRow(row, referenceTime = new Date()) {
+    const plain = typeof row?.toObject === 'function' ? row.toObject() : { ...row };
+    const startedAt = safeEventTime(plain.startedAt);
+    const effectiveEndedAt = getEffectiveSessionEnd(plain, referenceTime);
+    const effectiveDurationMs = Math.max(0, effectiveEndedAt.getTime() - startedAt.getTime());
+
+    return {
+        ...plain,
+        effectiveEndedAt,
+        effectiveDurationMs,
+        isOpen: !plain.endedAt && effectiveEndedAt.getTime() >= referenceTime.getTime() - 1000
+    };
+}
+
+async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 'esp32_disconnect') {
+    const start = safeEventTime(startedAt);
+    const end = safeEventTime(endedAt);
+    const durationMs = Math.max(0, end.getTime() - start.getTime());
+
+    return ActiveTimeHistory.findOneAndUpdate(
+        { deviceId, startedAt: start, endedAt: null },
+        {
+            endedAt: end,
+            durationMs,
+            closeReason: reason,
+            calc: { rpmThreshold: 0, sampledAt: end }
+        },
+        { sort: { createdAt: -1 }, new: true }
+    );
+}
+
+async function closeStaleActiveSessions(requestedDeviceId = null) {
+    const closed = [];
+    const now = new Date();
+
+    for (const [deviceId, session] of activeSessions.entries()) {
+        if (requestedDeviceId && deviceId !== requestedDeviceId) continue;
+        if (now.getTime() - session.lastSeenAt.getTime() <= ACTIVE_SESSION_TIMEOUT_MS) continue;
+        const row = await finalizeOpenActiveSession(deviceId, session.startedAt, session.lastSeenAt, 'esp32_disconnect');
+        if (row) closed.push(row);
+        activeSessions.delete(deviceId);
+    }
+
+    const query = { endedAt: null };
+    if (requestedDeviceId) query.deviceId = requestedDeviceId;
+    const openRows = await ActiveTimeHistory.find(query).lean();
+    for (const row of openRows) {
+        const sampledAt = getSessionSampledAt(row);
+        if (now.getTime() - sampledAt.getTime() <= ACTIVE_SESSION_TIMEOUT_MS) continue;
+        const updated = await finalizeOpenActiveSession(row.deviceId, row.startedAt, sampledAt, 'esp32_disconnect');
+        if (updated) closed.push(updated);
+    }
+
+    return closed;
+}
+
 
 function firstDefined(...values) {
     return values.find((value) => value !== undefined && value !== null && value !== '');
@@ -900,12 +979,15 @@ app.get('/api/generator-active-time/history', async (req, res) => {
             if (endDate) query.startedAt.$lte = new Date(endDate);
         }
 
+        await closeStaleActiveSessions(effectiveDeviceId);
+        const now = new Date();
         const rows = await ActiveTimeHistory.find(query)
             .sort({ startedAt: -1 })
             .limit(parseInt(limit, 10))
             .lean();
+        const data = rows.map((row) => decorateActiveTimeRow(row, now));
 
-        res.json({ success: true, count: rows.length, data: rows });
+        res.json({ success: true, count: data.length, data });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -921,14 +1003,11 @@ app.get('/api/generator-active-time/stats', async (req, res) => {
         const query = { startedAt: { $gte: since } };
         if (effectiveDeviceId) query.deviceId = effectiveDeviceId;
 
+        await closeStaleActiveSessions(effectiveDeviceId);
+        const now = new Date();
         const rows = await ActiveTimeHistory.find(query).lean();
-        const now = Date.now();
         const totalDurationMs = rows.reduce((sum, row) => {
-            const started = new Date(row.startedAt).getTime();
-            const sampledAt = row?.calc?.sampledAt ? new Date(row.calc.sampledAt).getTime() : started;
-            const impliedEnded = Math.min(now, sampledAt + ACTIVE_SESSION_TIMEOUT_MS);
-            const ended = row.endedAt ? new Date(row.endedAt).getTime() : impliedEnded;
-            return sum + Math.max(0, ended - started);
+            return sum + decorateActiveTimeRow(row, now).effectiveDurationMs;
         }, 0);
 
         res.json({

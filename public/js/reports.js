@@ -8,6 +8,8 @@
 // === CONFIGURATION ===
 const API_URL       = '/api/reports';
 const API_STATS_URL = '/api/reports/stats';
+const ENABLE_WEB_FFT = false;
+const ENABLE_WEB_CBM = false;
 
 // Konfigurasi Parameter
 const SENSORS = {
@@ -117,7 +119,7 @@ function initDatePickers() {
 }
 
 // --- 4. SENSOR SELECTOR ---
-const FFT_SENSORS = ['rpm', 'volt', 'freq'];
+const FFT_SENSORS = ENABLE_WEB_FFT ? ['rpm', 'volt', 'freq'] : [];
 
 function selectSingleSensor(key) {
     if (!SENSORS[key]) return;
@@ -135,7 +137,7 @@ function selectSingleSensor(key) {
         );
     }
 
-    const analysisPanelEl = document.querySelector('.analysis-panel');
+    const analysisPanelEl = ENABLE_WEB_FFT ? document.querySelector('.analysis-panel') : null;
     if (analysisPanelEl) {
         if (FFT_SENSORS.includes(key)) {
             analysisPanelEl.style.display = '';
@@ -175,7 +177,9 @@ function setupEventListeners() {
 
     document.getElementById('toggleExport')?.addEventListener('click', toggleExportOptions);
     document.getElementById('printChart')?.addEventListener('click', printChart);
-    document.getElementById('recalculateFft')?.addEventListener('click', () => renderFftAnalysis(currentData));
+    if (ENABLE_WEB_FFT) {
+        document.getElementById('recalculateFft')?.addEventListener('click', () => renderFftAnalysis(currentData));
+    }
 }
 
 function updateDateFromHours(hours) {
@@ -498,7 +502,7 @@ function renderDataSourceNotice({ source, mode = 'info', message }) {
 function _triggerCbmRefresh() {
     // CBMPanel sekarang ada di reports.js dan diekspos ke window.
     // We call it with a short delay so the main chart rendering finishes first.
-    if (typeof window.CBMPanel?.reload === 'function') {
+    if (ENABLE_WEB_CBM && typeof window.CBMPanel?.reload === 'function') {
         setTimeout(() => window.CBMPanel.reload(false), 300);
     }
 }
@@ -514,12 +518,12 @@ function applyRowsToReports(rows, meta = {}) {
         renderSensorCards(currentData);
         renderChart(currentData);
 
-        const analysisPanelEl = document.querySelector('.analysis-panel');
+        const analysisPanelEl = ENABLE_WEB_FFT ? document.querySelector('.analysis-panel') : null;
         const activeSensor    = selectedSensors[0] || 'rpm';
         if (analysisPanelEl) {
             analysisPanelEl.style.display = FFT_SENSORS.includes(activeSensor) ? '' : 'none';
         }
-        if (FFT_SENSORS.includes(activeSensor)) renderFftAnalysis(currentData);
+        if (ENABLE_WEB_FFT && FFT_SENSORS.includes(activeSensor)) renderFftAnalysis(currentData);
 
         updateChartTitle(document.getElementById('dateFrom')?.value, document.getElementById('dateTo')?.value);
 
@@ -1460,6 +1464,11 @@ window.updateDateFromHours = updateDateFromHours;
 
 (function CBMPanel() {
     'use strict';
+
+    if (!ENABLE_WEB_CBM) {
+        window.CBMPanel = { reload: () => Promise.resolve(null), getLastResult: () => null };
+        return;
+    }
 
     const CBM_API     = '/api/cbm/analysis';
     const SUGGEST_API = '/api/cbm/suggestion';
