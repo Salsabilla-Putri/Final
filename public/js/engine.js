@@ -91,8 +91,9 @@ async function fetchData() {
         const json = await res.json();
         
         if (json.success) {
-            const ts = Date.parse(json.data?.timestamp || '');
-            const isFresh = Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
+            const lastTs = json.data?.lastUpdated || json.data?.lastMqttUpdate || json.data?.timestamp;
+            const ts = Date.parse(lastTs || '');
+            const isFresh = json.data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
             updateDashboard(json.data, isFresh);
             setEspConnectionStatus(isFresh);
         } else {
