@@ -634,13 +634,36 @@ app.use('/api', async (req, res, next) => {
 });
 
 let latestData = {
-    deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
+    deviceId: 'ESP32_GENERATOR_01', timestamp: null,
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
 const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
+let latestRealtimeReceivedAt = null;
+
+function getValidDate(value) {
+    const dt = value ? new Date(value) : null;
+    return dt && Number.isFinite(dt.getTime()) ? dt : null;
+}
+
+function getLatestRealtimeSnapshot() {
+    const timestamp = getValidDate(latestData?.timestamp);
+    if (!timestamp || latestData?._realtime !== true) return null;
+    return { ...latestData, timestamp };
+}
+
+function pickLatestEngineSnapshot(dbData) {
+    const dbTimestamp = getValidDate(dbData?.timestamp);
+    const realtimeData = getLatestRealtimeSnapshot();
+    const realtimeTimestamp = getValidDate(realtimeData?.timestamp);
+
+    if (dbData && realtimeData && realtimeTimestamp >= dbTimestamp) return realtimeData;
+    if (dbData) return { ...dbData, timestamp: dbTimestamp || dbData.timestamp };
+    if (realtimeData) return realtimeData;
+    return null;
+}
 
 function isEngineRunning(data) {
     const status = String(data?.status || '').toUpperCase();
@@ -1513,6 +1536,7 @@ mqttClient.on('message', async (topic, message) => {
 
         // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.
         latestData = normalizeGeneratorPayload(parsed);
+        latestRealtimeReceivedAt = getValidDate(latestData.timestamp) || new Date();
 
         const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
         if (fftDoc) {
@@ -1677,20 +1701,29 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
         const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
         const dbData = latestDocs[0] || null;
-        const lastDataAt = dbData?.timestamp || latestData.timestamp;
-        const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
-        const baseData = isDbFresh ? dbData : { ...latestData, timestamp: lastDataAt };
-        const previousDoc = latestDocs[1] || null;
+        const baseData = pickLatestEngineSnapshot(dbData);
+        if (!baseData) {
+            return res.status(404).json({ success: false, error: 'No generator data found' });
+        }
+
+        const baseTimestamp = getValidDate(baseData.timestamp);
+        const lastDataAt = baseTimestamp || getValidDate(dbData?.timestamp) || latestRealtimeReceivedAt;
+        const ecuConnected = lastDataAt ? (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS : false;
+        const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
         const enrichedData = {
             ...baseData,
+            timestamp: lastDataAt || baseData.timestamp,
+            ecuConnected,
             engineHours: totalEngineHours,
-            lastMqttUpdate: lastDataAt,
+            lastMqttUpdate: lastDataAt || baseData.timestamp,
+            lastUpdated: lastDataAt || baseData.timestamp,
             alerts: generateAlerts(baseData, previousDoc),
             maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
             ...getPublicLabels(baseData)
         };
-        res.json({ success: true, data: enrichedData, source: dbData ? 'database' : 'realtime-memory' });
+        const source = baseData._realtime ? 'realtime-memory' : 'database';
+        res.json({ success: true, data: enrichedData, source });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 app.get('/api/public-status', async (req, res) => {

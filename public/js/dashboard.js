@@ -5,7 +5,7 @@ let auxDashboardLoading = false;
 const SENSOR_REFRESH_MS = 2000;
 const AUX_REFRESH_MS = 15000;
 const CHART_REFRESH_MS = 60000;
-const LAST_SENSOR_STORAGE_KEY = 'gensys:last-dashboard-sensor';
+const LAST_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
 
 // --- UTILS ---
 const formatTime = (d) => new Date(d).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
@@ -196,8 +196,9 @@ async function updateSensorData() {
             const data = json.data;
 
             // Cek apakah data dari ESP32 masih fresh (bukan stale data dari cache server)
-            const dataAge = Date.now() - new Date(data.timestamp || 0).getTime();
-            if (dataAge > DISCONNECT_THRESHOLD_MS) {
+            const lastTs = data.lastUpdated || data.lastMqttUpdate || data.timestamp || data.createdAt;
+            const dataAge = Date.now() - new Date(lastTs || 0).getTime();
+            if (data.ecuConnected === false || dataAge > DISCONNECT_THRESHOLD_MS) {
                 _handleDisconnect(data);
                 return;
             }
@@ -209,7 +210,7 @@ async function updateSensorData() {
             _lastDisplayData = data;
             saveLastSensorSnapshot(data);
             renderSensorSnapshot(data, { live: true });
-            setDataStatus({ live: true, timestamp: data.timestamp });
+            setDataStatus({ live: true, timestamp: data.lastUpdated || data.lastMqttUpdate || data.timestamp });
         }
     } catch (e) {
         console.warn('Sensor Error', e);
@@ -223,7 +224,7 @@ async function _handleDisconnect(fallbackData = null) {
     const snapshot = fallbackData || _lastDisplayData || readLastSensorSnapshot();
     if (snapshot) {
         renderSensorSnapshot(snapshot, { live: false });
-        setDataStatus({ live: false, timestamp: snapshot.timestamp });
+        setDataStatus({ live: false, timestamp: snapshot.lastUpdated || snapshot.lastMqttUpdate || snapshot.timestamp });
     } else {
         setDataStatus({ live: false });
     }

@@ -18,7 +18,7 @@ let lastHeavyFetchAt = 0;
 const DASHBOARD_REFRESH_MS = 10000;
 const HEAVY_ENDPOINT_REFRESH_MS = 30000;
 const DATA_LIVE_THRESHOLD_MS = 30000;
-const LAST_PUBLIC_SENSOR_STORAGE_KEY = 'gensys:last-public-sensor';
+const LAST_PUBLIC_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
 
 // ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
@@ -188,8 +188,6 @@ async function fetchDashboardData() {
             updateAverageRuntimeFromDaily(activeDailyData.data);
         } else if (historyData?.success) {
             updateActiveTimeChart(historyData.data, { mode: 'session' });
-        } else if (engineHistoryData?.success && Array.isArray(engineHistoryData.data)) {
-            updateActiveTimeChart(engineHistoryData.data);
         }
 
         if (maintenanceData?.success) {
@@ -221,8 +219,10 @@ async function fetchDashboardData() {
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
         if (!engineData?.data && dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
 
-        const latestTs = engineData?.data?.timestamp || engineData?.data?.createdAt || readLastPublicSensorSnapshot()?.timestamp || null;
-        setDataStatus({ live: getDataAgeMs(latestTs) <= DATA_LIVE_THRESHOLD_MS, timestamp: latestTs });
+        const cachedSnapshot = readLastPublicSensorSnapshot();
+        const latestTs = engineData?.data?.lastUpdated || engineData?.data?.lastMqttUpdate || engineData?.data?.timestamp || engineData?.data?.createdAt || cachedSnapshot?.lastUpdated || cachedSnapshot?.lastMqttUpdate || cachedSnapshot?.timestamp || null;
+        const live = engineData?.data?.ecuConnected !== false && getDataAgeMs(latestTs) <= DATA_LIVE_THRESHOLD_MS;
+        setDataStatus({ live, timestamp: latestTs });
 
     } catch (err) {
         console.error('fetchDashboardData error:', err);
