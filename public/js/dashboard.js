@@ -42,8 +42,8 @@ function formatLastUpdated(date = new Date()) {
 function setDataStatus({ live = false, timestamp = null } = {}) {
     const statusEl = document.getElementById('dataLiveStatus');
     const lastEl = document.getElementById('lastUpdated');
-    const dt = timestamp ? new Date(timestamp) : new Date();
-    const safeDate = Number.isFinite(dt.getTime()) ? dt : new Date();
+    const dt = timestamp ? new Date(timestamp) : null;
+    const safeDate = dt && Number.isFinite(dt.getTime()) ? dt : null;
 
     if (statusEl) {
         statusEl.className = `conn-badge ${live ? 'conn-online' : 'conn-offline'}`;
@@ -51,7 +51,7 @@ function setDataStatus({ live = false, timestamp = null } = {}) {
             ? '<i class="fas fa-circle"></i> Live'
             : '<i class="fas fa-circle"></i> Data terakhir';
     }
-    if (lastEl) lastEl.innerText = `Diperbarui: ${formatLastUpdated(safeDate)}`;
+    if (lastEl) lastEl.innerText = safeDate ? `Diperbarui: ${formatLastUpdated(safeDate)}` : 'Diperbarui: --';
 }
 
 function setLoading(targetId, isLoading, message = 'Loading data...') {

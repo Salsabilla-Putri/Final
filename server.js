@@ -18,15 +18,18 @@ mongoose.set('bufferCommands', false);
 const mqttModulePath = path.join(__dirname, 'node_modules', 'mqtt', 'build', 'index.js');
 const mqtt = fs.existsSync(mqttModulePath) ? require('mqtt') : null;
 
-function createDisabledMqttClient() {
+function createDisabledMqttClient(message = 'MQTT disabled; running without live broker connection.', emitError = false) {
     const client = new EventEmitter();
+    client.connected = false;
     client.subscribe = () => undefined;
     client.publish = () => undefined;
     client.end = () => undefined;
 
-    process.nextTick(() => {
-        client.emit('error', new Error('MQTT module unavailable; running without live broker connection.'));
-    });
+    if (emitError) {
+        process.nextTick(() => {
+            client.emit('error', new Error(message));
+        });
+    }
 
     return client;
 }
@@ -36,6 +39,10 @@ const { generateMaintenanceDecision, toSuggestionDocument } = require('./mainten
 const { analyzeCBM } = require('./lib_cbm_analysis');
 
 const app = express();
+const isVercelRuntime = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const enableServerlessMqtt = process.env.ENABLE_SERVERLESS_MQTT === 'true';
+const shouldStartMqtt = !isVercelRuntime || enableServerlessMqtt;
+const shouldWarmDbOnStartup = !isVercelRuntime || process.env.ENABLE_SERVERLESS_DB_WARMUP === 'true';
 
 // SECURITY HEADERS
 app.use((req, res, next) => {
@@ -65,7 +72,9 @@ async function ensureDbReady() {
 
     dbConnectPromise = mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/generator_monitoring', {
         useNewUrlParser: true,
-        useUnifiedTopology: true
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000', 10),
+        socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '10000', 10)
     })
     .then(async () => {
         console.log('✅ MongoDB Connected');
@@ -163,9 +172,12 @@ const alertSchema = new mongoose.Schema({
     value: Number,
     message: String,
     severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+    acknowledged: { type: Boolean, default: false },
+    acknowledgedAt: Date,
+    confirmedAt: Date,
     resolved: { type: Boolean, default: false }
 });
-const Alert = mongoose.model('Alert', alertSchema);
+const Alert = mongoose.models.Alert || mongoose.model('Alert', alertSchema, 'alerts');
 
 // NEW: Schema untuk menyimpan Konfigurasi Threshold
 const configSchema = new mongoose.Schema({
@@ -175,7 +187,11 @@ const configSchema = new mongoose.Schema({
 const Config = mongoose.model('Config', configSchema);
 
 // DATABASE (startup connect + auto retry via ensureDbReady saat endpoint dipanggil)
-ensureDbReady().catch(() => undefined);
+// Di Vercel, jangan membuka koneksi MongoDB saat module di-import agar cold start
+// tidak berubah menjadi 502. Koneksi dibuat saat request API pertama yang butuh DB.
+if (shouldWarmDbOnStartup) {
+    ensureDbReady().catch(() => undefined);
+}
 
 
 const userSchema = new mongoose.Schema({
@@ -527,7 +543,7 @@ async function loadThresholdsFromDB() {
 
 // --- MQTT LOGIC ---
 // [FIX 1] Broker disamakan dengan ESP32 → shiftr.io cloud
-const mqttClient = mqtt
+const mqttClient = mqtt && shouldStartMqtt
     ? mqtt.connect(process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883', {
         clientId:        'server-' + Math.random().toString(16).slice(2, 8),
         username:        process.env.MQTT_USERNAME || 'generatorta20',
@@ -536,7 +552,16 @@ const mqttClient = mqtt
         reconnectPeriod: 3000,
         connectTimeout:  10000
     })
-    : createDisabledMqttClient();
+    : createDisabledMqttClient(
+        shouldStartMqtt
+            ? 'MQTT module unavailable; running without live broker connection.'
+            : 'MQTT disabled in Vercel serverless runtime.',
+        shouldStartMqtt && !mqtt
+    );
+
+if (isVercelRuntime && !enableServerlessMqtt) {
+    console.log('ℹ️ MQTT disabled in Vercel serverless runtime. Set ENABLE_SERVERLESS_MQTT=true to enable it explicitly.');
+}
 
 const mqttIngestStats = {
     connectedAt: null,
@@ -560,6 +585,53 @@ function updateMqttIngestError(error) {
     mqttIngestStats.lastErrorAt = new Date();
     mqttIngestStats.lastError = error?.message || String(error);
 }
+
+function shouldSkipApiDbWarmup(req) {
+    if (req.method !== 'GET') return false;
+    return [
+        '/api/health',
+        '/api/ingest/status',
+        '/api/ingest/batch',
+        '/api/mqtt-ingest/status'
+    ].includes(req.path);
+}
+
+app.get('/api/health', (req, res) => {
+    const mongodbState = mongoose.connection.readyState;
+    const mongodbStatus = ['disconnected', 'connected', 'connecting', 'disconnecting'][mongodbState] || 'unknown';
+    const mqttConnected = typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false;
+    const checks = {
+        mongodb: { status: mongodbStatus, connected: mongodbState === 1 },
+        mqtt: { enabled: shouldStartMqtt, connected: mqttConnected },
+        env: {
+            mongodbUri: Boolean(process.env.MONGODB_URI),
+            vercel: isVercelRuntime
+        }
+    };
+    const healthy = checks.mongodb.connected || isVercelRuntime;
+    res.status(healthy ? 200 : 503).json({
+        success: true,
+        status: healthy && checks.mongodb.connected ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString(),
+        checks
+    });
+});
+
+app.use('/api', async (req, res, next) => {
+    if (shouldSkipApiDbWarmup(req)) return next();
+
+    try {
+        await ensureDbReady();
+        next();
+    } catch (error) {
+        console.error('API DB connection error:', error.message);
+        res.status(503).json({
+            success: false,
+            error: 'Database connection unavailable',
+            details: process.env.NODE_ENV === 'production' ? undefined : error.message
+        });
+    }
+});
 
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
@@ -1072,10 +1144,39 @@ async function checkAndSaveAlerts(data) {
 // --- TAMBAHAN API UNTUK HALAMAN ALARM ---
 
 // 1. Acknowledge (Konfirmasi) Alarm - Mengubah Status jadi "Resolved"
+
+app.put('/api/alerts/ack-all', async (req, res) => {
+    try {
+        const filter = { resolved: { $ne: true }, acknowledged: { $ne: true } };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const result = await Alert.updateMany(filter, { $set: { acknowledged: true, acknowledgedAt: new Date() } });
+        res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/confirm-all', async (req, res) => {
+    try {
+        const filter = { resolved: { $ne: true } };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const now = new Date();
+        const result = await Alert.updateMany(filter, { $set: { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now } });
+        res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/:id/confirm', async (req, res) => {
+    try {
+        const now = new Date();
+        const updated = await Alert.findByIdAndUpdate(req.params.id, { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now }, { new: true });
+        if (!updated) return res.status(404).json({ success: false, message: 'Alert not found' });
+        res.json({ success: true, data: updated });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
 app.put('/api/alerts/:id/ack', async (req, res) => {
     try {
-        await Alert.findByIdAndUpdate(req.params.id, { resolved: true });
-        res.json({ success: true, message: 'Alert Acknowledged' });
+        await Alert.findByIdAndUpdate(req.params.id, { acknowledged: true, acknowledgedAt: new Date() });
+        res.json({ success: true, message: 'Alert acknowledged' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1571,28 +1672,27 @@ app.get('/api/engine-data/last-running', async (req, res) => {
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        let totalEngineHours = 0;
-        try {
-            const statsRes = await fetch(`http://localhost:${PORT}/api/generator-active-time/stats?hours=8760`);
-            const statsJson = await statsRes.json();
-            if (statsJson.success && statsJson.data?.totalDurationHours) {
-                totalEngineHours = statsJson.data.totalDurationHours;
-            }
-        } catch(e) {
-            console.warn('Gagal ambil total jam operasi:', e.message);
-        }
-
-        const realtimeData = {
-            ...latestData,
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
+        const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
+        const dbData = latestDocs[0] || null;
+        const lastDataAt = dbData?.timestamp || latestData.timestamp;
+        const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
+        const baseData = isDbFresh ? dbData : { ...latestData, timestamp: lastDataAt };
+        const previousDoc = latestDocs[1] || null;
+        const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
+        const enrichedData = {
+            ...baseData,
             engineHours: totalEngineHours,
-            lastMqttUpdate: new Date().toISOString()
+            lastMqttUpdate: lastDataAt,
+            alerts: generateAlerts(baseData, previousDoc),
+            maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
+            ...getPublicLabels(baseData)
         };
-        return res.json({ success: true, data: realtimeData, source: 'realtime-memory' });
-    } catch (error) {
-        res.json({ success: true, data: latestData, source: 'memory-fallback', warning: error.message });
-    }
+        res.json({ success: true, data: enrichedData, source: dbData ? 'database' : 'realtime-memory' });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
-
 app.get('/api/public-status', async (req, res) => {
     try {
         if (!isDbReady()) {
@@ -1951,7 +2051,7 @@ app.put('/api/alerts/:id/ack', async (req, res) => {
         // Cari alarm berdasarkan ID dan ubah 'resolved' jadi true
         const updatedAlert = await Alert.findByIdAndUpdate(
             req.params.id, 
-            { resolved: true },
+            { acknowledged: true, acknowledgedAt: new Date() },
             { new: true } // Opsi ini agar data yang dikembalikan adalah yang terbaru
         );
         
@@ -2839,11 +2939,19 @@ app.post('/api/cbm/run', async (req, res) => {
 // =========================
 // START SERVER
 // =========================
-const PORT = process.env.PORT || 3023;
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+function startBackgroundWorkers() {
     startMaintenanceSuggestionWorker();
     startMonthlyReportWorker();
     startCbmWorker();
-});
+}
+
+const PORT = process.env.PORT || 3023;
+
+if (require.main === module) {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+        startBackgroundWorkers();
+    });
+}
+
+module.exports = app;
