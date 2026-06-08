@@ -1,7 +1,7 @@
 // ============================================================
 // GENSYS ESP32-2 MONITORING FINAL
 // Industrial TFT HMI + Touch Navigation + Serial Command Console
-// CSV UART + 1s Aggregation Record + SD CSV + MQTT + FFT Page
+// CSV UART + 1s Aggregation Record + SD CSV + MQTT realtime
 //
 // RX CSV dari ESP32-1 setelah penambahan MAP:
 // $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid
@@ -23,7 +23,7 @@
 //
 // Serial command:
 // help, database, performance, sensor, network, touch, calibrate,
-// page generator, page engine, page fft
+// page generator, page engine
 // test once, test once reset, test once last
 // ============================================================
 
@@ -155,7 +155,7 @@
 // ============================================================
 // Tujuan:
 // - Mencegah MQTT disconnected saat runtime.
-// - Mengirim MongoDB/history batch setiap 10 menit.
+// - Mengirim data MongoDB/history realtime setiap 1 detik.
 // - Menjaga koneksi WiFi lebih stabil.
 // - Mengurangi risiko heap fragmentation akibat String JSON.
 
@@ -277,7 +277,7 @@ const char* FFT_BACKUP_FILE = "/fft_old.csv";
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
 const char* DB_CSV_HEADER =
   "recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,"
-  "freq,volt,currentA,powerKW,phase_diff,synced";
+  "freq,volt,currentA,powerKW,phase_diff,sync,powerSource,synced";
 
 // Header CSV FFT lokal. Format fft_bins_xy: freqHz:magnitude|freqHz:magnitude|...
 const char* FFT_CSV_HEADER =
@@ -294,19 +294,18 @@ const char* FFT_CSV_HEADER =
 // ============================================================
 // MONGODB BATCH CONFIG
 // ============================================================
-// Realtime dashboard tetap 1 detik.
-// MongoDB/history dikirim batch setiap 10 menit.
+// Realtime dashboard dan MongoDB/history dikirim tiap 1 detik tanpa batch di ESP32.
 
-#define MONGODB_BATCH_INTERVAL_MS 600000UL   // 10 menit
-#define MONGODB_BATCH_RECORDS     600        // 1 record/detik x 600 detik
+#define MONGODB_BATCH_INTERVAL_MS 1000UL     // realtime 1 detik (tanpa batch ESP32)
+#define MONGODB_BATCH_RECORDS     1          // 1 record/detik langsung kirim
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
 // MQTT broker/cloud sering menolak payload besar. Agar data benar-benar masuk
 // ke server.js + MongoDB, 600 record per 10 menit dikirim sebagai 60 publish
 // kecil berisi 10 record. Total data tetap 600 record per siklus batch.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 10
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 250UL
+#define MONGODB_UPLOAD_CHUNK_RECORDS 1
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 0UL
 
-// TEST DATABASE: tetap tulis database.csv/fft.csv di SD walaupun WiFi/MQTT normal.
+// TEST DATABASE: tetap tulis database.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
 #define SD_SAVE_ONLINE_FOR_DB_TEST 1
 
@@ -322,7 +321,7 @@ const unsigned long drawInterval      = 500;
 // ============================================================
 // FFT EDGE
 // ============================================================
-#define ENABLE_FFT_EDGE        1
+#define ENABLE_FFT_EDGE        0
 #define FFT_SAMPLE_RATE_HZ     10.0f   // Mengikuti UART ESP32-1: 100 ms = 10 Hz
 #define FFT_SAMPLES            64
 #define FFT_BINS_TO_SEND       32
@@ -620,8 +619,7 @@ bool touchDetected = false;
 
 enum DisplayPage {
   PAGE_GENERATOR = 0,
-  PAGE_ENGINE    = 1,
-  PAGE_FFT       = 2
+  PAGE_ENGINE    = 1
 };
 
 int activePage = PAGE_GENERATOR;
@@ -640,9 +638,8 @@ TouchCalPoint calPoints[] = {
   {"TOP_RIGHT",   440, 40},
   {"BOTTOM_LEFT", 40,  280},
   {"BOTTOM_RIGHT",440, 280},
-  {"GEN_ICON",    80,  305},
-  {"ENG_ICON",    240, 305},
-  {"FFT_ICON",    400, 305}
+  {"GEN_ICON",    120, 305},
+  {"ENG_ICON",    360, 305}
 };
 
 uint8_t calIndex = 0;
@@ -1035,6 +1032,14 @@ const char* getFFTSourceUnitById(uint8_t source) {
 
 const char* getFFTSourceName() {
   return getFFTSourceNameById(fftSelectedSource);
+}
+
+const char* getPowerSourceFromSynced(bool synced) {
+  return synced ? "GRID" : "GENSET";
+}
+
+const char* getSyncTextFromSynced(bool synced) {
+  return synced ? "ON-GRID" : "OFF-GRID";
 }
 
 // ============================================================
@@ -1658,11 +1663,6 @@ void pushStorageRecord(const AggregatedData &a) {
   rec.recordId = String(DEVICE_ID) + "-" + String(rec.localSeq) + "-" + String(rec.timestampMs);
   rec.agg = a;
 
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    rec.fft = fftData;
-    xSemaphoreGive(dataMutex);
-  }
-
   storageBatch[storageBatchCount] = rec;
   storageBatchCount++;
 
@@ -1896,7 +1896,6 @@ void SensorTask50Hz(void *pvParameters) {
     // Agar satu frame UART tidak dihitung 5 kali, agregasi hanya mengambil seq baru.
     if (hasSample && sample.seq != lastAggregatedSeq) {
       addSampleToAccumulator(sample);
-      addSampleToFFTBuffer(sample);
       acqMon.newSeqSamples++;
       lastAggregatedSeq = sample.seq;
     } else if (!hasSample) {
@@ -1953,6 +1952,8 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
+  json += "\"sync\":\"" + String(getSyncTextFromSynced(a.synced)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromSynced(a.synced)) + "\",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
   json += "}";
   return json;
@@ -1969,57 +1970,13 @@ String buildJsonParameterBatchPayload() {
 
 
 String buildJsonRecord(const StorageRecord &r) {
-  // Payload MQTT untuk web dashboard: field utama + FFT.
-  // Estimasi database tetap memakai buildJsonRecordParametersOnly(),
-  // sehingga ukuran cloud DB yang dihitung hanya field utama generator/mesin.
-  const AggregatedData &a = r.agg;
-  const FFTData &f = r.fft;
-
-  String json = "{";
-  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-  json += "\"recordId\":\"" + r.recordId + "\",";
-  json += "\"localSeq\":" + String(r.localSeq) + ",";
-  json += "\"timestamp\":\"" + r.timestamp + "\",";
-  json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
-  json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
-  json += "\"map\":" + String(a.mapAvg, 1) + ",";
-  json += "\"iat\":" + String(a.iatAvg, 1) + ",";
-  json += "\"clt\":" + String(a.cltAvg, 1) + ",";
-  json += "\"afr\":" + String(a.afrAvg, 2) + ",";
-  json += "\"batt\":" + String(a.battAvg, 2) + ",";
-  json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
-  json += "\"freq\":" + String(a.freqAvg, 3) + ",";
-  json += "\"volt\":" + String(a.voltAvg, 2) + ",";
-  json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
-  json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
-  json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
-
-  json += "\"fft\":{";
-  json += "\"valid\":" + String(f.valid ? "true" : "false") + ",";
-  json += "\"source\":\"" + String(getFFTSourceNameById(f.source)) + "\",";
-  json += "\"xUnit\":\"Hz\",";
-  json += "\"yUnit\":\"magnitude\",";
-  json += "\"sampleRateHz\":" + String(f.sampleRateHz, 1) + ",";
-  json += "\"resolutionHz\":" + String(f.resolutionHz, 3) + ",";
-  json += "\"peakHz\":" + String(f.peakHz, 3) + ",";
-  json += "\"peakMagnitude\":" + String(f.peakMagnitude, 5) + ",";
-  json += "\"rms\":" + String(f.rms, 5) + ",";
-  json += "\"bins\":[";
-  for (uint16_t i = 0; i < FFT_BINS_TO_SEND; i++) {
-    if (i) json += ",";
-    json += "{\"x\":" + String(f.freqBins[i], 3) + ",\"y\":" + String(f.magBins[i], 5) + "}";
-  }
-  json += "]}";
-
-  json += "}";
-  return json;
+  // FFT dihapus dari payload ESP32; record history memakai parameter utama saja.
+  return buildJsonRecordParametersOnly(r);
 }
 
 String buildMqttRealtimeFlatPayload() {
   // Payload khusus MQTT realtime ke dashboard.
-  // Format dibuat flat: timestamp + parameter langsung di root JSON.
-  // FFT tetap ikut sebagai object agar halaman FFT/dashboard masih menerima data spektrum.
+  // Format dibuat flat: timestamp + parameter langsung di root JSON tanpa FFT.
   uint32_t buildStart = micros();
 
   StorageRecord r;
@@ -2039,8 +1996,6 @@ String buildMqttRealtimeFlatPayload() {
   }
 
   const AggregatedData &a = r.agg;
-  const FFTData &f = r.fft;
-
   String json = "{";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
 
@@ -2060,24 +2015,9 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
-
-  json += "\"fft\":{";
-  json += "\"valid\":" + String(f.valid ? "true" : "false") + ",";
-  json += "\"source\":\"" + String(getFFTSourceNameById(f.source)) + "\",";
-  json += "\"xUnit\":\"Hz\",";
-  json += "\"yUnit\":\"magnitude\",";
-  json += "\"sampleRateHz\":" + String(f.sampleRateHz, 1) + ",";
-  json += "\"resolutionHz\":" + String(f.resolutionHz, 3) + ",";
-  json += "\"peakHz\":" + String(f.peakHz, 3) + ",";
-  json += "\"peakMagnitude\":" + String(f.peakMagnitude, 5) + ",";
-  json += "\"rms\":" + String(f.rms, 5) + ",";
-  json += "\"bins\":[";
-  for (uint16_t i = 0; i < FFT_BINS_TO_SEND; i++) {
-    if (i) json += ",";
-    json += "{\"x\":" + String(f.freqBins[i], 3) + ",\"y\":" + String(f.magBins[i], 5) + "}";
-  }
-  json += "]}";
+  json += "\"sync\":\"" + String(getSyncTextFromSynced(a.synced)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromSynced(a.synced)) + "\",";
+  json += "\"synced\":" + String(a.synced ? "true" : "false");
 
   json += "}";
 
@@ -2086,8 +2026,8 @@ String buildMqttRealtimeFlatPayload() {
 }
 
 String buildMqttHistoryWrapperPayload() {
-  // Payload wrapper tetap dipakai untuk topic history/cloud/batch.
-  // Ini menjaga kompatibilitas jika backend masih membaca payload.records[].
+  // Payload wrapper lama dipertahankan hanya untuk kompatibilitas command/debug.
+  // Pengiriman utama ke MongoDB memakai record tunggal realtime tiap 1 detik.
   uint32_t buildStart = micros();
 
   String json = "{";
@@ -2135,13 +2075,13 @@ void printMqttPayloadReport(const String &payload,
   Serial.println(MQTT_REALTIME_TOPIC);
 
   Serial.print(F("║ History/cloud   : "));
-  Serial.println(F("MQTT topic gen/data from RAM buffer every 10 min"));
+  Serial.println(F("MQTT topic gen/data realtime every 1 sec"));
 
   Serial.print(F("║ Realtime status : "));
   Serial.println(realtimeOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
 
-  Serial.print(F("║ MongoDB batch   : "));
-  Serial.println(historyOk ? F("PUBLISH OK") : F("WAITING BATCH BATCH"));
+  Serial.print(F("║ MongoDB realtime: "));
+  Serial.println(historyOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
 
   if (fromCache && lastMqttPayloadCacheAtMs > 0) {
     Serial.print(F("║ Cache age       : "));
@@ -2286,7 +2226,7 @@ void printRealtimeMonitoringPayloadReport(bool fullPayload) {
   Serial.print(F("║ Last payload    : ")); Serial.print(lastMqttPayloadCache.length()); Serial.println(F(" B"));
   Serial.print(F("║ Records         : ")); Serial.println(lastMqttPayloadRecordsCache);
   Serial.print(F("║ Realtime status : ")); Serial.println(lastMqttRealtimeOkCache ? F("PUBLISH OK") : F("PUBLISH FAIL"));
-  Serial.println(F("║ History/MongoDB : WAITING BATCH MQTT BUFFER PUBLISH."));
+  Serial.println(F("║ History/MongoDB : REALTIME MQTT gen/data tiap 1 detik."));
 
   if (fullPayload) {
     Serial.println(F("╠════════════ LAST REALTIME MQTT JSON PAYLOAD ══════════════╣"));
@@ -2336,7 +2276,7 @@ void printSerialMonitoringOverview() {
   Serial.print(F("║ last bytes     : ")); Serial.println(hasLastMqttPayloadCache ? lastMqttPayloadCache.length() : 0);
 
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
-  Serial.println(F("║ 4) MONGODB 10-MIN RAM BUFFER                              ║"));
+  Serial.println(F("║ 4) MONGODB REALTIME 1S                              ║"));
   Serial.print(F("║ buffer count   : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print(F("║ interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print(F("║ target batch   : ")); Serial.println(MONGODB_BUFFER_RECORDS);
@@ -2379,7 +2319,7 @@ void publishRealtimeData() {
 
   // MQTT hanya untuk realtime dashboard 1 detik.
   // MQTT realtime tetap ke gen/realtime setiap 1 detik.
-  // History/cloud MongoDB dikirim dari buffer RAM ke topic gen/data sesesuai interval batch oleh MongoBufferTask.
+  // History/cloud MongoDB dikirim realtime ke topic gen/data setiap 1 detik tanpa batch ESP32.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
@@ -2389,16 +2329,20 @@ void publishRealtimeData() {
 
   uint32_t pubStart = micros();
   bool realtimeOk = false;
+  bool historyOk = false;
   if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
+    bool dataOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
+    historyOk = dataOk;
     mqtt.loop();
     xSemaphoreGive(mqttMutex);
   } else if (mqttMutex == NULL) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
+    bool dataOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
+    historyOk = dataOk;
     mqtt.loop();
   }
-  bool historyOk = false; // status batch MongoDB ditangani MongoBufferTask sesuai interval batch
-  bool ok = realtimeOk;
+  bool ok = realtimeOk && historyOk;
   perfMqttPublishUs = micros() - pubStart;
   perfUpdateStat(acqMon.mqttPublishUs, perfMqttPublishUs);
 
@@ -2441,7 +2385,7 @@ void publishRealtimeData() {
                     MQTT_REALTIME_TOPIC,
                     (unsigned long)mqttLastPayloadBytes,
                     (unsigned long)mqttLastRecordsSent);
-      Serial.println(F("[TEST] MongoDB dikirim dari buffer RAM sesuai interval batch via MQTT topic gen/data; SD hanya backup lokal."));
+      Serial.println(F("[TEST] MongoDB dikirim realtime tiap 1 detik via MQTT topic gen/data; SD hanya backup lokal."));
       Serial.println(F("╚══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -3081,8 +3025,7 @@ bool ensureFftCsvExistsNoLock() {
 
 bool ensureSdCsvFilesExistNoLock() {
   bool dbOk = ensureDatabaseCsvExistsNoLock();
-  bool fftOk = ensureFftCsvExistsNoLock();
-  return dbOk && fftOk;
+  return dbOk;
 }
 
 bool ensureDatabaseCsvExists() {
@@ -3249,6 +3192,8 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.currentAvg, 2); line += ",";
   line += String(a.powerAvg, 3); line += ",";
   line += String(a.phaseAngleAvg, 2); line += ",";
+  line += getSyncTextFromSynced(a.synced); line += ",";
+  line += getPowerSourceFromSynced(a.synced); line += ",";
   line += String(a.synced ? 1 : 0);
 
   return line;
@@ -3303,9 +3248,9 @@ void saveSnapshotToSD() {
     if (!storageBatch[i].valid) continue;
     validRecords++;
 
-    bool acceptedToMongoRam = addRecordToMongoDbBuffer(storageBatch[i]);
-    if (shouldBackupRecordToSD(acceptedToMongoRam)) {
+    if ((WiFi.status() != WL_CONNECTED) || !wifiOK || !mqtt.connected()) {
       backupNeeded = true;
+      sdBackupBecauseNetworkCount++;
     }
   }
 
@@ -3344,16 +3289,14 @@ void saveSnapshotToSD() {
     deselectAllSPI();
 
     File file = SD.open(DB_FILE, FILE_APPEND);
-    File fftFile = SD.open(FFT_FILE, FILE_APPEND);
-    if (!file || !fftFile) {
+    if (!file) {
       sdSaveFailCount++;
       sdConsecutiveOpenFail++;
       sdLastFileErrorMs = millis();
 
       if (file) file.close();
-      if (fftFile) fftFile.close();
 
-      Serial.print(F("[SD-BACKUP] Gagal membuka CSV append (database/fft). consecutiveFail="));
+      Serial.print(F("[SD-BACKUP] Gagal membuka CSV append (database). consecutiveFail="));
       Serial.println(sdConsecutiveOpenFail);
 
       if (sdConsecutiveOpenFail >= 5) {
@@ -3374,11 +3317,9 @@ void saveSnapshotToSD() {
       if (!storageBatch[i].valid) continue;
 
       String line = buildCsvLine(storageBatch[i]);
-      String fftLine = buildFftCsvLine(storageBatch[i]);
       String queueJson = buildJsonRecordParametersOnly(storageBatch[i]);
 
       file.println(line);
-      fftFile.println(fftLine);
 
       dbLastLineBytes = line.length() + 2;
       dbTotalWrittenBytes += dbLastLineBytes;
@@ -3387,9 +3328,7 @@ void saveSnapshotToSD() {
     }
 
     file.flush();
-    fftFile.flush();
     file.close();
-    fftFile.close();
 
     sdSaveSuccessCount++;
 
@@ -3403,8 +3342,8 @@ void saveSnapshotToSD() {
       testOnceSdDone = true;
       Serial.println();
       Serial.println(F("╔════════════ TEST-ONCE LOCAL SD BACKUP ════════════╗"));
-      Serial.printf("[TEST] 1 record backup tersimpan ke %s dan FFT ke %s. lastRow=%lu bytes\n",
-                    DB_FILE, FFT_FILE, (unsigned long)dbLastLineBytes);
+      Serial.printf("[TEST] 1 record backup tersimpan ke %s. lastRow=%lu bytes\n",
+                    DB_FILE, (unsigned long)dbLastLineBytes);
       Serial.println(F("[TEST] SD_SAVE_ONLINE_FOR_DB_TEST=1: SD tetap ditulis walaupun WiFi/MQTT normal."));
       Serial.println(F("╚═══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
@@ -4227,27 +4166,25 @@ void drawBottomNav() {
   int y = 292;
   int h = 26;
 
-  uint16_t colors[3] = {
+  uint16_t colors[2] = {
     activePage == PAGE_GENERATOR ? C_PRIMARY : C_WHITE,
-    activePage == PAGE_ENGINE ? C_PRIMARY : C_WHITE,
-    activePage == PAGE_FFT ? C_PRIMARY : C_WHITE
+    activePage == PAGE_ENGINE ? C_PRIMARY : C_WHITE
   };
 
-  uint16_t texts[3] = {
+  uint16_t texts[2] = {
     activePage == PAGE_GENERATOR ? C_WHITE : C_PRIMARY,
-    activePage == PAGE_ENGINE ? C_WHITE : C_PRIMARY,
-    activePage == PAGE_FFT ? C_WHITE : C_PRIMARY
+    activePage == PAGE_ENGINE ? C_WHITE : C_PRIMARY
   };
 
-  const char* labels[3] = {"GENERATOR", "ENGINE", "FFT"};
-  int xs[3] = {10, 167, 324};
+  const char* labels[2] = {"GENERATOR", "ENGINE"};
+  int xs[2] = {10, 245};
 
-  for (int i = 0; i < 3; i++) {
-    tft.fillRoundRect(xs[i], y, 145, h, 8, colors[i]);
-    tft.drawRoundRect(xs[i], y, 145, h, 8, C_PRIMARY);
+  for (int i = 0; i < 2; i++) {
+    tft.fillRoundRect(xs[i], y, 225, h, 8, colors[i]);
+    tft.drawRoundRect(xs[i], y, 225, h, 8, C_PRIMARY);
     tft.setTextColor(texts[i], colors[i]);
     tft.setTextSize(1);
-    tft.setCursor(xs[i] + 45, y + 9);
+    tft.setCursor(xs[i] + 82, y + 9);
     tft.print(labels[i]);
   }
 }
@@ -4515,7 +4452,7 @@ void drawCurrentPage(bool full) {
   } else if (activePage == PAGE_ENGINE) {
     drawEnginePage(full);
   } else {
-    drawFFTPage(full);
+    drawEnginePage(full);
   }
 
   perfTftDrawUs = micros() - drawStart;
@@ -4598,16 +4535,13 @@ void handleTouchNavigation() {
   int targetPage = -1;
 
   // Area navbar bawah layar.
-  // Generator : x 10-155
-  // Engine    : x 167-312
-  // FFT       : x 324-469
+  // Generator : x 10-235
+  // Engine    : x 245-470
   if (y >= 285 && y <= 320) {
-    if (x >= 10 && x <= 155) {
+    if (x >= 10 && x <= 235) {
       targetPage = PAGE_GENERATOR;
-    } else if (x >= 167 && x <= 312) {
+    } else if (x >= 245 && x <= 470) {
       targetPage = PAGE_ENGINE;
-    } else if (x >= 324 && x <= 469) {
-      targetPage = PAGE_FFT;
     }
   }
 
@@ -4621,8 +4555,7 @@ void handleTouchNavigation() {
 
       Serial.print(F("[TOUCH] Page changed to "));
       if (activePage == PAGE_GENERATOR) Serial.println(F("GENERATOR"));
-      else if (activePage == PAGE_ENGINE) Serial.println(F("ENGINE"));
-      else Serial.println(F("FFT"));
+      else Serial.println(F("ENGINE"));
     }
 
     lastTouchedPage = targetPage;
@@ -4827,7 +4760,7 @@ void printPaperValidationReport() {
   Serial.print  (F("║ SD append avg                : ")); Serial.print(sdAvgUs, 1); Serial.println(F(" us"));
   Serial.print  (F("║ MQTT publish avg             : ")); Serial.print(mqttAvgUs, 1); Serial.println(F(" us"));
   Serial.print  (F("║ TFT draw avg                 : ")); Serial.print(tftAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ FFT compute avg              : ")); Serial.print(fftAvgUs, 1); Serial.println(F(" us"));
+  Serial.print  (F("║ FFT disabled avg             : ")); Serial.print(fftAvgUs, 1); Serial.println(F(" us"));
   Serial.print  (F("║ Missed deadline 20 ms        : ")); Serial.println(sensorMissedDeadlines);
 
 
@@ -4846,12 +4779,11 @@ void printPaperValidationReport() {
 // ============================================================
 void printSerialHelp() {
   Serial.println();
-  Serial.println(F("GENSYS CMD: help | paper | paper start | paper ticker on/off | spec/acq | db/database | mongo buffer | send now | perf | fft | latest"));
+  Serial.println(F("GENSYS CMD: help | paper | paper start | paper ticker on/off | spec/acq | db/database | send now | perf | latest"));
   Serial.println(F("SERIAL    : monitor overview | monitor overview on/off | raw uart | db payload | db payload full"));
   Serial.println(F("SERIAL    : monitoring payload | monitoring payload full | db payload on/off | monitoring payload on/off | mongo ticker on/off"));
   Serial.println(F("TEST CMD  : test once | test once reset | test once last | test once status | test once off | perf reset"));
   Serial.println(F("LOG CMD   : log acq on | log performance on | log aggregation on | log latest on | log off"));
-  Serial.println(F("FFT CMD   : fft source voltgen | fft source voltgrid | fft source rpm"));
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | rx monitor on/off | db reset | db reset confirm"));
   Serial.println(F("MQTT JSON : mqtt payload | mqtt payload now | mqtt payload on | mqtt payload off"));
   Serial.println(F("ALIAS     : json mqtt | json mqtt now | json mqtt on | json mqtt off"));
@@ -4880,6 +4812,8 @@ String buildCloudEstimateRecordOnly() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
+  json += "\"sync\":\"" + String(getSyncTextFromSynced(a.synced)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromSynced(a.synced)) + "\",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
   json += "}";
   return json;
@@ -5106,7 +5040,7 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ UART read avg               : ")); Serial.print(perfAvgStat(acqMon.uartReadUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ CSV parse avg               : ")); Serial.print(perfAvgStat(acqMon.csvParseUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ Aggregation avg             : ")); Serial.print(perfAvgStat(acqMon.aggregationUs), 1); Serial.println(F(" us"));
-  Serial.print  (F("║ FFT compute avg             : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.println(F(" us"));
+  Serial.print  (F("║ FFT disabled avg            : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ SensorTask total avg        : ")); Serial.print(taskAvgUs, 1); Serial.println(F(" us"));
   Serial.print  (F("║ CPU usage est. avg          : ")); Serial.print(cpuAvgPct, 2); Serial.println(F(" %"));
 
@@ -5197,7 +5131,7 @@ void printPerformanceReport() {
   Serial.print  (F("║ UART read avg                : ")); Serial.print(perfAvgStat(acqMon.uartReadUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ CSV parse avg                : ")); Serial.print(perfAvgStat(acqMon.csvParseUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ Aggregation avg              : ")); Serial.print(perfAvgStat(acqMon.aggregationUs), 1); Serial.println(F(" us"));
-  Serial.print  (F("║ FFT compute avg              : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.println(F(" us"));
+  Serial.print  (F("║ FFT disabled avg             : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ JSON build last              : ")); Serial.print(perfJsonBuildUs); Serial.println(F(" us"));
   Serial.print  (F("║ MQTT publish avg             : ")); Serial.print(perfAvgStat(acqMon.mqttPublishUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ SD append avg                : ")); Serial.print(perfAvgStat(acqMon.sdSaveUs), 1); Serial.println(F(" us"));
@@ -5441,13 +5375,9 @@ void processSerialCommand(String cmd) {
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "aggregation" || cmd == "agg" || cmd == "aggregate") { AggregatedData a; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { a = aggData; xSemaphoreGive(dataMutex); } printAggregatedParameterReport(a); }
-  else if (cmd == "fft") printFFTReport();
-  else if (cmd == "fft source voltgen") { fftSelectedSource = FFT_SRC_VOLT_GEN; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GEN")); }
-  else if (cmd == "fft source voltgrid") { fftSelectedSource = FFT_SRC_VOLT_GRID; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=VOLT_GRID")); }
-  else if (cmd == "fft source rpm") { fftSelectedSource = FFT_SRC_RPM; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { fftData = fftMultiData[fftSelectedSource]; xSemaphoreGive(dataMutex); } needFullRedraw = true; Serial.println(F("[FFT] source=RPM")); }
+  else if (cmd == "fft" || cmd.startsWith("fft ")) { Serial.println(F("[FFT] disabled: payload dan display ESP32 tidak memakai FFT.")); }
   else if (cmd == "page generator") { activePage = PAGE_GENERATOR; needFullRedraw = true; Serial.println(F("[DISPLAY] generator")); }
   else if (cmd == "page engine") { activePage = PAGE_ENGINE; needFullRedraw = true; Serial.println(F("[DISPLAY] engine")); }
-  else if (cmd == "page fft") { activePage = PAGE_FFT; needFullRedraw = true; Serial.println(F("[DISPLAY] fft")); }
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
   else if (cmd == "rx raw on") { runtimeDebugRxRaw = true; Serial.println(F("[RX] raw on")); }
   else if (cmd == "rx raw off") { runtimeDebugRxRaw = false; Serial.println(F("[RX] raw off")); }
@@ -5520,7 +5450,6 @@ void setup() {
   sdMutex = xSemaphoreCreateMutex();
   mongoBufferMutex = xSemaphoreCreateMutex();
   mqttMutex = xSemaphoreCreateMutex();
-  fftMutex = xSemaphoreCreateMutex();
   mongoUploadRequestSemaphore = xSemaphoreCreateBinary();
 
 
@@ -5543,7 +5472,6 @@ void setup() {
   if (dataMutex == NULL) Serial.println("[ERROR] dataMutex gagal dibuat.");
   if (sdMutex == NULL) Serial.println("[ERROR] sdMutex gagal dibuat.");
   if (mongoBufferMutex == NULL) Serial.println("[ERROR] mongoBufferMutex gagal dibuat.");
-  if (fftMutex == NULL) Serial.println("[ERROR] fftMutex gagal dibuat.");
   if (mongoUploadRequestSemaphore == NULL) Serial.println("[ERROR] mongoUploadRequestSemaphore gagal dibuat.");
 
   deselectAllSPI();
@@ -5611,7 +5539,7 @@ void setup() {
     reconnectMQTT();
   }
 
-  drawBootSplashStep("Starting sensor, UART, and FFT tasks...", 94);
+  drawBootSplashStep("Starting realtime sensor tasks...", 94);
   xTaskCreatePinnedToCore(
     SensorTask50Hz,
     "SensorTask50Hz",
@@ -5620,26 +5548,6 @@ void setup() {
     2,
     NULL,
     1
-  );
-
-  xTaskCreatePinnedToCore(
-    FFTTask,
-    "FFTTask",
-    8192,
-    NULL,
-    1,
-    NULL,
-    0
-  );
-
-  xTaskCreatePinnedToCore(
-  MongoBufferTask,
-  "MongoBufferTask",
-  10000,
-  NULL,
-  1,
-  NULL,
-  0
   );
 
   drawBootSplashStep("GENSYS ready", 100);

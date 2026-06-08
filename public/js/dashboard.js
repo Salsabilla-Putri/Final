@@ -146,12 +146,20 @@ function normalizeSyncStatus(data = {}) {
 
 
 function getPowerSourceStatus(data = {}) {
+    const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase();
+    if (['GRID', 'PLN', 'UTILITY'].includes(rawSource)) {
+        return { label: 'GRID', detail: 'Power dari grid/PLN', ok: true };
+    }
+    if (['GENSET', 'GENERATOR'].includes(rawSource)) {
+        return { label: 'GENSET', detail: 'Power dari genset', ok: true };
+    }
+
     const syncStatus = normalizeSyncStatus(data);
     if (syncStatus === 'ON-GRID') {
-        return { label: 'GRID', detail: 'Grid tersambung', ok: true };
+        return { label: 'GRID', detail: 'Power dari grid/PLN', ok: true };
     }
     if (syncStatus === 'OFF-GRID') {
-        return { label: 'GENSET', detail: 'Genset tersambung', ok: true };
+        return { label: 'GENSET', detail: 'Power dari genset', ok: true };
     }
     return { label: '--', detail: 'Supply source belum terdeteksi', ok: false };
 }
