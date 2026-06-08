@@ -103,11 +103,19 @@ async function fetchData() {
     }
 }
 
+function setEngineAlertsLoading(isLoading) {
+    const body = document.getElementById('alertTable');
+    if (isLoading && body && !body.dataset.loaded) {
+        body.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#999; padding:20px;"><i class="fas fa-circle-notch fa-spin"></i> Loading alerts...</td></tr>';
+    }
+}
+
 async function fetchAlerts() {
+    setEngineAlertsLoading(true);
     try {
         const res = await fetch(`${API_URL}/alerts?limit=5`);
         const json = await res.json();
-        if (json.success) renderAlerts(json.data);
+        if (json.success) { renderAlerts(json.data); const body = document.getElementById('alertTable'); if (body) body.dataset.loaded = 'true'; }
     } catch (e) { console.error(e); }
 }
 

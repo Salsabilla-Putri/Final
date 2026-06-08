@@ -166,10 +166,37 @@ body {
     letter-spacing: 0.01em;
 }
 
+
+.hero-meta {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.conn-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+.conn-badge i { font-size: 0.55rem; }
+.conn-online { background: rgba(16,185,129,0.22); color: #bbf7d0; }
+.conn-offline { background: rgba(239,68,68,0.22); color: #fecaca; }
+.last-updated { color: rgba(255,255,255,0.72); font-size: 0.78rem; font-weight: 600; }
+.loading-state { text-align:center; padding:20px; color:#94a3b8; font-weight:600; }
+.loading-state i { color:#1745a5; margin-right:8px; }
+
 /* === GRID LAYOUTS (UPDATED) === */
 .overview-cards {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 18px;
 }
 

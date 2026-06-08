@@ -44,13 +44,13 @@ function logout() {
 }
 
 // ── Connection status badge ──────────────────────────────────────────────────
-function setConnectionStatus(online) {
+function setConnectionStatus(online, label = null) {
     const badge = document.getElementById('connStatus');
     if (!badge) return;
     badge.className = 'conn-badge ' + (online ? 'conn-online' : 'conn-offline');
     badge.innerHTML = online
-        ? '<i class="fas fa-circle"></i> Live'
-        : '<i class="fas fa-circle"></i> Offline';
+        ? `<i class="fas fa-circle"></i> ${label || 'Live'}`
+        : `<i class="fas fa-circle"></i> ${label || 'Offline'}`;
 }
 
 
@@ -68,9 +68,21 @@ function normalizeSyncStatus(data = {}) {
 }
 
 // ── Last updated timestamp ───────────────────────────────────────────────────
-function setLastUpdated() {
+function setLastUpdated(timestamp = null) {
     const el = document.getElementById('lastUpdated');
-    if (el) el.innerText = 'Diperbarui: ' + new Date().toLocaleTimeString('id-ID');
+    const dt = timestamp ? new Date(timestamp) : new Date();
+    const safeDate = Number.isFinite(dt.getTime()) ? dt : new Date();
+    if (el) {
+        el.innerText = 'Diperbarui: ' + safeDate.toLocaleTimeString('id-ID', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }) + ' WIB';
+    }
+}
+
+function setDashboardLoading(isLoading) {
+    document.body.classList.toggle('is-loading-data', Boolean(isLoading));
+    const statusText = isLoading ? 'Memuat data...' : 'Live';
+    if (isLoading) setConnectionStatus(false, statusText);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -79,6 +91,7 @@ function setLastUpdated() {
 async function fetchDashboardData() {
     if (isDashboardFetching) return;
     isDashboardFetching = true;
+    setDashboardLoading(true);
     try {
         const nowTs = Date.now();
         const allowHeavyFetch = (nowTs - lastHeavyFetchAt) >= HEAVY_ENDPOINT_REFRESH_MS;
@@ -147,13 +160,15 @@ async function fetchDashboardData() {
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
         if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
 
-        setConnectionStatus(true);
-        setLastUpdated();
+        const latestTs = engineData?.data?.timestamp || engineData?.data?.createdAt || null;
+        setConnectionStatus(true, 'Live');
+        setLastUpdated(latestTs);
 
     } catch (err) {
         console.error('fetchDashboardData error:', err);
         setConnectionStatus(false);
     } finally {
+        setDashboardLoading(false);
         isDashboardFetching = false;
     }
 }
@@ -233,6 +248,28 @@ function toWibDateKey(inputDate) {
     if (!Number.isFinite(dt.getTime())) return null;
     const wib = new Date(dt.getTime() + (7 * 60 * 60 * 1000));
     return wib.toISOString().slice(0, 10);
+}
+
+function splitSessionByDayWIB(start, end, wibOffset = 7 * 60 * 60 * 1000) {
+    const result = [];
+    let cursor = new Date(start);
+    const endDate = new Date(end);
+    if (!Number.isFinite(cursor.getTime()) || !Number.isFinite(endDate.getTime()) || endDate <= cursor) return result;
+
+    while (cursor < endDate) {
+        const cursorWib = new Date(cursor.getTime() + wibOffset);
+        const nextMidnightWib = new Date(Date.UTC(
+            cursorWib.getUTCFullYear(), cursorWib.getUTCMonth(), cursorWib.getUTCDate() + 1
+        ));
+        const nextMidnightUtc = new Date(nextMidnightWib.getTime() - wibOffset);
+        const sliceEnd = nextMidnightUtc < endDate ? nextMidnightUtc : endDate;
+        const hours = Math.max(0, sliceEnd - cursor) / 3600000;
+        const dateKey = toWibDateKey(cursor);
+        if (dateKey && hours > 0) result.push({ dateKey, hours });
+        cursor = sliceEnd;
+    }
+
+    return result;
 }
 
 function sumRuntimeHoursFromHistory(historyRows = []) {
