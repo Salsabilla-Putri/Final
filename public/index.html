@@ -83,6 +83,13 @@
             <div class="overview-label">System Voltage</div>
           </div>
         </div>
+        <div class="overview-card">
+          <div class="overview-icon icon-supply"><i class="fas fa-plug-circle-bolt"></i></div>
+          <div class="overview-content">
+            <div class="overview-value" id="val-supply">--</div>
+            <div class="overview-label">Power Source</div>
+          </div>
+        </div>
       </div>
 
       </section>
@@ -98,6 +105,9 @@
           <h3><i class="fas fa-cogs"></i> Engine Status</h3>
           <div class="list-row">
             <span>Sync Status:</span> <span id="engSync" class="st-err">--</span>
+          </div>
+          <div class="list-row">
+            <span>Supply Source:</span> <span id="engSupply" class="st-err">--</span>
           </div>
           <div class="list-row">
             <span>Engine State:</span> <span id="engStat" class="st-err">--</span>
