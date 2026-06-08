@@ -598,7 +598,8 @@ function shouldSkipApiDbWarmup(req) {
         '/api/health',
         '/api/ingest/status',
         '/api/ingest/batch',
-        '/api/mqtt-ingest/status'
+        '/api/mqtt-ingest/status',
+        '/api/engine-data/latest'
     ].includes(req.path);
 }
 
@@ -649,26 +650,42 @@ const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOL
 const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
 let latestRealtimeReceivedAt = null;
 
+function isRealtimeSnapshotFresh(data = latestData, receivedAt = latestRealtimeReceivedAt) {
+    if (!data || data._realtime !== true) return false;
+
+    const receivedTime = getValidDate(receivedAt);
+    if (!receivedTime) return false;
+
+    return Date.now() - receivedTime.getTime() <= ECU_DISCONNECT_THRESHOLD_MS;
+}
+
 function getValidDate(value) {
     const dt = value ? new Date(value) : null;
     return dt && Number.isFinite(dt.getTime()) ? dt : null;
 }
 
 function getLatestRealtimeSnapshot() {
-    const timestamp = getValidDate(latestData?.timestamp);
-    if (!timestamp || latestData?._realtime !== true) return null;
-    return { ...latestData, timestamp };
+    if (!isRealtimeSnapshotFresh()) return null;
+
+    const timestamp = getValidDate(latestData?.timestamp) || getValidDate(latestRealtimeReceivedAt) || new Date();
+    return {
+        ...latestData,
+        timestamp,
+        lastMqttUpdate: latestRealtimeReceivedAt,
+        realtimeReceivedAt: latestRealtimeReceivedAt
+    };
 }
 
-function pickLatestEngineSnapshot(dbData) {
+function pickLatestEngineSnapshot(dbData, deviceId) {
     const dbTimestamp = getValidDate(dbData?.timestamp);
     const realtimeData = getLatestRealtimeSnapshot();
-    const realtimeTimestamp = getValidDate(realtimeData?.timestamp);
 
-    if (dbData && realtimeData && realtimeTimestamp >= dbTimestamp) return realtimeData;
+    // Page engine harus menampilkan data MQTT yang baru diterima secara real-time.
+    // Timestamp dari ESP32/backup kadang lebih tua/lebih baru dari dokumen MongoDB,
+    // jadi snapshot realtime yang masih fresh lebih diprioritaskan berdasarkan waktu diterima server.
+    if (realtimeData && (!deviceId || realtimeData.deviceId === deviceId)) return realtimeData;
     if (dbData) return { ...dbData, timestamp: dbTimestamp || dbData.timestamp };
-    if (realtimeData) return realtimeData;
-    return null;
+    return realtimeData;
 }
 
 function isEngineRunning(data) {
@@ -1561,7 +1578,9 @@ mqttClient.on('message', async (topic, message) => {
 
         // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.
         latestData = normalizeGeneratorPayload(parsed);
-        latestRealtimeReceivedAt = getValidDate(latestData.timestamp) || new Date();
+        latestRealtimeReceivedAt = new Date();
+        latestData.lastMqttUpdate = latestRealtimeReceivedAt;
+        latestData.realtimeReceivedAt = latestRealtimeReceivedAt;
 
         const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
         if (fftDoc) {
@@ -1722,16 +1741,41 @@ app.get('/api/engine-data/latest', async (req, res) => {
     try {
         const requestedDeviceId = req.query.deviceId;
         const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const realtimeData = getLatestRealtimeSnapshot();
+
+        // Untuk Render/live dashboard: jangan tunggu MongoDB bila MQTT baru saja masuk.
+        // Page engine polling endpoint ini tiap detik, sehingga snapshot memory harus langsung dikirim.
+        if (realtimeData && (!effectiveDeviceId || realtimeData.deviceId === effectiveDeviceId)) {
+            const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
+                || getValidDate(realtimeData.timestamp)
+                || new Date();
+            const enrichedRealtime = {
+                ...realtimeData,
+                timestamp: lastDataAt,
+                ecuConnected: true,
+                engineHours: 0,
+                lastMqttUpdate: lastDataAt,
+                lastUpdated: lastDataAt,
+                alerts: generateAlerts(realtimeData, null),
+                maintenance: getMaintenanceStatus(realtimeData, []),
+                ...getPublicLabels(realtimeData)
+            };
+            return res.json({ success: true, data: enrichedRealtime, source: 'realtime-memory' });
+        }
+
+        if (!isDbReady()) await ensureDbReady();
+
         const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
         const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
         const dbData = latestDocs[0] || null;
-        const baseData = pickLatestEngineSnapshot(dbData);
+        const baseData = pickLatestEngineSnapshot(dbData, effectiveDeviceId);
         if (!baseData) {
             return res.status(404).json({ success: false, error: 'No generator data found' });
         }
 
         const baseTimestamp = getValidDate(baseData.timestamp);
-        const lastDataAt = baseTimestamp || getValidDate(dbData?.timestamp) || latestRealtimeReceivedAt;
+        const realtimeReceivedAt = getValidDate(baseData.realtimeReceivedAt || baseData.lastMqttUpdate);
+        const lastDataAt = realtimeReceivedAt || baseTimestamp || getValidDate(dbData?.timestamp) || latestRealtimeReceivedAt;
         const ecuConnected = lastDataAt ? (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS : false;
         const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
@@ -1944,11 +1988,45 @@ app.get('/api/fft/latest', async (req, res) => {
     }
 });
 
+function buildAlertQuery(queryParams = {}) {
+    const { startDate, endDate, deviceId, status, severity, parameter } = queryParams;
+    const query = {};
+
+    if (startDate || endDate) {
+        query.timestamp = {};
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
+
+        if (start && !Number.isNaN(start.getTime())) query.timestamp.$gte = start;
+        if (end && !Number.isNaN(end.getTime())) {
+            const inclusiveEnd = new Date(end);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(String(endDate))) inclusiveEnd.setHours(23, 59, 59, 999);
+            query.timestamp.$lte = inclusiveEnd;
+        }
+
+        if (!Object.keys(query.timestamp).length) delete query.timestamp;
+    }
+
+    if (deviceId) query.deviceId = deviceId;
+    if (parameter) query.parameter = String(parameter).toLowerCase();
+
+    if (status === 'active' || status === 'unresolved') query.resolved = { $ne: true };
+    else if (status === 'confirmed' || status === 'resolved') query.resolved = true;
+    else if (status === 'acknowledged') query.acknowledged = true;
+
+    if (severity === 'warning') query.severity = { $ne: 'critical' };
+    else if (severity && severity !== 'all') query.severity = severity;
+
+    return query;
+}
+
 app.get('/api/alerts', async (req, res) => {
     try {
-        const { limit = 50 } = req.query;
-        const alerts = await Alert.find().sort({ timestamp: -1 }).limit(parseInt(limit));
-        res.json({ success: true, data: alerts });
+        const rawLimit = parseInt(req.query.limit || '50', 10);
+        const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 50, 10000));
+        const query = buildAlertQuery(req.query);
+        const alerts = await Alert.find(query).sort({ timestamp: -1 }).limit(limit).lean();
+        res.json({ success: true, data: alerts, count: alerts.length, filter: query });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
@@ -2593,16 +2671,7 @@ app.get('/api/reports/stats', async (req, res) => {
 app.get('/api/alerts/count', async (req, res) => {
     try {
         await ensureDbReady();
-        const { startDate, endDate, deviceId, status, severity } = req.query;
-        const query = {};
-        if (startDate || endDate) {
-            query.timestamp = {};
-            if (startDate) query.timestamp.$gte = new Date(startDate);
-            if (endDate) query.timestamp.$lte = new Date(endDate);
-        }
-        if (deviceId) query.deviceId = deviceId;
-        if (status === 'unresolved') query.resolved = false;
-        if (severity) query.severity = severity;
+        const query = buildAlertQuery(req.query);
         const count = await Alert.countDocuments(query);
         res.json({ success: true, count });
     } catch (error) {

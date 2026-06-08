@@ -72,10 +72,9 @@ async function fetchAlarms() {
     const dFrom = document.getElementById('dateFrom')?.value;
     const dTo = document.getElementById('dateTo')?.value;
 
-    let url = `${API_URL}?limit=500`;
-    if (dFrom && dTo) {
-      url += `&startDate=${dFrom}&endDate=${dTo}`;
-    }
+    let url = `${API_URL}?limit=10000`;
+    if (dFrom) url += `&startDate=${encodeURIComponent(dFrom)}`;
+    if (dTo) url += `&endDate=${encodeURIComponent(dTo)}`;
 
     const res = await fetch(url, { headers: { Accept: 'application/json' } });
     const contentType = res.headers.get('content-type') || '';
@@ -164,6 +163,7 @@ function renderTable() {
   tbody.innerHTML = '';
 
   if (filteredAlarms.length === 0) {
+    renderPagination(0, 1);
     tbody.innerHTML = `
       <tr>
         <td colspan="7" style="text-align:center; padding:30px; color:#94a3b8; font-style:italic;">
