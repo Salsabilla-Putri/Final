@@ -934,3 +934,15 @@ body.is-loading-data .section-block {
     .perf-vertical { grid-template-columns: 1fr; }
     .health-summary { align-items: flex-start; }
 }
+
+.hero-meta{flex-direction:column;gap:6px;}
+.last-updated{display:block;}
+
+.health-panel{padding:16px;border-radius:18px;display:grid;gap:12px;}
+.health-summary{margin-bottom:0;padding-bottom:12px;border-bottom:1px solid rgba(148,163,184,.22);}
+.health-policy-note{margin-bottom:0;text-align:left;}
+.health-indicator-list{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:0;}
+.health-indicator-item{background:#fff!important;border:1px solid #e2e8f0;box-shadow:0 4px 12px rgba(15,23,42,.04);}
+.health-indicator-item.ok{border-left:4px solid #22c55e;color:#166534;}
+.health-indicator-item.warn{border-left:4px solid #f59e0b;color:#92400e;}
+.health-indicator-item.danger{border-left:4px solid #ef4444;color:#991b1b;}

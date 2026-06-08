@@ -96,9 +96,12 @@ const alertSchema = new mongoose.Schema({
     deviceId: String, parameter: String, value: Number,
     message: String,
     severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+    acknowledged: { type: Boolean, default: false },
+    acknowledgedAt: Date,
+    confirmedAt: Date,
     resolved: { type: Boolean, default: false }
 });
-const Alert = mongoose.models.Alert || mongoose.model('Alert', alertSchema, 'alert');
+const Alert = mongoose.models.Alert || mongoose.model('Alert', alertSchema, 'alerts');
 
 const configSchema = new mongoose.Schema({
     key: { type: String, unique: true },
@@ -568,7 +571,7 @@ async function syncActiveTimeHistory(data) {
     if (isRunning && session) {
         const gapMs = eventTime.getTime() - session.lastSeenAt.getTime();
         if (gapMs > ACTIVE_SESSION_TIMEOUT_MS) {
-            const endedAt = new Date(session.lastSeenAt.getTime() + ACTIVE_SESSION_TIMEOUT_MS);
+            const endedAt = session.lastSeenAt;
             const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
             await ActiveTimeHistory.findOneAndUpdate(
                 { deviceId, startedAt: session.startedAt, endedAt: null },
@@ -608,6 +611,10 @@ async function syncActiveTimeHistory(data) {
 }
 
 function initMQTT() {
+    if (process.env.VERCEL && process.env.ENABLE_SERVERLESS_MQTT !== 'true') {
+        console.warn('Skipping MQTT init on Vercel serverless runtime');
+        return;
+    }
     const brokerUrl = process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883';
 
     // FIX: Jangan init MQTT jika broker masih placeholder
@@ -752,7 +759,7 @@ async function checkAndSaveAlerts(data) {
 // ─── CONNECT DB sebelum setiap request ───────────────────────────────────────
 app.use(async (req, res, next) => {
     try {
-        if (req.method === 'GET' && req.path === '/api/ingest/batch') return next();
+        if (req.method === 'GET' && (req.path === '/api/ingest/batch' || req.path === '/api/health')) return next();
         await connectDB();
         next();
     } catch (err) {
@@ -954,11 +961,24 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-app.get('/api/health', (req, res) => res.json({
-    status: 'healthy',
-    mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    mongoUri: process.env.MONGODB_URI ? '✅ set' : '❌ missing'
-}));
+app.get('/api/health', (req, res) => {
+    const mongoStates = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    const mongoState = mongoStates[mongoose.connection.readyState] || 'unknown';
+    const checks = {
+        api: 'ok',
+        mongodb: mongoState,
+        mqtt: process.env.MQTT_BROKER ? 'configured' : 'default-broker',
+        env: { mongodbUri: Boolean(process.env.MONGODB_URI) }
+    };
+    const healthy = checks.env.mongodbUri && ['connected', 'connecting'].includes(mongoState);
+    res.status(healthy ? 200 : 200).json({
+        success: true,
+        status: healthy ? 'healthy' : 'degraded',
+        service: 'generator-monitoring-api',
+        timestamp: new Date().toISOString(),
+        checks
+    });
+});
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
@@ -967,8 +987,9 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
         const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
         const dbData = latestDocs[0] || null;
+        const lastDataAt = dbData?.timestamp || latestData.timestamp;
         const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
-        const baseData = isDbFresh ? dbData : latestData;
+        const baseData = isDbFresh ? dbData : { ...latestData, timestamp: lastDataAt };
         const previousDoc = latestDocs[1] || null;
 
         // NEW CODE
@@ -1156,9 +1177,38 @@ app.get('/api/alerts/count', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
+
+app.put('/api/alerts/ack-all', async (req, res) => {
+    try {
+        const filter = { resolved: { $ne: true }, acknowledged: { $ne: true } };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const result = await Alert.updateMany(filter, { $set: { acknowledged: true, acknowledgedAt: new Date() } });
+        res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/confirm-all', async (req, res) => {
+    try {
+        const filter = { resolved: { $ne: true } };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const now = new Date();
+        const result = await Alert.updateMany(filter, { $set: { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now } });
+        res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/:id/confirm', async (req, res) => {
+    try {
+        const now = new Date();
+        const updated = await Alert.findByIdAndUpdate(req.params.id, { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now }, { new: true });
+        if (!updated) return res.status(404).json({ success: false, message: 'Alert not found' });
+        res.json({ success: true, data: updated });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
 app.put('/api/alerts/:id/ack', async (req, res) => {
     try {
-        const updated = await Alert.findByIdAndUpdate(req.params.id, { resolved: true }, { new: true });
+        const updated = await Alert.findByIdAndUpdate(req.params.id, { acknowledged: true, acknowledgedAt: new Date() }, { new: true });
         if (!updated) return res.status(404).json({ success: false, message: 'Alert not found' });
         res.json({ success: true, data: updated });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }

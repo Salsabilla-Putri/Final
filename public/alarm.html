@@ -94,7 +94,9 @@
       <div class="card">
         <div class="card-header">
           <h3><i class="fas fa-history"></i> Alert History</h3>
-          <div style="display:flex; gap:10px;">
+          <div class="alarm-bulk-actions">
+            <button class="btn btn-ack" onclick="acknowledgeAllAlarms()"><i class="fas fa-check-double"></i> Acknowledge All</button>
+            <button class="btn btn-primary" onclick="confirmAllAlarms()"><i class="fas fa-clipboard-check"></i> Confirm All</button>
             <button class="btn btn-outline" onclick="exportAlarmCSV()"><i class="fas fa-file-csv"></i> CSV</button>
             <button class="btn btn-outline" onclick="exportAlarmExcel()"><i class="fas fa-file-excel"></i> Excel</button>
           </div>

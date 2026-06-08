@@ -91,17 +91,38 @@ function normalizeSyncStatus(data = {}) {
     return rawSync || '--';
 }
 
+function getPowerSourceStatus(data = {}) {
+    const syncStatus = normalizeSyncStatus(data);
+    if (syncStatus === 'ON-GRID') return { label: 'GRID', detail: 'Grid tersambung', ok: true };
+    if (syncStatus === 'OFF-GRID') return { label: 'GENSET', detail: 'Genset tersambung', ok: true };
+    return { label: 'MENUNGGU', detail: 'Power source belum terdeteksi', ok: false };
+}
+
+function updatePowerSourceStatus(data = {}) {
+    const supply = getPowerSourceStatus(data);
+    const overviewEl = document.getElementById('val-supply');
+    if (overviewEl) overviewEl.innerText = supply.label;
+    const detailEl = document.getElementById('engSupply');
+    if (detailEl) {
+        detailEl.innerText = supply.detail;
+        detailEl.className = supply.ok ? 'st-ok' : 'st-warn';
+    }
+}
+
 // ── Last updated timestamp ───────────────────────────────────────────────────
 function setLastUpdated(timestamp = null) {
     const el = document.getElementById('lastUpdated');
-    const dt = timestamp ? new Date(timestamp) : new Date();
-    const safeDate = Number.isFinite(dt.getTime()) ? dt : new Date();
-    if (el) {
-        el.innerText = 'Diperbarui: ' + safeDate.toLocaleString('id-ID', {
+    const dt = timestamp ? new Date(timestamp) : null;
+    const safeDate = dt && Number.isFinite(dt.getTime()) ? dt : null;
+    if (!el) return;
+    if (!safeDate) {
+        el.innerText = 'Diperbarui: --';
+        return;
+    }
+    el.innerText = 'Diperbarui: ' + safeDate.toLocaleString('id-ID', {
             day: '2-digit', month: 'short', year: 'numeric',
             hour: '2-digit', minute: '2-digit', second: '2-digit'
         }) + ' WIB';
-    }
 }
 
 function setDashboardLoading(isLoading) {
@@ -230,6 +251,7 @@ function updateOverviewCards(data, historyRows = []) {
     const avgEl = document.getElementById('val-avg-runtime');
     const powerEl  = document.getElementById('val-power');
 
+    updatePowerSourceStatus(data);
     if (avgEl) avgEl.innerText = formatHourMinute(avg7h);
     if (powerEl) powerEl.innerText  = power.toFixed(1) + ' kW';
 }
@@ -239,6 +261,8 @@ function updateOverviewCards(data, historyRows = []) {
 //  OPERATIONS SECTION (Engine Status + Health)
 // ════════════════════════════════════════════════════════════════════════════
 function updateOperationsSection(data, cbmData, alertRows = []) {
+    updatePowerSourceStatus(data);
+
     // Sync
     const syncEl = document.getElementById('engSync');
     if (syncEl) {

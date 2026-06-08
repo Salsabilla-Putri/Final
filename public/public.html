@@ -70,16 +70,16 @@
             <!-- ╚══════════════════════════════════╝ -->
             <section class="section-block section-overview">
                 <div class="section-heading compact">
-                    <p class="section-eyebrow">Overview</p>
+                    <p class="section-eyebrow">Power Source</p>
                 </div>
                 <div class="overview-cards">
                     <div class="overview-card">
-                        <div class="overview-icon icon-prm">
-                            <i class="fas fa-bolt-lightning"></i>
+                        <div class="overview-icon icon-supply">
+                            <i class="fas fa-plug-circle-bolt"></i>
                         </div>
                         <div class="overview-content">
-                            <div class="overview-value" id="val-avg-runtime">--</div>
-                            <div class="overview-label">Daily Average Runtime</div>
+                            <div class="overview-value" id="val-supply">Menunggu</div>
+                            <div class="overview-label">Power Source</div>
                         </div>
                     </div>
                     <div class="overview-card">
@@ -127,6 +127,10 @@
                         <div class="list-row">
                             <span>Sync Status:</span>
                             <span id="engSync" class="st-err">--</span>
+                        </div>
+                        <div class="list-row">
+                            <span>Supply Source:</span>
+                            <span id="engSupply" class="st-warn">Menunggu data</span>
                         </div>
                         <div class="list-row">
                             <span>Engine State:</span>

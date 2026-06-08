@@ -77,7 +77,11 @@ async function fetchAlarms() {
       url += `&startDate=${dFrom}&endDate=${dTo}`;
     }
 
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok || !contentType.includes('application/json')) {
+      throw new Error(`Alert API returned ${res.status} ${res.statusText}`);
+    }
     const json = await res.json();
     if (json.success) {
       allAlarms = json.data;
@@ -86,6 +90,7 @@ async function fetchAlarms() {
     }
   } catch (error) {
     console.error('Error fetching alarms:', error);
+    showNotification('Failed to fetch alerts. Please check API health.', 'error');
   }
 }
 
@@ -119,8 +124,9 @@ function getFilteredAlarms() {
   }
 }
 
-function mapSeverityToStatus(severity, isResolved) {
+function mapSeverityToStatus(severity, isResolved, isAcknowledged = false) {
   if (isResolved) return { cls: 'status-normal', label: 'confirmed' };
+  if (isAcknowledged) return { cls: 'status-warning', label: 'acknowledged' };
   if (severity === 'critical') return { cls: 'status-critical', label: 'critical active' };
   return { cls: 'status-warning', label: 'warning active' };
 }
@@ -171,7 +177,7 @@ function renderTable() {
   pageRows.forEach(alarm => {
     const ts = formatReadableTimestamp(alarm.timestamp);
     const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
-    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
+    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved, alarm.acknowledged);
 
     let actionButtons;
     if (alarm.resolved) {
@@ -181,8 +187,11 @@ function renderTable() {
         </button>`;
     } else {
       actionButtons = `
-        <button class="btn btn-ack" onclick="acknowledgeAlarm('${alarm._id}')">
-          <i class="fas fa-check"></i> Confirm
+        <button class="btn btn-ack" onclick="acknowledgeAlarm('${alarm._id}')" ${alarm.acknowledged ? 'disabled' : ''}>
+          <i class="fas fa-check"></i> Ack
+        </button>
+        <button class="btn btn-primary" onclick="confirmAlarm('${alarm._id}')">
+          <i class="fas fa-clipboard-check"></i> Confirm
         </button>`;
     }
 
@@ -255,7 +264,7 @@ window.exportAlarmCSV = function() {
 
   let csv = 'Timestamp,Generator,Parameter,Value,Unit,Status\n';
   rows.forEach((alarm) => {
-    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
+    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved, alarm.acknowledged);
     const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
     csv += [
       escapeCsvCell(formatReadableTimestamp(alarm.timestamp)),
@@ -275,7 +284,7 @@ window.exportAlarmExcel = function() {
   if (rows.length === 0) return alert('No alarms to export');
 
   const tableRows = rows.map((alarm) => {
-    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved);
+    const mappedStatus = mapSeverityToStatus(alarm.severity, alarm.resolved, alarm.acknowledged);
     const value = Number.isFinite(Number(alarm.value)) ? Number(alarm.value).toFixed(1) : (alarm.value ?? '-');
     return `
       <tr>
@@ -312,18 +321,34 @@ window.exportAlarmExcel = function() {
   );
 }
 
-window.acknowledgeAlarm = async function(id) {
+async function putAlertAction(path, successMessage, errorMessage) {
   try {
-    const res = await fetch(`${API_URL}/${id}/ack`, { method: 'PUT' });
+    const res = await fetch(`${API_URL}${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' } });
     const json = await res.json();
-
-    if (json.success) {
-      showNotification('Alarm acknowledged', 'success');
-      fetchAlarms();
-    }
+    if (!res.ok || !json.success) throw new Error(json.error || json.message || res.statusText);
+    showNotification(successMessage, 'success');
+    fetchAlarms();
   } catch (e) {
-    showNotification('Failed to acknowledge', 'error');
+    showNotification(errorMessage, 'error');
   }
+}
+
+window.acknowledgeAlarm = async function(id) {
+  return putAlertAction(`/${id}/ack`, 'Alarm acknowledged', 'Failed to acknowledge');
+}
+
+window.confirmAlarm = async function(id) {
+  return putAlertAction(`/${id}/confirm`, 'Alarm confirmed', 'Failed to confirm');
+}
+
+window.acknowledgeAllAlarms = async function() {
+  if (!confirm('Acknowledge all active alerts?')) return;
+  return putAlertAction('/ack-all', 'All active alerts acknowledged', 'Failed to acknowledge all');
+}
+
+window.confirmAllAlarms = async function() {
+  if (!confirm('Confirm and resolve all active alerts?')) return;
+  return putAlertAction('/confirm-all', 'All active alerts confirmed', 'Failed to confirm all');
 }
 
 window.removeAlarm = async function(id) {

@@ -163,9 +163,12 @@ const alertSchema = new mongoose.Schema({
     value: Number,
     message: String,
     severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+    acknowledged: { type: Boolean, default: false },
+    acknowledgedAt: Date,
+    confirmedAt: Date,
     resolved: { type: Boolean, default: false }
 });
-const Alert = mongoose.model('Alert', alertSchema);
+const Alert = mongoose.models.Alert || mongoose.model('Alert', alertSchema, 'alerts');
 
 // NEW: Schema untuk menyimpan Konfigurasi Threshold
 const configSchema = new mongoose.Schema({
@@ -1072,10 +1075,39 @@ async function checkAndSaveAlerts(data) {
 // --- TAMBAHAN API UNTUK HALAMAN ALARM ---
 
 // 1. Acknowledge (Konfirmasi) Alarm - Mengubah Status jadi "Resolved"
+
+app.put('/api/alerts/ack-all', async (req, res) => {
+    try {
+        const filter = { resolved: { $ne: true }, acknowledged: { $ne: true } };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const result = await Alert.updateMany(filter, { $set: { acknowledged: true, acknowledgedAt: new Date() } });
+        res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/confirm-all', async (req, res) => {
+    try {
+        const filter = { resolved: { $ne: true } };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const now = new Date();
+        const result = await Alert.updateMany(filter, { $set: { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now } });
+        res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/alerts/:id/confirm', async (req, res) => {
+    try {
+        const now = new Date();
+        const updated = await Alert.findByIdAndUpdate(req.params.id, { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now }, { new: true });
+        if (!updated) return res.status(404).json({ success: false, message: 'Alert not found' });
+        res.json({ success: true, data: updated });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
 app.put('/api/alerts/:id/ack', async (req, res) => {
     try {
-        await Alert.findByIdAndUpdate(req.params.id, { resolved: true });
-        res.json({ success: true, message: 'Alert Acknowledged' });
+        await Alert.findByIdAndUpdate(req.params.id, { acknowledged: true, acknowledgedAt: new Date() });
+        res.json({ success: true, message: 'Alert acknowledged' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1571,28 +1603,27 @@ app.get('/api/engine-data/last-running', async (req, res) => {
 
 app.get('/api/engine-data/latest', async (req, res) => {
     try {
-        let totalEngineHours = 0;
-        try {
-            const statsRes = await fetch(`http://localhost:${PORT}/api/generator-active-time/stats?hours=8760`);
-            const statsJson = await statsRes.json();
-            if (statsJson.success && statsJson.data?.totalDurationHours) {
-                totalEngineHours = statsJson.data.totalDurationHours;
-            }
-        } catch(e) {
-            console.warn('Gagal ambil total jam operasi:', e.message);
-        }
-
-        const realtimeData = {
-            ...latestData,
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
+        const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
+        const dbData = latestDocs[0] || null;
+        const lastDataAt = dbData?.timestamp || latestData.timestamp;
+        const isDbFresh = dbData && (new Date() - dbData.timestamp < 15000);
+        const baseData = isDbFresh ? dbData : { ...latestData, timestamp: lastDataAt };
+        const previousDoc = latestDocs[1] || null;
+        const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
+        const enrichedData = {
+            ...baseData,
             engineHours: totalEngineHours,
-            lastMqttUpdate: new Date().toISOString()
+            lastMqttUpdate: lastDataAt,
+            alerts: generateAlerts(baseData, previousDoc),
+            maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
+            ...getPublicLabels(baseData)
         };
-        return res.json({ success: true, data: realtimeData, source: 'realtime-memory' });
-    } catch (error) {
-        res.json({ success: true, data: latestData, source: 'memory-fallback', warning: error.message });
-    }
+        res.json({ success: true, data: enrichedData, source: dbData ? 'database' : 'realtime-memory' });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
-
 app.get('/api/public-status', async (req, res) => {
     try {
         if (!isDbReady()) {
@@ -1951,7 +1982,7 @@ app.put('/api/alerts/:id/ack', async (req, res) => {
         // Cari alarm berdasarkan ID dan ubah 'resolved' jadi true
         const updatedAlert = await Alert.findByIdAndUpdate(
             req.params.id, 
-            { resolved: true },
+            { acknowledged: true, acknowledgedAt: new Date() },
             { new: true } // Opsi ini agar data yang dikembalikan adalah yang terbaru
         );
         
