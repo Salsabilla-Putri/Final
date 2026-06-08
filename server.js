@@ -117,6 +117,7 @@ const generatorDataSchema = new mongoose.Schema({
     fuel: Number,
     sync: String,
     synced: Boolean,
+    powerSource: String,
     status: String,
     iat: Number,
     map: Number,
@@ -641,7 +642,7 @@ app.use('/api', async (req, res, next) => {
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: null,
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
+    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
@@ -962,12 +963,12 @@ mqttClient.on('error', (error) => {
 });
 
 // gen/realtime memperbarui dashboard/alert secara langsung.
-// gen/data masuk ke buffer server dan baru di-flush ke MongoDB secara batch.
+// gen/data menyimpan record history realtime dari ESP32 ke MongoDB.
 // ============================================================
 // MONGODB BATCH SAVE
 // Realtime data tetap diterima setiap 1 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
-// setiap 10 menit atau saat buffer mencapai 600 record.
+// Buffer server internal tetap dipakai untuk sumber realtime lain, tetapi gen/data ESP32 disimpan langsung.
 // ============================================================
 
 const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
@@ -1007,6 +1008,7 @@ function buildGeneratorDbDocument(data) {
         fuel: toNumber(snapshot.fuel, 0),
         sync: snapshot.sync || 'OFF-GRID',
         synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
+        powerSource: snapshot.powerSource || (snapshot.sync === 'ON-GRID' || snapshot.synced === true ? 'GRID' : 'GENSET'),
         status: snapshot.status,
         iat: toNumber(snapshot.iat, 0),
         map: toNumber(snapshot.map, 0),
@@ -1321,6 +1323,7 @@ function normalizeGeneratorPayload(rawPayload) {
         fuel: toNumber(payload.fuel, latestData.fuel),
         sync: syncStatus,
         synced: syncStatus === 'ON-GRID',
+        powerSource: String(payload.powerSource || payload.power_source || (syncStatus === 'ON-GRID' ? 'GRID' : 'GENSET')).toUpperCase(),
         status: String(payload.status || latestData.status || 'STOPPED'),
         oil: toNumber(payload.oil, latestData.oil),
         iat: toNumber(payload.iat, latestData.iat),
@@ -1567,17 +1570,16 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis/database. ESP32 mengirim payload batch setiap 10 menit
-        // dengan bentuk { records: [...] }. Jangan simpan wrapper payload sebagai 1 dokumen;
-        // baca payload.records lalu tulis semua record ke MongoDB dengan bulkWrite/upsert.
+        // gen/data: jalur historis/database. ESP32 sekarang mengirim 1 record realtime tiap 1 detik.
+        // Bentuk lama { records: [...] } tetap diterima untuk kompatibilitas.
         if (topic === 'gen/data') {
-            const records = Array.isArray(parsed.records) ? parsed.records : [];
+            const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
             mqttIngestStats.lastRecordCount = records.length;
             console.log(`📥 MQTT gen/data received | bytes=${mqttIngestStats.lastPayloadBytes} | records=${records.length}`);
 
             if (!records.length) {
                 mqttIngestStats.ignoredMessages++;
-                console.warn('⚠️ gen/data ignored: payload.records[] is required');
+                console.warn('⚠️ gen/data ignored: empty payload');
                 return;
             }
 
