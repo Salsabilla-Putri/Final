@@ -83,14 +83,15 @@ async function fetchDashboardData() {
         const nowTs = Date.now();
         const allowHeavyFetch = (nowTs - lastHeavyFetchAt) >= HEAVY_ENDPOINT_REFRESH_MS;
         // Fetch semua data, limit history ditambah ke 100 agar cukup untuk kalkulasi 7 hari
-        const [engineRes, alertsRes, specsRes, historyRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
+        const [engineRes, alertsRes, specsRes, historyRes, engineHistoryRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
             fetch('/api/engine-data/latest'),
             fetch('/api/alerts?limit=10'),
             fetch('/api/generator-specs'),
-            fetch('/api/generator-active-time/history?limit=100'), 
+            fetch('/api/generator-active-time/history?limit=100'),
+            fetch('/api/engine-data/history?hours=168&limit=10000'),
             fetch('/api/maintenance'),
             allowHeavyFetch ? fetch('/api/public/dashboard') : Promise.resolve(new Response('{"success":false}', { status: 200 })),
-            allowHeavyFetch ? fetch('/api/cbm/analysis?hours=720') : Promise.resolve(new Response('{"success":false}', { status: 200 })) // Fetch data CBM untuk Health Score
+            allowHeavyFetch ? fetch('/api/cbm/analysis?hours=720') : Promise.resolve(new Response('{"success":false}', { status: 200 })) // Fetch data CBM untuk indikator kesehatan
         ]);
         if (allowHeavyFetch) lastHeavyFetchAt = nowTs;
 
@@ -112,14 +113,20 @@ async function fetchDashboardData() {
         if (specsData?.success) updateSpecificationsSection(specsData.data);
 
         const historyData = historyRes.status === 'fulfilled' ? await historyRes.value.json().catch(() => null) : null;
+        const engineHistoryData = engineHistoryRes.status === 'fulfilled' ? await engineHistoryRes.value.json().catch(() => null) : null;
         const maintenanceData = maintenanceRes.status === 'fulfilled' ? await maintenanceRes.value.json().catch(() => null) : null;
 
         if (historyData?.success) {
             dashboardHistoryCache = historyData.data || [];
             // Gabungkan riwayat sesi DB dengan maintenance yang Completed
             renderRecentActivity(historyData.data, maintenanceData?.success ? maintenanceData.data : []);
-            // Render chart berdasarkan data history aktual
-            updateActiveTimeChart(historyData.data);
+        }
+
+        // Render chart berdasarkan durasi ECU terkoneksi dari timestamp engine-data.
+        if (engineHistoryData?.success && Array.isArray(engineHistoryData.data)) {
+            updateActiveTimeChart(engineHistoryData.data);
+        } else if (historyData?.success) {
+            updateActiveTimeChart(historyData.data, { mode: 'session' });
         }
 
         if (maintenanceData?.success) {
@@ -272,81 +279,76 @@ function calculateHealthByComponentAge(engineData = {}, cbmData = {}) {
     return Math.round(healthFactors.reduce((a, b) => a + b, 0) / healthFactors.length);
 }
 
+function getParameterIndicator(label, value, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return { label, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
+    if (numeric >= min && numeric <= max) return { label, text: 'Sehat', cls: 'ok', icon: 'fa-check-circle' };
+    const criticalLow = min !== 0 && numeric < min * 0.85;
+    const criticalHigh = numeric > max * 1.15;
+    if (criticalLow || criticalHigh) return { label, text: 'Kritis', cls: 'danger', icon: 'fa-circle-exclamation' };
+    return { label, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
+}
+
+function getCbmIndicators(cbmData = {}) {
+    const components = cbmData.components || cbmData.componentHealth || {};
+    return Object.values(components).map((comp) => {
+        const status = String(comp.status || '').toLowerCase();
+        const label = comp.name || comp.parameter || 'Sistem';
+        if (status === 'critical' || status === 'bad') return { label, text: 'Kritis', cls: 'danger', icon: 'fa-circle-exclamation' };
+        if (status === 'warning' || status === 'degraded') return { label, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
+        if (status === 'good' || status === 'normal') return { label, text: 'Sehat', cls: 'ok', icon: 'fa-check-circle' };
+        return null;
+    }).filter(Boolean);
+}
+
 function renderHealthScore(engineData, cbmData) {
     const container = document.getElementById('systemHealthContainer');
     if (!container) return;
 
-    const hasCbmScore = cbmData && (typeof cbmData.healthScore !== 'undefined' || typeof cbmData.overallHealth !== 'undefined');
-    const healthValue = hasCbmScore ? Math.round(Number(cbmData.healthScore ?? cbmData.overallHealth ?? 0)) : null;
     const runtimeHours = sumRuntimeHoursFromHistory(dashboardHistoryCache);
     const latestMaintenance = getLatestCompletedMaintenance(dashboardMaintenanceCache);
+    const indicators = [
+        getParameterIndicator('Tegangan', engineData.volt ?? engineData.voltage, 200, 240),
+        getParameterIndicator('Frekuensi', engineData.freq ?? engineData.frequency, 48, 52),
+        getParameterIndicator('Bahan Bakar', engineData.fuel, 20, 100),
+        getParameterIndicator('Temperatur', engineData.coolant ?? engineData.temp ?? engineData.temperature, 40, 90),
+        getParameterIndicator('MAP', engineData.map, 20, 250),
+        ...getCbmIndicators(cbmData || {})
+    ];
 
-    if (!hasCbmScore) {
-        if (lastHealthSnapshot) {
-            container.innerHTML = lastHealthSnapshot.html;
-        } else {
-            container.innerHTML = `<div class="empty-state"><i class="fas fa-info-circle" style="color:#94a3b8;font-size:1.4rem;"></i><p>Health Score menunggu data CBM.</p></div>`;
-        }
-        const ageEl = document.getElementById('st-age');
-        const runtimeEl = document.getElementById('st-runtime');
-        const lastMaintEl = document.getElementById('st-last-maint');
-        const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
-        const sync = normalizeSyncStatus(engineData);
-        if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
-        if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
-        if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
-            ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')
-            : '-';
-        return;
-    }
-
-    const health = healthValue;
-    const warnings = [];
-    const degradedIndicators = [];
-    const components = cbmData.components || cbmData.componentHealth || {};
-    Object.values(components).forEach((comp) => {
-        const name = comp.name || comp.parameter || 'Sistem';
-        const value = (typeof comp.value !== 'undefined' && comp.value !== null) ? ` (${comp.value}${comp.unit || ''})` : '';
-        const status = String(comp.status || '').toLowerCase();
-
-        if (status === 'critical' || status === 'bad') {
-            warnings.push({ label: `Kritis: ${name}${value}`, cls: 'danger' });
-            degradedIndicators.push(name);
-        } else if (status === 'warning' || status === 'degraded') {
-            warnings.push({ label: `Perhatian: ${name}${value}`, cls: 'warn' });
-            degradedIndicators.push(name);
+    const uniqueIndicators = [];
+    const seen = new Set();
+    indicators.forEach((item) => {
+        const key = `${item.label}:${item.cls}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            uniqueIndicators.push(item);
         }
     });
 
+    const order = { danger: 0, warn: 1, ok: 2 };
+    uniqueIndicators.sort((a, b) => (order[a.cls] ?? 9) - (order[b.cls] ?? 9));
 
-    if (degradedIndicators.length) {
-        const uniq = [...new Set(degradedIndicators)];
-        warnings.unshift({ label: `Parameter perlu perhatian: ${uniq.join(', ')}`, cls: 'warn' });
-    }
-
-    const color  = health > 80 ? '#10b981' : health > 50 ? '#f59e0b' : '#ef4444';
-    const pillsHTML = warnings.length
-        ? warnings.map(w => `<span class="status-pill ${w.cls}">${w.label}</span>`).join('')
-        : `<span class="status-pill ok"><i class="fas fa-check"></i> Kondisi Mesin Ideal</span>`;
-
-    const footnoteIndicators = [...new Set(degradedIndicators)].map((label) => `<span class="health-footnote-item"><i class="fas fa-square" style="color:#facc15;font-size:10px;"></i> ${label}</span>`).join(' · ');
     const healthHtml = `
-        <div class="health-ring" style="--hc:${color};">
-            <div class="health-ring-value" style="color:${color};">${health}%</div>
-            <div class="health-ring-label">Health Score</div>
+        <div class="health-indicator-list">
+            ${uniqueIndicators.map((item) => `
+                <div class="health-indicator-item ${item.cls}">
+                    <i class="fas ${item.icon}"></i>
+                    <span>${item.label}</span>
+                    <strong>${item.text}</strong>
+                </div>
+            `).join('')}
         </div>
-        <div class="health-warning-wrap">${pillsHTML}</div>
-        ${footnoteIndicators ? `<div class="health-footnote"><small><strong>Catatan:</strong> indikator kuning mempengaruhi skor: ${footnoteIndicators}</small></div>` : ''}
     `;
     container.innerHTML = healthHtml;
-    lastHealthSnapshot = { health, html: healthHtml, updatedAt: Date.now() };
+    lastHealthSnapshot = { html: healthHtml, updatedAt: Date.now() };
 
     const ageEl = document.getElementById('st-age');
     const runtimeEl = document.getElementById('st-runtime');
     const lastMaintEl = document.getElementById('st-last-maint');
-    const running = ['RUNNING', 'ON-GRID'].includes(String(engineData.status || '').toUpperCase());
+    const running = ['RUNNING', 'ON-GRID', 'ON', 'ACTIVE'].includes(String(engineData.status || '').toUpperCase()) || Number(engineData.rpm || 0) > 0;
     const sync = normalizeSyncStatus(engineData);
-    if (ageEl) ageEl.textContent = running ? `Online • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
+    if (ageEl) ageEl.textContent = running ? `Live • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
     if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
     if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
         ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')
@@ -542,196 +544,40 @@ function renderMaintenanceDetailCard(m) {
 // ════════════════════════════════════════════════════════════════════════════
 //  ANALYTICS — Active Time Bar Chart (Real Data from History)
 // ════════════════════════════════════════════════════════════════════════════
-function updateActiveTimeChart(historyRows) {
-    const ctx = document.getElementById('chartActive')?.getContext('2d');
-    if (!ctx) return;
-
-    const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
-    const dayMap = {}; 
+function calculateDailyEcuConnectedHours(engineRows = []) {
+    const dayMap = {};
     const WIB_OFFSET = 7 * 60 * 60 * 1000;
     const now = new Date();
+    const maxGapMs = 5 * 60 * 1000;
 
-    // Inisialisasi map untuk 7 hari terakhir
     for (let i = 6; i >= 0; i--) {
         const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
         const key = toWibDateKey(d);
         dayMap[key] = 0;
     }
 
-    // Akumulasi durasi mesin aktif berdasarkan data aktual dari DB.
-    // Tiap sesi dipecah per-hari (WIB), agar sesi lintas tengah malam tidak salah hitung.
-    if (historyRows && Array.isArray(historyRows)) {
-        historyRows.forEach(r => {
-            const start = new Date(r.startedAt);
-            const end   = r.endedAt ? new Date(r.endedAt) : now;
+    const stamps = (engineRows || [])
+        .map((row) => new Date(row.timestamp || row.createdAt || row.date).getTime())
+        .filter((ts) => Number.isFinite(ts))
+        .sort((a, b) => a - b);
 
-            if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
+    for (let i = 1; i < stamps.length; i++) {
+        const prev = stamps[i - 1];
+        const curr = stamps[i];
+        const gap = curr - prev;
+        if (gap <= 0 || gap > maxGapMs) continue;
 
-            splitSessionByDayWIB(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {
-                if (dayMap.hasOwnProperty(dateKey)) {
-                    dayMap[dateKey] += hours;
-                }
-            });
-        });
-    }
-
-    const labels = [];
-    const dataPoints = [];
-    const todayKey = toWibDateKey(now);
-    let todayHours = 0;
-
-    // Masukkan data ke array untuk Chart.js
-    Object.keys(dayMap).sort().forEach(key => {
-        // Tentukan hari menggunakan string dengan zona waktu tetap
-        const d = new Date(key + 'T12:00:00+07:00'); 
-        labels.push(days[d.getDay()]);
-        
-        const val = parseFloat(Math.min(24, dayMap[key]).toFixed(2));
-        dataPoints.push(val);
-        
-        if (key === todayKey) todayHours = val;
-    });
-
-    if (activeChart) activeChart.destroy();
-
-    activeChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Jam Aktif',
-                data: dataPoints,
-                backgroundColor: dataPoints.map((_, i) => i === 6 ? '#f97316' : 'rgba(23,69,165,0.8)'),
-                borderRadius: 8,
-                barPercentage: 0.55
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} jam aktif` } }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    suggestedMax: 8,
-                    ticks: { callback: v => `${v}h` },
-                    grid: { color: 'rgba(0,0,0,0.05)' }
-                },
-                x: { grid: { display: false } }
+        splitSessionByDayWIB(new Date(prev), new Date(curr), WIB_OFFSET).forEach(({ dateKey, hours }) => {
+            if (Object.prototype.hasOwnProperty.call(dayMap, dateKey)) {
+                dayMap[dateKey] += hours;
             }
-        }
-    });
-
-    // Update Text "Hari Ini" agar akurat berdasarkan hitungan kalkulasi di atas
-    const tEl = document.getElementById('engToday');
-    if (tEl) {
-        const h = Math.floor(todayHours);
-        const m = Math.round((todayHours - h) * 60);
-        tEl.innerText = m > 0 ? `${h}j ${m}m` : `${h}j 0m`;
-    }
-}
-
-
-function splitSessionByDayWIB(start, end, wibOffset) {
-    const result = [];
-    let cursor = new Date(start);
-
-    while (cursor < end) {
-        const cursorWib = new Date(cursor.getTime() + wibOffset);
-        const nextMidnightWib = new Date(
-            Date.UTC(cursorWib.getUTCFullYear(), cursorWib.getUTCMonth(), cursorWib.getUTCDate() + 1)
-        );
-        const nextMidnightUtc = new Date(nextMidnightWib.getTime() - wibOffset);
-        const sliceEnd = nextMidnightUtc < end ? nextMidnightUtc : end;
-
-        const durHours = Math.max(0, sliceEnd - cursor) / 3600000;
-        const dateKey = toWibDateKey(cursor);
-        result.push({ dateKey, hours: durHours });
-        cursor = sliceEnd;
-    }
-
-    return result;
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  PERFORMANCE — System Status Radar + List
-// ════════════════════════════════════════════════════════════════════════════
-function updatePerformanceSection(data) {
-    if (!data.parameters) return;
-    const p = data.parameters;
-
-    const pickValue = (...vals) => {
-        for (const v of vals) {
-            const n = Number(v);
-            if (Number.isFinite(n)) return n;
-        }
-        return null;
-    };
-
-    const metricText = (val, unit, digits = 1) => {
-        if (val == null) return `N/A`;
-        return `${Number(val).toFixed(digits)} ${unit}`;
-    };
-
-    const statusOf = (val, lo, hi) => {
-        if (val == null) return { text: 'Data belum masuk', cls: 'muted' };
-        if (val < lo) return { text: 'Di bawah normal', cls: 'warn' };
-        if (val > hi) return { text: 'Di atas normal', cls: 'danger' };
-        return { text: 'Normal', cls: 'ok' };
-    };
-
-    // dukung berbagai bentuk payload agar tidak lagi N/A saat data sebenarnya ada
-    const voltVal = pickValue(p.voltage?.value, p.volt?.value, p.voltage, p.volt, data.voltage, data.volt);
-    const fuelVal = pickValue(p.fuel?.percent, p.fuel?.value, p.fuel, data.fuel);
-    const tempVal = pickValue(p.temperature?.value, p.coolant?.value, p.temp?.value, p.temperature, p.coolant, p.temp, data.temperature, data.coolant, data.temp);
-    const mapVal = pickValue(p.map?.value, p.map, data.map);
-
-    const powerVal = pickValue(p.power?.kw, p.power?.value, p.kw?.value, p.power, p.kw, data.power, data.kw);
-
-    const toPct = (val, min, max) => {
-        if (val == null) return 0;
-        const pct = ((val - min) / (max - min)) * 100;
-        return Math.max(0, Math.min(100, pct));
-    };
-
-    const cards = [
-        { name: 'Tegangan', icon: 'fa-bolt', value: metricText(voltVal, 'V'), status: statusOf(voltVal, 200, 240), raw: voltVal, min: 180, max: 250 },
-        { name: 'Daya', icon: 'fa-bolt-lightning', value: metricText(powerVal, 'kW'), status: statusOf(powerVal, 0, 5), raw: powerVal, min: 0, max: 8 },
-        { name: 'Temperatur', icon: 'fa-thermometer-half', value: metricText(tempVal, '°C'), status: statusOf(tempVal, 40, 90), raw: tempVal, min: 20, max: 120 },
-        { name: 'MAP', icon: 'fa-gauge-high', value: metricText(mapVal, 'kPa', 0), status: statusOf(mapVal, 20, 250), raw: mapVal, min: 0, max: 250 },
-        { name: 'Bahan Bakar', icon: 'fa-gas-pump', value: metricText(fuelVal, '%', 0), status: statusOf(fuelVal, 20, 100), raw: fuelVal, min: 0, max: 100 }
-    ];
-
-    const wrap = document.getElementById('perfSimpleCards');
-    if (wrap) {
-        wrap.innerHTML = cards.map((c) => {
-            const pct = toPct(c.raw, c.min, c.max);
-            return `
-            <div class="perf-item-card">
-                <div class="perf-item-head">
-                    <i class="fas ${c.icon}"></i>
-                    <span>${c.name}</span>
-                </div>
-                <div class="perf-item-value">${c.value}</div>
-                <div class="perf-bar"><span class="perf-bar-fill ${c.status.cls}" data-target-width="${pct}"></span></div>
-                <div class="perf-item-status status-pill ${c.status.cls}">${c.status.text}</div>
-            </div>
-        `;
-        }).join('');
-
-        requestAnimationFrame(() => {
-            wrap.querySelectorAll('.perf-bar-fill').forEach((bar) => {
-                const target = Number(bar.dataset.targetWidth || 0);
-                bar.style.width = `${target}%`;
-            });
         });
     }
+
+    return dayMap;
 }
 
-function calculateDailyRuntimeFromHistory(historyRows = []) {
+function calculateDailySessionHours(historyRows = []) {
     const dayMap = {};
     const WIB_OFFSET = 7 * 60 * 60 * 1000;
     const now = new Date();
@@ -754,12 +600,70 @@ function calculateDailyRuntimeFromHistory(historyRows = []) {
         });
     });
 
-    return Object.keys(dayMap)
-        .sort()
-        .map((key) => ({
-            dayIndex: new Date(`${key}T12:00:00+07:00`).getDay(),
-            hours: Number(Math.min(24, dayMap[key]).toFixed(2))
-        }));
+    return dayMap;
+}
+
+function updateActiveTimeChart(historyRows, options = {}) {
+    const ctx = document.getElementById('chartActive')?.getContext('2d');
+    if (!ctx) return;
+
+    const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const now = new Date();
+    const dayMap = options.mode === 'session'
+        ? calculateDailySessionHours(historyRows)
+        : calculateDailyEcuConnectedHours(historyRows);
+
+    const labels = [];
+    const dataPoints = [];
+    const todayKey = toWibDateKey(now);
+    let todayHours = 0;
+
+    Object.keys(dayMap).sort().forEach(key => {
+        const d = new Date(`${key}T12:00:00+07:00`);
+        labels.push(days[d.getDay()]);
+
+        const val = parseFloat(Math.min(24, dayMap[key]).toFixed(2));
+        dataPoints.push(val);
+
+        if (key === todayKey) todayHours = val;
+    });
+
+    if (activeChart) activeChart.destroy();
+
+    activeChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'ECU Connected',
+                data: dataPoints,
+                backgroundColor: dataPoints.map((_, i) => i === 6 ? '#f97316' : 'rgba(23,69,165,0.8)'),
+                borderRadius: 8,
+                barPercentage: 0.55
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: ctx => ` ECU connected ${ctx.parsed.y} jam` } }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    suggestedMax: 8,
+                    title: { display: true, text: 'Jam ECU Connected' },
+                    ticks: { callback: v => `${v}h` },
+                    grid: { color: 'rgba(0,0,0,0.05)' }
+                },
+                x: { grid: { display: false } }
+            }
+        }
+    });
+
+    const todayEl = document.getElementById('engToday');
+    if (todayEl) todayEl.innerText = formatHourMinute(todayHours);
 }
 
 function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {

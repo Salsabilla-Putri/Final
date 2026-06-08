@@ -18,7 +18,7 @@ const PARAMS = {
     power: { unit: 'kW', color: '#14b8a6' }, // Teal
     freq: { unit: 'Hz', color: '#8b5cf6' }, // Ungu
     fuel: { unit: '%', min: 20, warn: 30, color: '#10b981' }, // Hijau
-    coolant: { unit: '°C', max: 100, warn: 90, color: '#06b6d4' }, // Cyan
+    phase: { unit: '°', max: 15, warn: 10, min: -15, color: '#0ea5e9', label: 'Phase Difference' }, // Sky
     iat: { unit: '°C', color: '#f59e0b' }, // Amber
     map: { unit: 'kPa', color: '#0f766e' }, // Teal
     batt: { unit: 'Volt', max: 24, warn: 22, min: 10, color: '#6366f1' }, // Indigo
@@ -46,7 +46,7 @@ const HISTORY_EXPORT_COLUMNS = [
     { header: 'Power', key: 'power', getter: (row) => row.power ?? row.kw },
     { header: 'Frequency', key: 'freq', getter: (row) => row.freq ?? row.frequency },
     { header: 'Temperature', key: 'temp', getter: (row) => row.temp ?? row.temperature },
-    { header: 'Coolant', key: 'coolant', getter: (row) => row.coolant },
+    { header: 'Phase Difference', key: 'phase', getter: (row) => getPhaseDifferenceValue(row) },
     { header: 'Fuel', key: 'fuel', getter: (row) => row.fuel },
     { header: 'Battery Voltage', key: 'batt', getter: (row) => row.batt ?? row.battery ?? row.battVolt },
     { header: 'AFR', key: 'afr', getter: (row) => row.afr },
@@ -56,6 +56,10 @@ const HISTORY_EXPORT_COLUMNS = [
 
 
 // --- 1. FILTER & DATE INPUT LOGIC ---
+
+function getPhaseDifferenceValue(row = {}) {
+    return row.phase ?? row.phaseAngle ?? row.phase_angle ?? row.phaseDiff ?? row.phase_diff;
+}
 
 function updateDateInputs(val) {
     const end = new Date();
@@ -162,14 +166,18 @@ function processDataAndRender() {
         const genName = item.deviceId || 'Gen-01'; 
         
         Object.keys(PARAMS).forEach(key => {
-            const val = item[key];
+            const val = key === 'phase' ? getPhaseDifferenceValue(item) : item[key];
             // Pastikan nilai valid (bukan undefined/null)
             if (val !== undefined && val !== null) {
                 const conf = PARAMS[key];
                 let status = 'normal';
 
                 // Logic Status
-                if (conf.max && val > conf.max) status = 'critical';
+                const numericVal = Number(val);
+                if (key === 'phase' && Number.isFinite(numericVal)) {
+                    if (Math.abs(numericVal) > conf.max) status = 'critical';
+                    else if (Math.abs(numericVal) > conf.warn) status = 'warning';
+                } else if (conf.max && val > conf.max) status = 'critical';
                 else if (conf.warn && val > conf.warn) status = 'warning';
                 else if (conf.min && val < conf.min) status = 'critical';
 
@@ -180,8 +188,8 @@ function processDataAndRender() {
                     rawDate: new Date(ts),
                     generator: genName,
                     param: key,
-                    label: key.toUpperCase(), // Nama Parameter (RPM, VOLT)
-                    value: val,
+                    label: conf.label || key.toUpperCase(), // Nama Parameter (RPM, VOLT)
+                    value: key === 'phase' ? getPhaseDifferenceValue(item) : val,
                     unit: conf.unit,
                     status: status
                 });
@@ -303,6 +311,11 @@ function getParamStatus(paramKey, value) {
     const conf = PARAMS[paramKey];
     const numericValue = Number(value);
     if (!conf || !Number.isFinite(numericValue)) return 'normal';
+    if (paramKey === 'phase') {
+        if (conf.max !== undefined && Math.abs(numericValue) > conf.max) return 'critical';
+        if (conf.warn !== undefined && Math.abs(numericValue) > conf.warn) return 'warning';
+        return 'normal';
+    }
     if ((conf.max !== undefined && numericValue > conf.max) || (conf.min !== undefined && numericValue < conf.min)) return 'critical';
     if (conf.warn !== undefined && numericValue > conf.warn) return 'warning';
     return 'normal';

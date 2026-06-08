@@ -289,6 +289,7 @@ body {
 .icon-sec { background: linear-gradient(135deg, var(--secondary), var(--secondary-dark)); }
 .icon-wrn { background: linear-gradient(135deg, var(--warning), #fdba74); }
 .icon-dng { background: linear-gradient(135deg, var(--danger), #fca5a5); }
+.icon-supply { background: linear-gradient(135deg, #0ea5e9, #38bdf8); }
 
 .overview-value { font-size: 16px; font-weight: 700; color: var(--dark); margin-bottom: 2px; }
 .overview-label { font-size: var(--text-sm-size); color: var(--black); white-space: nowrap; }
