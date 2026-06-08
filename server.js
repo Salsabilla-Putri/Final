@@ -276,7 +276,7 @@ const activeTimeHistorySchema = new mongoose.Schema({
     source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' },
     calc: {
         rpmThreshold: { type: Number, default: 0 },
-        rule: { type: String, default: 'status=RUNNING OR rpm>threshold' },
+        rule: { type: String, default: 'ECU connected' },
         sampledAt: { type: Date, default: Date.now }
     }
 }, { timestamps: true });
@@ -598,6 +598,62 @@ function getEffectiveSessionEnd(row, referenceTime = new Date()) {
     return elapsedSinceSample > ACTIVE_SESSION_TIMEOUT_MS ? sampledAt : reference;
 }
 
+
+function toWibDateKey(date, wibOffset = 7 * 60 * 60 * 1000) {
+    return new Date(date.getTime() + wibOffset).toISOString().slice(0, 10);
+}
+
+function splitSessionByDay(start, end, wibOffset = 7 * 60 * 60 * 1000) {
+    const result = [];
+    let cursor = new Date(start);
+    const endDate = new Date(end);
+    if (!Number.isFinite(cursor.getTime()) || !Number.isFinite(endDate.getTime()) || endDate <= cursor) return result;
+
+    while (cursor < endDate) {
+        const cursorWib = new Date(cursor.getTime() + wibOffset);
+        const nextMidnightWib = new Date(Date.UTC(
+            cursorWib.getUTCFullYear(), cursorWib.getUTCMonth(), cursorWib.getUTCDate() + 1
+        ));
+        const nextMidnightUtc = new Date(nextMidnightWib.getTime() - wibOffset);
+        const sliceEnd = nextMidnightUtc < endDate ? nextMidnightUtc : endDate;
+        const hours = Math.max(0, sliceEnd - cursor) / 3600000;
+        const dateKey = toWibDateKey(cursor, wibOffset);
+        if (dateKey && hours > 0) result.push({ dateKey, hours });
+        cursor = sliceEnd;
+    }
+
+    return result;
+}
+
+function buildDailyActiveTimeSummary(rows = [], days = 7, referenceTime = new Date()) {
+    const wibOffset = 7 * 60 * 60 * 1000;
+    const safeDays = Math.max(1, Math.min(parseInt(days, 10) || 7, 31));
+    const now = safeEventTime(referenceTime);
+    const dayMap = new Map();
+
+    for (let i = safeDays - 1; i >= 0; i--) {
+        const key = toWibDateKey(new Date(now.getTime() - i * 86400000), wibOffset);
+        dayMap.set(key, 0);
+    }
+
+    for (const row of rows || []) {
+        const start = safeEventTime(row.startedAt);
+        const end = getEffectiveSessionEnd(row, now);
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) continue;
+
+        splitSessionByDay(start, end, wibOffset).forEach(({ dateKey, hours }) => {
+            if (dayMap.has(dateKey)) dayMap.set(dateKey, dayMap.get(dateKey) + hours);
+        });
+    }
+
+    return Array.from(dayMap.entries()).map(([date, hours]) => ({
+        date,
+        label: new Date(`${date}T12:00:00+07:00`).toLocaleDateString('id-ID', { weekday: 'short' }),
+        hours: +Math.min(24, hours).toFixed(2),
+        durationMs: Math.round(Math.min(24, hours) * 3600000)
+    }));
+}
+
 function decorateActiveTimeRow(row, referenceTime = new Date()) {
     const plain = typeof row?.toObject === 'function' ? row.toObject() : { ...row };
     const startedAt = safeEventTime(plain.startedAt);
@@ -623,7 +679,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'ECU connected', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -700,7 +756,7 @@ async function syncActiveTimeHistory(data) {
     const eventTime = safeEventTime(data?.timestamp);
     const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
     const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
-    const isRunning = isEcuConnected && isEngineRunning(data);
+    const isRunning = isEcuConnected;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     let session = activeSessions.get(key);
@@ -725,7 +781,7 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
         });
         return;
     }
@@ -740,7 +796,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
             });
             return;
         }
@@ -748,7 +804,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
@@ -1749,6 +1805,33 @@ app.get('/api/engine-data/stats', async (req, res) => {
         ]);
         res.json({ success: true, data: stats[0] || { avgPower: 0, totalHours: 0 } });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+
+app.get('/api/generator-active-time/daily', async (req, res) => {
+    try {
+        const requestedDeviceId = req.query.deviceId;
+        const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const days = Math.max(1, Math.min(parseInt(req.query.days || '7', 10) || 7, 31));
+        const now = new Date();
+        const since = new Date(now.getTime() - days * 86400000);
+        const query = {
+            startedAt: { $lte: now },
+            $or: [
+                { endedAt: null },
+                { endedAt: { $gte: since } }
+            ]
+        };
+        if (effectiveDeviceId) query.deviceId = effectiveDeviceId;
+
+        await closeStaleActiveSessions(effectiveDeviceId);
+        const rows = await ActiveTimeHistory.find(query).lean();
+        const data = buildDailyActiveTimeSummary(rows, days, now);
+        const totalHours = +data.reduce((sum, row) => sum + row.hours, 0).toFixed(2);
+        res.json({ success: true, count: data.length, data, totalHours });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 app.get('/api/generator-active-time/history', async (req, res) => {

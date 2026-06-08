@@ -17,6 +17,8 @@ let lastHealthSnapshot = null;
 let lastHeavyFetchAt = 0;
 const DASHBOARD_REFRESH_MS = 10000;
 const HEAVY_ENDPOINT_REFRESH_MS = 30000;
+const DATA_LIVE_THRESHOLD_MS = 30000;
+const LAST_PUBLIC_SENSOR_STORAGE_KEY = 'gensys:last-public-sensor';
 
 // ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
@@ -50,7 +52,29 @@ function setConnectionStatus(online, label = null) {
     badge.className = 'conn-badge ' + (online ? 'conn-online' : 'conn-offline');
     badge.innerHTML = online
         ? `<i class="fas fa-circle"></i> ${label || 'Live'}`
-        : `<i class="fas fa-circle"></i> ${label || 'Offline'}`;
+        : `<i class="fas fa-circle"></i> ${label || 'Data terakhir'}`;
+}
+
+function setDataStatus({ live = false, timestamp = null } = {}) {
+    setConnectionStatus(live, live ? 'Live' : 'Data terakhir');
+    setLastUpdated(timestamp);
+}
+
+function getDataAgeMs(timestamp) {
+    const ts = timestamp ? new Date(timestamp).getTime() : NaN;
+    return Number.isFinite(ts) ? Date.now() - ts : Infinity;
+}
+
+function readLastPublicSensorSnapshot() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(LAST_PUBLIC_SENSOR_STORAGE_KEY) || 'null');
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) { return null; }
+}
+
+function saveLastPublicSensorSnapshot(data) {
+    if (!data || typeof data !== 'object') return;
+    try { localStorage.setItem(LAST_PUBLIC_SENSOR_STORAGE_KEY, JSON.stringify(data)); } catch (_) { /* ignore quota */ }
 }
 
 
@@ -73,7 +97,8 @@ function setLastUpdated(timestamp = null) {
     const dt = timestamp ? new Date(timestamp) : new Date();
     const safeDate = Number.isFinite(dt.getTime()) ? dt : new Date();
     if (el) {
-        el.innerText = 'Diperbarui: ' + safeDate.toLocaleTimeString('id-ID', {
+        el.innerText = 'Diperbarui: ' + safeDate.toLocaleString('id-ID', {
+            day: '2-digit', month: 'short', year: 'numeric',
             hour: '2-digit', minute: '2-digit', second: '2-digit'
         }) + ' WIB';
     }
@@ -81,7 +106,7 @@ function setLastUpdated(timestamp = null) {
 
 function setDashboardLoading(isLoading) {
     document.body.classList.toggle('is-loading-data', Boolean(isLoading));
-    const statusText = isLoading ? 'Memuat data...' : 'Live';
+    const statusText = isLoading ? 'Memuat data...' : 'Data terakhir';
     if (isLoading) setConnectionStatus(false, statusText);
 }
 
@@ -98,10 +123,10 @@ async function fetchDashboardData() {
         // Fetch semua data, limit history ditambah ke 100 agar cukup untuk kalkulasi 7 hari
         const [engineRes, alertsRes, specsRes, historyRes, engineHistoryRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
             fetch('/api/engine-data/latest'),
-            fetch('/api/alerts?limit=10'),
+            fetch('/api/alerts?limit=100'),
             fetch('/api/generator-specs'),
             fetch('/api/generator-active-time/history?limit=100'),
-            fetch('/api/engine-data/history?hours=168&limit=10000'),
+            fetch('/api/generator-active-time/daily?days=7'),
             fetch('/api/maintenance'),
             allowHeavyFetch ? fetch('/api/public/dashboard') : Promise.resolve(new Response('{"success":false}', { status: 200 })),
             allowHeavyFetch ? fetch('/api/cbm/analysis?hours=720') : Promise.resolve(new Response('{"success":false}', { status: 200 })) // Fetch data CBM untuk indikator kesehatan
@@ -114,19 +139,20 @@ async function fetchDashboardData() {
 
 
         const alertsData = alertsRes.status === 'fulfilled' ? await alertsRes.value.json().catch(() => null) : null;
+        const alertRows = alertsData?.success && Array.isArray(alertsData.data) ? alertsData.data : [];
         let activeAlerts = 0;
         if (alertsData?.success) {
-            activeAlerts = alertsData.data.filter(a => !a.resolved).length;
+            activeAlerts = alertRows.filter(isAlertActive).length;
             const badge  = document.getElementById('val-alerts');
             if (badge) badge.innerText = activeAlerts;
-            renderAlertList(alertsData.data);
+            renderAlertList(alertRows);
         }
 
         const specsData = specsRes.status === 'fulfilled' ? await specsRes.value.json().catch(() => null) : null;
         if (specsData?.success) updateSpecificationsSection(specsData.data);
 
         const historyData = historyRes.status === 'fulfilled' ? await historyRes.value.json().catch(() => null) : null;
-        const engineHistoryData = engineHistoryRes.status === 'fulfilled' ? await engineHistoryRes.value.json().catch(() => null) : null;
+        const activeDailyData = engineHistoryRes.status === 'fulfilled' ? await engineHistoryRes.value.json().catch(() => null) : null;
         const maintenanceData = maintenanceRes.status === 'fulfilled' ? await maintenanceRes.value.json().catch(() => null) : null;
 
         if (historyData?.success) {
@@ -135,9 +161,10 @@ async function fetchDashboardData() {
             renderRecentActivity(historyData.data, maintenanceData?.success ? maintenanceData.data : []);
         }
 
-        // Render chart berdasarkan durasi ECU terkoneksi dari timestamp engine-data.
-        if (engineHistoryData?.success && Array.isArray(engineHistoryData.data)) {
-            updateActiveTimeChart(engineHistoryData.data);
+        // Render Active Time History dari summary harian collection activetimehistories (sesi ECU connected).
+        if (activeDailyData?.success && Array.isArray(activeDailyData.data)) {
+            updateActiveTimeChartFromDaily(activeDailyData.data);
+            updateAverageRuntimeFromDaily(activeDailyData.data);
         } else if (historyData?.success) {
             updateActiveTimeChart(historyData.data, { mode: 'session' });
         }
@@ -153,16 +180,26 @@ async function fetchDashboardData() {
         updateFuelAndCostCharts(historyRows, maintenanceData?.success ? maintenanceData.data : dashboardMaintenanceCache);
 
         if (engineData?.success && engineData.data) {
+            saveLastPublicSensorSnapshot(engineData.data);
             updateOverviewCards(engineData.data, historyRows);
-            updateOperationsSection(engineData.data, cbmData?.data);
+            if (activeDailyData?.success) updateAverageRuntimeFromDaily(activeDailyData.data);
+            updateOperationsSection(engineData.data, cbmData?.data, alertRows);
+            updatePerformanceSection(engineData.data);
+        } else {
+            const cachedSensor = readLastPublicSensorSnapshot();
+            if (cachedSensor) {
+                updateOverviewCards(cachedSensor, historyRows);
+                if (activeDailyData?.success) updateAverageRuntimeFromDaily(activeDailyData.data);
+                updateOperationsSection(cachedSensor, cbmData?.data, alertRows);
+                updatePerformanceSection(cachedSensor);
+            }
         }
 
         const dashData = dashRes.status === 'fulfilled' ? await dashRes.value.json().catch(() => null) : null;
-        if (dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
+        if (!engineData?.data && dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
 
-        const latestTs = engineData?.data?.timestamp || engineData?.data?.createdAt || null;
-        setConnectionStatus(true, 'Live');
-        setLastUpdated(latestTs);
+        const latestTs = engineData?.data?.timestamp || engineData?.data?.createdAt || readLastPublicSensorSnapshot()?.timestamp || null;
+        setDataStatus({ live: getDataAgeMs(latestTs) <= DATA_LIVE_THRESHOLD_MS, timestamp: latestTs });
 
     } catch (err) {
         console.error('fetchDashboardData error:', err);
@@ -176,6 +213,14 @@ async function fetchDashboardData() {
 // ════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW CARDS
 // ════════════════════════════════════════════════════════════════════════════
+
+function updateAverageRuntimeFromDaily(dailyRows = []) {
+    const avgEl = document.getElementById('val-avg-runtime');
+    if (!avgEl || !Array.isArray(dailyRows) || !dailyRows.length) return;
+    const total = dailyRows.reduce((sum, row) => sum + (Number(row.hours) || 0), 0);
+    avgEl.innerText = formatHourMinute(total / dailyRows.length);
+}
+
 function updateOverviewCards(data, historyRows = []) {
     const power = Number(data.power ?? data.kw ?? 0) || 0;
     const avg7h = calculateAverageRuntime7Days(historyRows);
@@ -191,7 +236,7 @@ function updateOverviewCards(data, historyRows = []) {
 // ════════════════════════════════════════════════════════════════════════════
 //  OPERATIONS SECTION (Engine Status + Health)
 // ════════════════════════════════════════════════════════════════════════════
-function updateOperationsSection(data, cbmData) {
+function updateOperationsSection(data, cbmData, alertRows = []) {
     // Sync
     const syncEl = document.getElementById('engSync');
     if (syncEl) {
@@ -225,7 +270,7 @@ function updateOperationsSection(data, cbmData) {
         fuelEstimateEl.className = estHours >= 2 ? 'st-ok' : estHours >= 1 ? 'st-warn' : 'st-err';
     }
 
-    renderHealthScore(data, cbmData);
+    renderHealthScore(data, cbmData, alertRows);
 }
 
 function healthStatus(value, min, max) {
@@ -338,7 +383,37 @@ function getCbmIndicators(cbmData = {}) {
     }).filter(Boolean);
 }
 
-function renderHealthScore(engineData, cbmData) {
+
+function isAlertActive(alert = {}) {
+    const status = String(alert.status || '').toLowerCase();
+    if (alert.resolved === true || alert.isResolved === true || status === 'resolved' || status === 'closed') return false;
+    return true;
+}
+
+function getAlertTimestamp(alert = {}) {
+    const raw = alert.timestamp || alert.createdAt || alert.updatedAt || alert.time;
+    const dt = raw ? new Date(raw) : null;
+    return dt && Number.isFinite(dt.getTime()) ? dt : null;
+}
+
+function countRecentActiveAlerts(alertRows = [], hours = 24) {
+    const sinceMs = Date.now() - hours * 3600000;
+    return (alertRows || []).filter((alert) => {
+        if (!isAlertActive(alert)) return false;
+        const ts = getAlertTimestamp(alert);
+        return ts && ts.getTime() >= sinceMs;
+    }).length;
+}
+
+function normalizeHealthIndicatorByAlertPolicy(item, recentActiveAlertCount) {
+    if (recentActiveAlertCount > 3) return item;
+    if (item.cls === 'danger') {
+        return { ...item, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
+    }
+    return item;
+}
+
+function renderHealthScore(engineData, cbmData, alertRows = []) {
     const container = document.getElementById('systemHealthContainer');
     if (!container) return;
 
@@ -353,9 +428,12 @@ function renderHealthScore(engineData, cbmData) {
         ...getCbmIndicators(cbmData || {})
     ];
 
+    const recentActiveAlertCount = countRecentActiveAlerts(alertRows, 24);
+    const policyIndicators = indicators.map((item) => normalizeHealthIndicatorByAlertPolicy(item, recentActiveAlertCount));
+
     const uniqueIndicators = [];
     const seen = new Set();
-    indicators.forEach((item) => {
+    policyIndicators.forEach((item) => {
         const key = `${item.label}:${item.cls}`;
         if (!seen.has(key)) {
             seen.add(key);
@@ -366,15 +444,32 @@ function renderHealthScore(engineData, cbmData) {
     const order = { danger: 0, warn: 1, ok: 2 };
     uniqueIndicators.sort((a, b) => (order[a.cls] ?? 9) - (order[b.cls] ?? 9));
 
+    const counts = uniqueIndicators.reduce((acc, item) => {
+        acc[item.cls] = (acc[item.cls] || 0) + 1;
+        return acc;
+    }, {});
+    const overallCls = counts.danger ? 'danger' : counts.warn ? 'warn' : 'ok';
+    const overallText = overallCls === 'danger' ? 'Kritis' : overallCls === 'warn' ? 'Perlu Perhatian' : 'Normal';
     const healthHtml = `
-        <div class="health-indicator-list">
-            ${uniqueIndicators.map((item) => `
-                <div class="health-indicator-item ${item.cls}">
-                    <i class="fas ${item.icon}"></i>
-                    <span>${item.label}</span>
-                    <strong>${item.text}</strong>
+        <div class="health-panel ${overallCls}">
+            <div class="health-summary">
+                <div class="health-summary-icon"><i class="fas ${overallCls === 'ok' ? 'fa-shield-halved' : overallCls === 'warn' ? 'fa-triangle-exclamation' : 'fa-circle-exclamation'}"></i></div>
+                <div>
+                    <span>Status Sistem</span>
+                    <strong>${overallText}</strong>
+                    <small>${uniqueIndicators.length} parameter dipantau • ${recentActiveAlertCount} alert aktif/24 jam</small>
                 </div>
-            `).join('')}
+            </div>
+            <div class="health-policy-note">Indikator merah hanya aktif jika lebih dari 3 alert masih aktif dalam 24 jam terakhir.</div>
+            <div class="health-indicator-list">
+                ${uniqueIndicators.map((item) => `
+                    <div class="health-indicator-item ${item.cls}">
+                        <i class="fas ${item.icon}"></i>
+                        <span>${item.label}</span>
+                        <strong>${item.text}</strong>
+                    </div>
+                `).join('')}
+            </div>
         </div>
     `;
     container.innerHTML = healthHtml;
@@ -640,6 +735,63 @@ function calculateDailySessionHours(historyRows = []) {
     return dayMap;
 }
 
+
+function updateActiveTimeChartFromDaily(dailyRows = []) {
+    const ctx = document.getElementById('chartActive')?.getContext('2d');
+    if (!ctx) return;
+
+    const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+    const labels = [];
+    const dataPoints = [];
+    const todayKey = toWibDateKey(new Date());
+    let todayHours = 0;
+
+    (dailyRows || []).forEach((row) => {
+        const key = row.date || row.dateKey;
+        const d = new Date(`${key}T12:00:00+07:00`);
+        labels.push(row.label || days[d.getDay()] || key);
+        const val = parseFloat(Math.min(24, Number(row.hours) || 0).toFixed(2));
+        dataPoints.push(val);
+        if (key === todayKey) todayHours = val;
+    });
+
+    if (activeChart) activeChart.destroy();
+    activeChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'ECU Connected',
+                data: dataPoints,
+                backgroundColor: dataPoints.map((_, i) => i === dataPoints.length - 1 ? '#f97316' : 'rgba(23,69,165,0.8)'),
+                borderRadius: 8,
+                barPercentage: 0.55
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: ctx => ` ECU connected ${ctx.parsed.y} jam` } }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    suggestedMax: 8,
+                    title: { display: true, text: 'Jam ECU Connected' },
+                    ticks: { callback: v => `${v}h` },
+                    grid: { color: 'rgba(0,0,0,0.05)' }
+                },
+                x: { grid: { display: false } }
+            }
+        }
+    });
+
+    const todayEl = document.getElementById('engToday');
+    if (todayEl) todayEl.innerText = formatHourMinute(todayHours);
+}
+
 function updateActiveTimeChart(historyRows, options = {}) {
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) return;
@@ -701,6 +853,19 @@ function updateActiveTimeChart(historyRows, options = {}) {
 
     const todayEl = document.getElementById('engToday');
     if (todayEl) todayEl.innerText = formatHourMinute(todayHours);
+}
+
+
+function calculateDailyRuntimeFromHistory(historyRows = []) {
+    const dayMap = calculateDailySessionHours(historyRows);
+    return Object.keys(dayMap).sort().map((dateKey) => {
+        const d = new Date(`${dateKey}T12:00:00+07:00`);
+        return {
+            dateKey,
+            dayIndex: d.getDay(),
+            hours: Math.min(24, Number(dayMap[dateKey]) || 0)
+        };
+    });
 }
 
 function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
@@ -812,6 +977,49 @@ function renderSystemRadar({ volt, freq, fuel, temp, power }) {
     });
 }
 
+
+function getPerformanceClass(value, min, max, warnMin = min, warnMax = max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 'muted';
+    if (numeric < min || numeric > max) return 'danger';
+    if (numeric < warnMin || numeric > warnMax) return 'warn';
+    return 'ok';
+}
+
+function updatePerformanceSection(dashboardData = {}) {
+    const container = document.getElementById('perfSimpleCards');
+    if (!container) return;
+
+    const params = dashboardData.parameters || null;
+    const rpm = Number(dashboardData.rpm ?? 0);
+    const volt = Number(dashboardData.volt ?? dashboardData.voltage ?? params?.voltage?.value ?? 0);
+    const freq = Number(dashboardData.freq ?? dashboardData.frequency ?? 0);
+    const amp = Number(dashboardData.amp ?? dashboardData.current ?? 0);
+    const power = Number(dashboardData.power ?? dashboardData.kw ?? params?.power?.kw ?? ((volt * amp) / 1000));
+    const coolant = Number(dashboardData.coolant ?? dashboardData.temp ?? dashboardData.temperature ?? params?.temperature?.value ?? 0);
+    const fuel = Number(dashboardData.fuel ?? params?.fuel?.percent ?? 0);
+
+    const rows = [
+        { label: 'RPM Mesin', value: `${Math.round(rpm).toLocaleString('id-ID')} RPM`, desc: rpm > 0 ? 'ECU mengirim data putaran' : 'Belum ada putaran terdeteksi', cls: getPerformanceClass(rpm, 0, 3800, 600, 3200), icon: 'fa-gauge-high' },
+        { label: 'Daya Output', value: `${power.toFixed(1)} kW`, desc: amp > 0 ? `${amp.toFixed(1)} A beban terukur` : 'Berdasarkan tegangan/arus realtime', cls: getPerformanceClass(power, 0, 100, 0, 80), icon: 'fa-bolt' },
+        { label: 'Tegangan', value: `${volt.toFixed(1)} V`, desc: 'Rentang normal 200–240 V', cls: getPerformanceClass(volt, 180, 250, 200, 240), icon: 'fa-plug-circle-bolt' },
+        { label: 'Frekuensi', value: `${freq.toFixed(1)} Hz`, desc: 'Rentang normal 48–52 Hz', cls: getPerformanceClass(freq, 45, 55, 48, 52), icon: 'fa-wave-square' },
+        { label: 'Suhu Coolant', value: `${coolant.toFixed(1)} °C`, desc: 'Normal di bawah 90 °C', cls: getPerformanceClass(coolant, 0, 98, 40, 90), icon: 'fa-temperature-half' },
+        { label: 'Bahan Bakar', value: `${fuel.toFixed(0)}%`, desc: fuel > 30 ? 'Cadangan aman' : fuel > 15 ? 'Mulai menipis' : 'Segera isi ulang', cls: getPerformanceClass(fuel, 10, 100, 30, 100), icon: 'fa-gas-pump' }
+    ];
+
+    container.innerHTML = rows.map((row) => `
+        <div class="perf-card ${row.cls}">
+            <div class="perf-card-icon"><i class="fas ${row.icon}"></i></div>
+            <div class="perf-card-body">
+                <span>${row.label}</span>
+                <strong>${row.value}</strong>
+                <small>${row.desc}</small>
+            </div>
+        </div>
+    `).join('');
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  SPECIFICATIONS
 // ════════════════════════════════════════════════════════════════════════════
@@ -855,7 +1063,7 @@ function calculateAverageRuntime7Days(historyRows = []) {
     let total = 0;
     historyRows.forEach((r) => {
         const s = new Date(r.startedAt);
-        const e = r.endedAt ? new Date(r.endedAt) : now;
+        const e = new Date(r.effectiveEndedAt || r.endedAt || now);
         if (e > start && e > s) total += Math.max(0, e - s) / 3600000;
     });
     return total / 7;
