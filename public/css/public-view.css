@@ -799,3 +799,26 @@ body {
     font-size: 0.73rem;
     line-height: 1.7;
 }
+
+
+.health-indicator-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    padding: 4px 0;
+}
+.health-indicator-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-align: left;
+}
+.health-indicator-item.ok { background: #dcfce7; color: #166534; }
+.health-indicator-item.warn { background: #fef3c7; color: #92400e; }
+.health-indicator-item.danger { background: #fee2e2; color: #991b1b; }
+.health-indicator-item strong { font-size: 0.72rem; text-transform: uppercase; }

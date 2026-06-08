@@ -1,10 +1,85 @@
 const API_URL = '/api';
 let activeChart = null;
 let activeChartLoading = false;
+const LAST_SENSOR_STORAGE_KEY = 'gensys:last-dashboard-sensor';
 
 // --- UTILS ---
 const formatTime = (d) => new Date(d).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
 const formatDate = (d) => new Date(d).toLocaleDateString('id-ID', {day:'numeric', month:'short'});
+
+
+function readLastSensorSnapshot() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(LAST_SENSOR_STORAGE_KEY) || 'null');
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) { return null; }
+}
+
+function saveLastSensorSnapshot(data) {
+    if (!data || typeof data !== 'object') return;
+    try { localStorage.setItem(LAST_SENSOR_STORAGE_KEY, JSON.stringify(data)); } catch (_) { /* ignore quota */ }
+}
+
+function numberOrZero(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getEngineRunning(data = {}) {
+    const statusText = String(data.status || '').toUpperCase();
+    const rpmValue = numberOrZero(data.rpm);
+    return ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
+}
+
+function formatEstimatedRuntime(fuelPct) {
+    const estHours = Math.max(0, (numberOrZero(fuelPct) / 100) * 8);
+    return fmtHours(estHours);
+}
+
+function renderSensorSnapshot(data = {}, { live = false } = {}) {
+    const snapshot = data && typeof data === 'object' ? data : {};
+    const isRun = getEngineRunning(snapshot);
+
+    setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm)).toLocaleString('id-ID')} RPM`);
+    setVal('val-volt', `${numberOrZero(snapshot.volt).toFixed(1)} V`);
+
+    updateSyncStatus('engSync', snapshot);
+    updatePowerSourceStatus(snapshot);
+
+    const stateEl = document.getElementById('engStat');
+    if (stateEl) {
+        if (live && isRun) {
+            stateEl.innerText = 'Live';
+            stateEl.className = 'st-ok';
+        } else if (isRun) {
+            stateEl.innerText = 'Terakhir hidup';
+            stateEl.className = 'st-warn';
+        } else {
+            stateEl.innerText = 'Sementara mati';
+            stateEl.className = live ? 'st-err' : 'st-warn';
+        }
+    }
+
+    const fuel = Math.round(numberOrZero(snapshot.fuel));
+    const fuelEl = document.getElementById('fuelLevel');
+    if (fuelEl) {
+        fuelEl.innerText = `${fuel}%`;
+        fuelEl.className = fuel < 20 ? 'st-err' : fuel < 30 ? 'st-warn' : 'st-ok';
+    }
+
+    const runtimeEl = document.getElementById('estRuntime');
+    if (runtimeEl) {
+        runtimeEl.innerText = formatEstimatedRuntime(fuel);
+        runtimeEl.className = fuel >= 25 ? 'st-ok' : fuel >= 12 ? 'st-warn' : 'st-err';
+    }
+
+    checkLimit('st-volt', numberOrZero(snapshot.volt), 200, 240);
+    checkLimit('st-amp',  numberOrZero(snapshot.amp),  0,   100);
+    checkLimit('st-freq', numberOrZero(snapshot.freq), 48,  52);
+    checkLimit('st-fuel', fuel,                        20,  100);
+    checkLimit('st-map',  numberOrZero(snapshot.map),  20,  250);
+    checkLimit('st-afr',  numberOrZero(snapshot.afr),  10,  18);
+}
 
 // --- UPDATE DASHBOARD ---
 async function updateDashboard() {
@@ -24,7 +99,31 @@ function normalizeSyncStatus(data = {}) {
     const rawSync = String(data.sync ?? data.syncStatus ?? data.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
     if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync)) return 'ON-GRID';
     if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync)) return 'OFF-GRID';
-    return rawSync || '--';
+    return rawSync || 'UNKNOWN';
+}
+
+
+function getPowerSourceStatus(data = {}) {
+    const syncStatus = normalizeSyncStatus(data);
+    if (syncStatus === 'ON-GRID') {
+        return { label: 'PLN', detail: 'Supply PLN tersambung', ok: true };
+    }
+    if (syncStatus === 'OFF-GRID') {
+        return { label: 'GENSET', detail: 'Supply generator tersambung', ok: true };
+    }
+    return { label: 'Menunggu', detail: 'Supply belum terdeteksi', ok: false };
+}
+
+function updatePowerSourceStatus(data) {
+    const supply = getPowerSourceStatus(data);
+    const overviewEl = document.getElementById('val-supply');
+    if (overviewEl) overviewEl.innerText = supply.label;
+
+    const detailEl = document.getElementById('engSupply');
+    if (detailEl) {
+        detailEl.innerText = supply.detail;
+        detailEl.className = supply.ok ? 'st-ok' : 'st-err';
+    }
 }
 
 
@@ -62,7 +161,7 @@ function updateSyncStatus(id, data) {
 // ─── 1. SENSOR DATA ──────────────────────────────────────────────────────────
 // Lacak timestamp data terakhir yang berhasil diterima dari ESP32
 let _lastSensorOkAt = null;
-let _lastDisplayData = null;
+let _lastDisplayData = readLastSensorSnapshot();
 // Jika selama DISCONNECT_THRESHOLD_MS tidak ada data masuk → anggap mesin mati
 const DISCONNECT_THRESHOLD_MS = 30_000; // 30 detik
 
@@ -81,7 +180,7 @@ async function updateSensorData() {
             // Cek apakah data dari ESP32 masih fresh (bukan stale data dari cache server)
             const dataAge = Date.now() - new Date(data.timestamp || 0).getTime();
             if (dataAge > DISCONNECT_THRESHOLD_MS) {
-                _handleDisconnect();
+                _handleDisconnect(data);
                 return;
             }
 
@@ -89,44 +188,9 @@ async function updateSensorData() {
             _lastSensorOkAt = Date.now();
             _disconnectReported = false;
 
-            const statusText = String(data.status || '').toUpperCase();
-            const syncText = normalizeSyncStatus(data);
-            const rpmValue = Number(data.rpm || 0);
-
-            // Beberapa device tidak selalu kirim status persis "RUNNING".
-            // Fallback: jika RPM > 0 maka mesin dianggap berjalan.
-            const isRun  = ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
-            const isSync = syncText === 'ON-GRID';
-
-            // Simpan snapshot data terakhir saat mesin masih running / ECU terkoneksi.
-            // Jika kondisi terbaru sudah stop/disconnect, UI tetap menampilkan data terakhir yang valid.
-            if (isRun || isSync) _lastDisplayData = data;
-            const displayData = _lastDisplayData || data;
-
-            // Overview
-            setVal('val-rpm',  (displayData.rpm || 0) + ' RPM');
-            setVal('val-temp', (displayData.coolant || displayData.temp || 0).toFixed(1) + '°C');
-            setVal('val-volt', (displayData.volt || 0).toFixed(1) + ' V');
-
-            // Engine Status
-            updateSyncStatus('engSync', data);
-            updatePowerSourceStatus(data);
-            updateStatus('engStat', isRun,  'Running', 'Stopped');
-
-            const fuel   = Math.round(displayData.fuel || 0);
-            const fuelEl = document.getElementById('fuelLevel');
-            if (fuelEl) {
-                fuelEl.innerText  = fuel + '%';
-                fuelEl.className  = fuel < 20 ? 'st-err' : 'st-ok';
-            }
-
-            // System Health Check Limits
-            checkLimit('st-volt', displayData.volt,  200, 240);
-            checkLimit('st-amp',  displayData.amp,   0,   100);
-            checkLimit('st-freq', displayData.freq,  48,  52);
-            checkLimit('st-fuel', displayData.fuel,  20,  100);
-            checkLimit('st-map',  displayData.map,   20,  250);
-            checkLimit('st-afr',  displayData.afr,   10,  18);
+            _lastDisplayData = data;
+            saveLastSensorSnapshot(data);
+            renderSensorSnapshot(data, { live: true });
         }
     } catch (e) {
         console.warn('Sensor Error', e);
@@ -136,7 +200,9 @@ async function updateSensorData() {
 
 // Tandai ke server bahwa ESP32 terputus sehingga sesi aktif ditutup
 let _disconnectReported = false;
-async function _handleDisconnect() {
+async function _handleDisconnect(fallbackData = null) {
+    const snapshot = fallbackData || _lastDisplayData || readLastSensorSnapshot();
+    if (snapshot) renderSensorSnapshot(snapshot, { live: false });
     if (_disconnectReported) return;
     _disconnectReported = true;
     console.warn('ESP32 disconnect detected — closing active session');
@@ -208,7 +274,7 @@ function setVal(id, v)          { const e=document.getElementById(id); if(e) e.i
 function updateStatus(id,ok,t1,t2) { const e=document.getElementById(id); if(e){e.innerText=ok?t1:t2; e.className=ok?'st-ok':'st-err';} }
 function checkLimit(id, v, min, max) {
     const e = document.getElementById(id); if (!e) return;
-    if (v == null) { e.innerText = '--'; return; }
+    if (v == null || !Number.isFinite(Number(v))) { e.innerText = 'No data'; e.className = 'st-warn'; return; }
     if (v >= min && v <= max) { e.innerText = 'Normal'; e.className = 'st-ok'; }
     else                      { e.innerText = v < min ? 'Low' : 'High'; e.className = 'st-err'; }
 }
@@ -406,6 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderClock();
     setInterval(renderClock, 1000);
 
+    if (_lastDisplayData) renderSensorSnapshot(_lastDisplayData, { live: false });
     updateDashboard();
     initChart();
     setInterval(updateDashboard, 1000);

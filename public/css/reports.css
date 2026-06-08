@@ -930,3 +930,21 @@ body {
         border-radius: 18px;
     }
 }
+
+
+.export-menu { position: relative; display: inline-flex; }
+.export-menu-list {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    z-index: 20;
+    min-width: 150px;
+    padding: 8px;
+    border-radius: 12px;
+    background: #fff;
+    border: 1px solid #d0d7e1;
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+}
+.export-menu.open .export-menu-list { display: grid; gap: 6px; }
+.export-menu-list .export-btn { width: 100%; justify-content: flex-start; }
