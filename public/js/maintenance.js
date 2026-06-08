@@ -12,7 +12,18 @@ function formatIDR(value) {
 }
 
 // --- 1. LOAD DATA DARI SERVER (MONGODB) ---
+function setMaintenanceLoading(isLoading) {
+    const tbody = document.getElementById('maintenanceTableBody');
+    const histBody = document.getElementById('historyTableBody');
+    const timeline = document.getElementById('maintenanceTimeline');
+    if (!isLoading) return;
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px;color:#94a3b8;"><i class="fas fa-circle-notch fa-spin"></i> Loading data...</td></tr>';
+    if (histBody) histBody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px;color:#94a3b8;"><i class="fas fa-circle-notch fa-spin"></i> Loading data...</td></tr>';
+    if (timeline) timeline.innerHTML = '<div style="text-align:center;padding:24px;color:#94a3b8;"><i class="fas fa-circle-notch fa-spin"></i> Loading timeline...</div>';
+}
+
 async function fetchTasks() {
+    setMaintenanceLoading(true);
     try {
         const res = await fetch(API_URL);
         const json = await res.json();

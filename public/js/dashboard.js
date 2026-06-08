@@ -1,6 +1,10 @@
 const API_URL = '/api';
 let activeChart = null;
 let activeChartLoading = false;
+let auxDashboardLoading = false;
+const SENSOR_REFRESH_MS = 2000;
+const AUX_REFRESH_MS = 15000;
+const CHART_REFRESH_MS = 60000;
 const LAST_SENSOR_STORAGE_KEY = 'gensys:last-dashboard-sensor';
 
 // --- UTILS ---
@@ -29,6 +33,36 @@ function getEngineRunning(data = {}) {
     const statusText = String(data.status || '').toUpperCase();
     const rpmValue = numberOrZero(data.rpm);
     return ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
+}
+
+function formatLastUpdated(date = new Date()) {
+    return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
+}
+
+function setDataStatus({ live = false, timestamp = null } = {}) {
+    const statusEl = document.getElementById('dataLiveStatus');
+    const lastEl = document.getElementById('lastUpdated');
+    const dt = timestamp ? new Date(timestamp) : new Date();
+    const safeDate = Number.isFinite(dt.getTime()) ? dt : new Date();
+
+    if (statusEl) {
+        statusEl.className = `conn-badge ${live ? 'conn-online' : 'conn-offline'}`;
+        statusEl.innerHTML = live
+            ? '<i class="fas fa-circle"></i> Live'
+            : '<i class="fas fa-circle"></i> Data terakhir';
+    }
+    if (lastEl) lastEl.innerText = `Diperbarui: ${formatLastUpdated(safeDate)}`;
+}
+
+function setLoading(targetId, isLoading, message = 'Loading data...') {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    if (isLoading) {
+        el.dataset.loading = 'true';
+        el.innerHTML = `<div class="loading-state"><i class="fas fa-circle-notch fa-spin"></i> ${message}</div>`;
+    } else {
+        delete el.dataset.loading;
+    }
 }
 
 function formatEstimatedRuntime(fuelPct) {
@@ -83,9 +117,17 @@ function renderSensorSnapshot(data = {}, { live = false } = {}) {
 
 // --- UPDATE DASHBOARD ---
 async function updateDashboard() {
-    await updateSensorData();
-    await updateMaintenanceLog();
-    await updateAlerts();
+    await Promise.allSettled([updateSensorData(), updateAuxiliaryData()]);
+}
+
+async function updateAuxiliaryData() {
+    if (auxDashboardLoading) return;
+    auxDashboardLoading = true;
+    try {
+        await Promise.allSettled([updateMaintenanceLog(), updateAlerts()]);
+    } finally {
+        auxDashboardLoading = false;
+    }
 }
 
 
@@ -106,36 +148,12 @@ function normalizeSyncStatus(data = {}) {
 function getPowerSourceStatus(data = {}) {
     const syncStatus = normalizeSyncStatus(data);
     if (syncStatus === 'ON-GRID') {
-        return { label: 'PLN', detail: 'Supply PLN tersambung', ok: true };
+        return { label: 'GRID', detail: 'Grid tersambung', ok: true };
     }
     if (syncStatus === 'OFF-GRID') {
-        return { label: 'GENSET', detail: 'Supply generator tersambung', ok: true };
+        return { label: 'GENSET', detail: 'Genset tersambung', ok: true };
     }
-    return { label: 'Menunggu', detail: 'Supply belum terdeteksi', ok: false };
-}
-
-function updatePowerSourceStatus(data) {
-    const supply = getPowerSourceStatus(data);
-    const overviewEl = document.getElementById('val-supply');
-    if (overviewEl) overviewEl.innerText = supply.label;
-
-    const detailEl = document.getElementById('engSupply');
-    if (detailEl) {
-        detailEl.innerText = supply.detail;
-        detailEl.className = supply.ok ? 'st-ok' : 'st-err';
-    }
-}
-
-
-function getPowerSourceStatus(data = {}) {
-    const syncStatus = normalizeSyncStatus(data);
-    if (syncStatus === 'ON-GRID') {
-        return { label: 'PLN', detail: 'Supply PLN tersambung', ok: true };
-    }
-    if (syncStatus === 'OFF-GRID') {
-        return { label: 'GENSET', detail: 'Supply generator tersambung', ok: true };
-    }
-    return { label: '--', detail: 'Supply belum terdeteksi', ok: false };
+    return { label: '--', detail: 'Supply source belum terdeteksi', ok: false };
 }
 
 function updatePowerSourceStatus(data) {
@@ -191,6 +209,7 @@ async function updateSensorData() {
             _lastDisplayData = data;
             saveLastSensorSnapshot(data);
             renderSensorSnapshot(data, { live: true });
+            setDataStatus({ live: true, timestamp: data.timestamp });
         }
     } catch (e) {
         console.warn('Sensor Error', e);
@@ -202,7 +221,12 @@ async function updateSensorData() {
 let _disconnectReported = false;
 async function _handleDisconnect(fallbackData = null) {
     const snapshot = fallbackData || _lastDisplayData || readLastSensorSnapshot();
-    if (snapshot) renderSensorSnapshot(snapshot, { live: false });
+    if (snapshot) {
+        renderSensorSnapshot(snapshot, { live: false });
+        setDataStatus({ live: false, timestamp: snapshot.timestamp });
+    } else {
+        setDataStatus({ live: false });
+    }
     if (_disconnectReported) return;
     _disconnectReported = true;
     console.warn('ESP32 disconnect detected — closing active session');
@@ -218,12 +242,13 @@ async function _handleDisconnect(fallbackData = null) {
 
 // ─── 2. MAINTENANCE LOG ──────────────────────────────────────────────────────
 async function updateMaintenanceLog() {
+    const container = document.getElementById('maintenanceContainer');
+    if (container && !container.children.length) setLoading('maintenanceContainer', true);
     try {
         const res = await fetch(`${API_URL}/maintenance`);
         if (!res.ok) return;
 
         const json      = await res.json();
-        const container = document.getElementById('maintenanceContainer');
 
         if (json.success && json.data.length > 0 && container) {
             container.innerHTML = '';
@@ -257,6 +282,8 @@ async function updateMaintenanceLog() {
 
 // ─── 3. ALERTS ───────────────────────────────────────────────────────────────
 async function updateAlerts() {
+    const container = document.getElementById('alertContainer');
+    if (container && !container.children.length) setLoading('alertContainer', true, 'Loading alerts...');
     try {
         const res  = await fetch(`${API_URL}/alerts?limit=10`);
         const json = await res.json();
@@ -473,12 +500,14 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(renderClock, 1000);
 
     if (_lastDisplayData) renderSensorSnapshot(_lastDisplayData, { live: false });
-    updateDashboard();
+    updateSensorData();
+    updateAuxiliaryData();
     initChart();
-    setInterval(updateDashboard, 1000);
+    setInterval(updateSensorData, SENSOR_REFRESH_MS);
+    setInterval(updateAuxiliaryData, AUX_REFRESH_MS);
 
-    // Refresh active time lebih sering agar sesi terbuka/tertutup cepat terlihat di history.
-    setInterval(initChart, 30 * 1000);
+    // Refresh active time secukupnya agar tidak membebani browser/server.
+    setInterval(initChart, CHART_REFRESH_MS);
 
     // Trigger recalculate sesi hari ini di server setiap 10 menit
     async function triggerTodayRecalculate() {

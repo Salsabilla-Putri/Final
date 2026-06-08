@@ -822,3 +822,16 @@ body {
 .health-indicator-item.warn { background: #fef3c7; color: #92400e; }
 .health-indicator-item.danger { background: #fee2e2; color: #991b1b; }
 .health-indicator-item strong { font-size: 0.72rem; text-transform: uppercase; }
+
+/* Loading state shared by data-driven public dashboard sections */
+body.is-loading-data .section-block {
+    transition: opacity 0.2s ease;
+}
+.loading-state,
+.empty-state {
+    text-align: center;
+}
+.loading-state i,
+.empty-state i {
+    margin-right: 6px;
+}

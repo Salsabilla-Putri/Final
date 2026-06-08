@@ -59,7 +59,15 @@ window.resetDateFilters = function() {
 };
 
 // --- ALARM LOGIC & API ---
+function setAlarmLoading(isLoading) {
+  const body = document.getElementById('alarmTableBody');
+  if (isLoading && body) {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:40px; color:#94a3b8;"><i class="fas fa-circle-notch fa-spin"></i> Loading data...</td></tr>';
+  }
+}
+
 async function fetchAlarms() {
+  setAlarmLoading(true);
   try {
     const dFrom = document.getElementById('dateFrom')?.value;
     const dTo = document.getElementById('dateTo')?.value;
