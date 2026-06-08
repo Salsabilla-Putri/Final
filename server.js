@@ -1184,7 +1184,9 @@ app.put('/api/alerts/ack-all', async (req, res) => {
 
 app.put('/api/alerts/confirm-all', async (req, res) => {
     try {
+        const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
         const filter = { resolved: { $ne: true } };
+        if (ids.length) filter._id = { $in: ids };
         if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
         const now = new Date();
         const result = await Alert.updateMany(filter, { $set: { resolved: true, acknowledged: true, acknowledgedAt: now, confirmedAt: now } });
@@ -1211,8 +1213,23 @@ app.put('/api/alerts/:id/ack', async (req, res) => {
 });
 
 // 2. Hapus Alarm dari Database
+
+app.delete('/api/alerts/confirmed', async (req, res) => {
+    try {
+        const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+        const filter = { resolved: true };
+        if (ids.length) filter._id = { $in: ids };
+        if (req.body?.deviceId) filter.deviceId = req.body.deviceId;
+        const result = await Alert.deleteMany(filter);
+        res.json({ success: true, deletedCount: result.deletedCount || 0 });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
 app.delete('/api/alerts/:id', async (req, res) => {
     try {
+        const alert = await Alert.findById(req.params.id);
+        if (!alert) return res.status(404).json({ success: false, message: 'Alert not found' });
+        if (!alert.resolved) return res.status(409).json({ success: false, message: 'Confirm alert before deleting it' });
         await Alert.findByIdAndDelete(req.params.id);
         res.json({ success: true, message: 'Alert Deleted' });
     } catch (error) {
@@ -2108,6 +2125,9 @@ app.put('/api/alerts/:id/ack', async (req, res) => {
 // 2. API untuk tombol REMOVE (Hapus permanen dari database)
 app.delete('/api/alerts/:id', async (req, res) => {
     try {
+        const alert = await Alert.findById(req.params.id);
+        if (!alert) return res.status(404).json({ success: false, message: 'Alarm not found' });
+        if (!alert.resolved) return res.status(409).json({ success: false, message: 'Confirm alert before deleting it' });
         await Alert.findByIdAndDelete(req.params.id);
         console.log(`🗑️ Alarm Deleted: ${req.params.id}`);
         res.json({ success: true, message: 'Alarm deleted successfully' });

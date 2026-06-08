@@ -36,22 +36,12 @@ const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
 });
 
 const HISTORY_EXPORT_COLUMNS = [
-    { header: 'Timestamp', key: 'timestamp', getter: (row) => formatReadableTimestamp(row.timestamp) },
-    { header: 'Generator', key: 'generator', getter: (row) => row.deviceId || 'Gen-01' },
-    { header: 'RPM', key: 'rpm', getter: (row) => row.rpm },
-    { header: 'MAP', key: 'map', getter: (row) => row.map },
-    { header: 'IAT', key: 'iat', getter: (row) => row.iat },
-    { header: 'Voltage', key: 'volt', getter: (row) => row.volt ?? row.voltage },
-    { header: 'Current', key: 'amp', getter: (row) => row.amp ?? row.current },
-    { header: 'Power', key: 'power', getter: (row) => row.power ?? row.kw },
-    { header: 'Frequency', key: 'freq', getter: (row) => row.freq ?? row.frequency },
-    { header: 'Temperature', key: 'temp', getter: (row) => row.temp ?? row.temperature },
-    { header: 'Phase Difference', key: 'phase', getter: (row) => getPhaseDifferenceValue(row) },
-    { header: 'Fuel', key: 'fuel', getter: (row) => row.fuel },
-    { header: 'Battery Voltage', key: 'batt', getter: (row) => row.batt ?? row.battery ?? row.battVolt },
-    { header: 'AFR', key: 'afr', getter: (row) => row.afr },
-    { header: 'TPS', key: 'tps', getter: (row) => row.tps },
-    { header: 'Overall Status', key: 'overallStatus', getter: (row) => getRowOverallStatus(row) }
+    { header: 'Timestamp', getter: (row) => formatReadableTimestamp(row.rawDate || row.timestamp) },
+    { header: 'Generator', getter: (row) => row.generator || 'Gen-01' },
+    { header: 'Parameter', getter: (row) => row.label || String(row.param || '').toUpperCase() },
+    { header: 'Value', getter: (row) => formatHistoryValue(row.value) },
+    { header: 'Unit', getter: (row) => row.unit || '-' },
+    { header: 'Status', getter: (row) => row.status || 'normal' }
 ];
 
 
@@ -307,6 +297,17 @@ function normalizeExportCell(value) {
     return value;
 }
 
+function formatHistoryValue(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toFixed(1) : normalizeExportCell(value);
+}
+
+function slugifyExportPart(value, fallback = 'all') {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return fallback;
+    return normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || fallback;
+}
+
 function getParamStatus(paramKey, value) {
     const conf = PARAMS[paramKey];
     const numericValue = Number(value);
@@ -337,12 +338,7 @@ function getRowOverallStatus(row) {
 }
 
 function getHistoryExportRows() {
-    const allowedTimestamps = new Set(filteredRows.map((row) => String(row.timestamp)));
-    if (processedRows.length > 0 && allowedTimestamps.size === 0) return [];
-
-    return [...rawApiData]
-        .filter((row) => row && row.timestamp)
-        .filter((row) => processedRows.length === 0 || allowedTimestamps.has(String(row.timestamp)))
+    return [...filteredRows]
         .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
         .map((row) => {
             const exportRow = {};
@@ -356,7 +352,10 @@ function getHistoryExportRows() {
 function getHistoryExportFilename(extension) {
     const dateFrom = document.getElementById('dateFrom')?.value || 'all';
     const dateTo = document.getElementById('dateTo')?.value || dateFrom;
-    return `history_${dateFrom}_to_${dateTo}.${extension}`;
+    const param = slugifyExportPart(document.getElementById('paramFilter')?.value, 'all-param');
+    const status = slugifyExportPart(document.getElementById('statusFilter')?.value, 'all-status');
+    const search = slugifyExportPart(document.getElementById('searchQuery')?.value, 'no-search');
+    return `history_${dateFrom}_to_${dateTo}_${param}_${status}_${search}.${extension}`;
 }
 
 function exportCSV() {
@@ -382,7 +381,25 @@ function exportExcel() {
         <tr>${headers.map((header) => `<td>${escapeHtmlCell(row[header])}</td>`).join('')}</tr>
     `).join('');
 
+    const dateFrom = document.getElementById('dateFrom')?.value || 'all';
+    const dateTo = document.getElementById('dateTo')?.value || dateFrom;
+    const param = document.getElementById('paramFilter')?.value || 'all';
+    const status = document.getElementById('statusFilter')?.value || 'all';
+    const search = document.getElementById('searchQuery')?.value || '-';
+
     const htmlTable = `
+        <table border="1">
+            <thead><tr><th colspan="2">Applied Filters</th></tr></thead>
+            <tbody>
+                <tr><td>Date From</td><td>${escapeHtmlCell(dateFrom)}</td></tr>
+                <tr><td>Date To</td><td>${escapeHtmlCell(dateTo)}</td></tr>
+                <tr><td>Parameter</td><td>${escapeHtmlCell(param)}</td></tr>
+                <tr><td>Status</td><td>${escapeHtmlCell(status)}</td></tr>
+                <tr><td>Search</td><td>${escapeHtmlCell(search)}</td></tr>
+                <tr><td>Total Exported Rows</td><td>${rows.length}</td></tr>
+            </tbody>
+        </table>
+        <br>
         <table border="1">
             <thead><tr>${tableHead}</tr></thead>
             <tbody>${tableRows}</tbody>

@@ -187,9 +187,6 @@ function renderTable() {
         </button>`;
     } else {
       actionButtons = `
-        <button class="btn btn-ack" onclick="acknowledgeAlarm('${alarm._id}')" ${alarm.acknowledged ? 'disabled' : ''}>
-          <i class="fas fa-check"></i> Ack
-        </button>
         <button class="btn btn-primary" onclick="confirmAlarm('${alarm._id}')">
           <i class="fas fa-clipboard-check"></i> Confirm
         </button>`;
@@ -276,7 +273,7 @@ window.exportAlarmCSV = function() {
     ].join(',') + '\n';
   });
 
-  downloadBlob(csv, 'text/csv;charset=utf-8;', `alarms_${new Date().toISOString().slice(0, 10)}.csv`);
+  downloadBlob(csv, 'text/csv;charset=utf-8;', `alarms_${currentFilter}_${document.getElementById('dateFrom')?.value || 'all'}_to_${document.getElementById('dateTo')?.value || 'all'}.csv`);
 }
 
 window.exportAlarmExcel = function() {
@@ -317,13 +314,15 @@ window.exportAlarmExcel = function() {
   downloadBlob(
     `\ufeff${htmlTable}`,
     'application/vnd.ms-excel;charset=utf-8;',
-    `alarms_${new Date().toISOString().slice(0, 10)}.xls`
+    `alarms_${currentFilter}_${document.getElementById('dateFrom')?.value || 'all'}_to_${document.getElementById('dateTo')?.value || 'all'}.xls`
   );
 }
 
-async function putAlertAction(path, successMessage, errorMessage) {
+async function putAlertAction(path, successMessage, errorMessage, body = null) {
   try {
-    const res = await fetch(`${API_URL}${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' } });
+    const options = { method: 'PUT', headers: { 'Content-Type': 'application/json' } };
+    if (body) options.body = JSON.stringify(body);
+    const res = await fetch(`${API_URL}${path}`, options);
     const json = await res.json();
     if (!res.ok || !json.success) throw new Error(json.error || json.message || res.statusText);
     showNotification(successMessage, 'success');
@@ -341,29 +340,47 @@ window.confirmAlarm = async function(id) {
   return putAlertAction(`/${id}/confirm`, 'Alarm confirmed', 'Failed to confirm');
 }
 
-window.acknowledgeAllAlarms = async function() {
-  if (!confirm('Acknowledge all active alerts?')) return;
-  return putAlertAction('/ack-all', 'All active alerts acknowledged', 'Failed to acknowledge all');
-}
-
 window.confirmAllAlarms = async function() {
-  if (!confirm('Confirm and resolve all active alerts?')) return;
-  return putAlertAction('/confirm-all', 'All active alerts confirmed', 'Failed to confirm all');
+  const ids = getFilteredAlarms().filter(a => !a.resolved).map(a => a._id).filter(Boolean);
+  if (ids.length === 0) return showNotification('No active alerts in the current filter to confirm', 'error');
+  if (!confirm(`Confirm and resolve ${ids.length} active alert(s) from the current filter?`)) return;
+  return putAlertAction('/confirm-all', 'Selected active alerts confirmed', 'Failed to confirm selected alerts', { ids });
 }
 
 window.removeAlarm = async function(id) {
-  if (!confirm('Permanently delete this alarm log?')) return;
+  const alarm = allAlarms.find(a => a._id === id);
+  if (alarm && !alarm.resolved) return showNotification('Confirm this alarm before deleting it', 'error');
+  if (!confirm('Permanently delete this confirmed alarm log?')) return;
 
   try {
     const res = await fetch(`${API_URL}/${id}`, { method: 'DELETE' });
     const json = await res.json();
 
-    if (json.success) {
-      showNotification('Alarm log deleted', 'success');
-      fetchAlarms();
-    }
+    if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Delete failed');
+    showNotification('Alarm log deleted', 'success');
+    fetchAlarms();
   } catch (e) {
-    showNotification('Failed to delete', 'error');
+    showNotification(e.message || 'Failed to delete', 'error');
+  }
+}
+
+window.removeAllConfirmedAlarms = async function() {
+  const ids = getFilteredAlarms().filter(a => a.resolved).map(a => a._id).filter(Boolean);
+  if (ids.length === 0) return showNotification('No confirmed alerts in the current filter to remove', 'error');
+  if (!confirm(`Permanently delete ${ids.length} confirmed alarm log(s) from the current filter?`)) return;
+
+  try {
+    const res = await fetch(`${API_URL}/confirmed`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) throw new Error(json.message || json.error || 'Delete failed');
+    showNotification(`${json.deletedCount || 0} confirmed alarm log(s) deleted`, 'success');
+    fetchAlarms();
+  } catch (e) {
+    showNotification(e.message || 'Failed to remove confirmed alerts', 'error');
   }
 }
 
