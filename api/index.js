@@ -201,7 +201,7 @@ const activeTimeHistorySchema = new mongoose.Schema({
     source: { type: String, enum: ['mqtt', 'manual'], default: 'mqtt' },
     calc: {
         rpmThreshold: { type: Number, default: 0 },
-        rule: { type: String, default: 'status=RUNNING OR rpm>threshold' },
+        rule: { type: String, default: 'ECU connected' },
         sampledAt: { type: Date, default: Date.now }
     }
 }, { timestamps: true });
@@ -286,7 +286,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'ECU connected', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -476,12 +476,11 @@ async function persistGeneratorSnapshot(rawPayload = {}, { source = 'http_ingest
 }
 
 async function syncActiveTimeHistory(data) {
-    const status = String(data?.status || '').toUpperCase();
-    const rpm = Number(data?.rpm || 0);
     const rpmThreshold = 0;
-    const isRunning = status === 'RUNNING' || rpm > rpmThreshold;
+    const eventTime = safeEventTime(data?.timestamp);
+    const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
+    const isRunning = dataAgeMs <= ACTIVE_SESSION_TIMEOUT_MS;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
-    const eventTime = data?.timestamp ? new Date(data.timestamp) : new Date();
     const activeKey = `${deviceId}`;
     const session = activeSessions.get(activeKey);
 
@@ -491,7 +490,7 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
         });
         return;
     }
@@ -503,7 +502,7 @@ async function syncActiveTimeHistory(data) {
             const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
             await ActiveTimeHistory.findOneAndUpdate(
                 { deviceId, startedAt: session.startedAt, endedAt: null },
-                { endedAt, durationMs, calc: { rpmThreshold, sampledAt: session.lastSeenAt } },
+                { endedAt, durationMs, calc: { rpmThreshold, rule: 'ECU connected', sampledAt: session.lastSeenAt } },
                 { sort: { createdAt: -1 } }
             );
 
@@ -512,7 +511,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
             });
             return;
         }
@@ -520,7 +519,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
@@ -531,7 +530,7 @@ async function syncActiveTimeHistory(data) {
         const durationMs = Math.max(0, endedAt.getTime() - session.startedAt.getTime());
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { endedAt, durationMs, calc: { rpmThreshold, sampledAt: eventTime } },
+            { endedAt, durationMs, calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         activeSessions.delete(activeKey);
