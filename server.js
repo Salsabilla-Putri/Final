@@ -18,15 +18,18 @@ mongoose.set('bufferCommands', false);
 const mqttModulePath = path.join(__dirname, 'node_modules', 'mqtt', 'build', 'index.js');
 const mqtt = fs.existsSync(mqttModulePath) ? require('mqtt') : null;
 
-function createDisabledMqttClient() {
+function createDisabledMqttClient(message = 'MQTT disabled; running without live broker connection.', emitError = false) {
     const client = new EventEmitter();
+    client.connected = false;
     client.subscribe = () => undefined;
     client.publish = () => undefined;
     client.end = () => undefined;
 
-    process.nextTick(() => {
-        client.emit('error', new Error('MQTT module unavailable; running without live broker connection.'));
-    });
+    if (emitError) {
+        process.nextTick(() => {
+            client.emit('error', new Error(message));
+        });
+    }
 
     return client;
 }
@@ -36,6 +39,10 @@ const { generateMaintenanceDecision, toSuggestionDocument } = require('./mainten
 const { analyzeCBM } = require('./lib_cbm_analysis');
 
 const app = express();
+const isVercelRuntime = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const enableServerlessMqtt = process.env.ENABLE_SERVERLESS_MQTT === 'true';
+const shouldStartMqtt = !isVercelRuntime || enableServerlessMqtt;
+const shouldWarmDbOnStartup = !isVercelRuntime || process.env.ENABLE_SERVERLESS_DB_WARMUP === 'true';
 
 // SECURITY HEADERS
 app.use((req, res, next) => {
@@ -65,7 +72,9 @@ async function ensureDbReady() {
 
     dbConnectPromise = mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/generator_monitoring', {
         useNewUrlParser: true,
-        useUnifiedTopology: true
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000', 10),
+        socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '10000', 10)
     })
     .then(async () => {
         console.log('✅ MongoDB Connected');
@@ -178,7 +187,11 @@ const configSchema = new mongoose.Schema({
 const Config = mongoose.model('Config', configSchema);
 
 // DATABASE (startup connect + auto retry via ensureDbReady saat endpoint dipanggil)
-ensureDbReady().catch(() => undefined);
+// Di Vercel, jangan membuka koneksi MongoDB saat module di-import agar cold start
+// tidak berubah menjadi 502. Koneksi dibuat saat request API pertama yang butuh DB.
+if (shouldWarmDbOnStartup) {
+    ensureDbReady().catch(() => undefined);
+}
 
 
 const userSchema = new mongoose.Schema({
@@ -530,7 +543,7 @@ async function loadThresholdsFromDB() {
 
 // --- MQTT LOGIC ---
 // [FIX 1] Broker disamakan dengan ESP32 → shiftr.io cloud
-const mqttClient = mqtt
+const mqttClient = mqtt && shouldStartMqtt
     ? mqtt.connect(process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883', {
         clientId:        'server-' + Math.random().toString(16).slice(2, 8),
         username:        process.env.MQTT_USERNAME || 'generatorta20',
@@ -539,7 +552,16 @@ const mqttClient = mqtt
         reconnectPeriod: 3000,
         connectTimeout:  10000
     })
-    : createDisabledMqttClient();
+    : createDisabledMqttClient(
+        shouldStartMqtt
+            ? 'MQTT module unavailable; running without live broker connection.'
+            : 'MQTT disabled in Vercel serverless runtime.',
+        shouldStartMqtt && !mqtt
+    );
+
+if (isVercelRuntime && !enableServerlessMqtt) {
+    console.log('ℹ️ MQTT disabled in Vercel serverless runtime. Set ENABLE_SERVERLESS_MQTT=true to enable it explicitly.');
+}
 
 const mqttIngestStats = {
     connectedAt: null,
@@ -563,6 +585,53 @@ function updateMqttIngestError(error) {
     mqttIngestStats.lastErrorAt = new Date();
     mqttIngestStats.lastError = error?.message || String(error);
 }
+
+function shouldSkipApiDbWarmup(req) {
+    if (req.method !== 'GET') return false;
+    return [
+        '/api/health',
+        '/api/ingest/status',
+        '/api/ingest/batch',
+        '/api/mqtt-ingest/status'
+    ].includes(req.path);
+}
+
+app.get('/api/health', (req, res) => {
+    const mongodbState = mongoose.connection.readyState;
+    const mongodbStatus = ['disconnected', 'connected', 'connecting', 'disconnecting'][mongodbState] || 'unknown';
+    const mqttConnected = typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false;
+    const checks = {
+        mongodb: { status: mongodbStatus, connected: mongodbState === 1 },
+        mqtt: { enabled: shouldStartMqtt, connected: mqttConnected },
+        env: {
+            mongodbUri: Boolean(process.env.MONGODB_URI),
+            vercel: isVercelRuntime
+        }
+    };
+    const healthy = checks.mongodb.connected || isVercelRuntime;
+    res.status(healthy ? 200 : 503).json({
+        success: true,
+        status: healthy && checks.mongodb.connected ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString(),
+        checks
+    });
+});
+
+app.use('/api', async (req, res, next) => {
+    if (shouldSkipApiDbWarmup(req)) return next();
+
+    try {
+        await ensureDbReady();
+        next();
+    } catch (error) {
+        console.error('API DB connection error:', error.message);
+        res.status(503).json({
+            success: false,
+            error: 'Database connection unavailable',
+            details: process.env.NODE_ENV === 'production' ? undefined : error.message
+        });
+    }
+});
 
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: new Date(),
@@ -2870,11 +2939,19 @@ app.post('/api/cbm/run', async (req, res) => {
 // =========================
 // START SERVER
 // =========================
-const PORT = process.env.PORT || 3023;
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+function startBackgroundWorkers() {
     startMaintenanceSuggestionWorker();
     startMonthlyReportWorker();
     startCbmWorker();
-});
+}
+
+const PORT = process.env.PORT || 3023;
+
+if (require.main === module) {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+        startBackgroundWorkers();
+    });
+}
+
+module.exports = app;
