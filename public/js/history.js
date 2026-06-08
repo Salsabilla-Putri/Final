@@ -35,6 +35,26 @@ const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
     second: '2-digit'
 });
 
+const HISTORY_EXPORT_COLUMNS = [
+    { header: 'Timestamp', key: 'timestamp', getter: (row) => formatReadableTimestamp(row.timestamp) },
+    { header: 'Generator', key: 'generator', getter: (row) => row.deviceId || 'Gen-01' },
+    { header: 'RPM', key: 'rpm', getter: (row) => row.rpm },
+    { header: 'MAP', key: 'map', getter: (row) => row.map },
+    { header: 'IAT', key: 'iat', getter: (row) => row.iat },
+    { header: 'Voltage', key: 'volt', getter: (row) => row.volt ?? row.voltage },
+    { header: 'Current', key: 'amp', getter: (row) => row.amp ?? row.current },
+    { header: 'Power', key: 'power', getter: (row) => row.power ?? row.kw },
+    { header: 'Frequency', key: 'freq', getter: (row) => row.freq ?? row.frequency },
+    { header: 'Temperature', key: 'temp', getter: (row) => row.temp ?? row.temperature },
+    { header: 'Coolant', key: 'coolant', getter: (row) => row.coolant },
+    { header: 'Fuel', key: 'fuel', getter: (row) => row.fuel },
+    { header: 'Battery Voltage', key: 'batt', getter: (row) => row.batt ?? row.battery ?? row.battVolt },
+    { header: 'AFR', key: 'afr', getter: (row) => row.afr },
+    { header: 'TPS', key: 'tps', getter: (row) => row.tps },
+    { header: 'Overall Status', key: 'overallStatus', getter: (row) => getRowOverallStatus(row) }
+];
+
+
 // --- 1. FILTER & DATE INPUT LOGIC ---
 
 function updateDateInputs(val) {
@@ -254,6 +274,15 @@ function escapeCsvCell(value) {
     return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
 
+function escapeHtmlCell(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function downloadBlob(content, type, filename) {
     const blob = new Blob([content], { type });
     const url = window.URL.createObjectURL(blob);
@@ -264,48 +293,85 @@ function downloadBlob(content, type, filename) {
     window.URL.revokeObjectURL(url);
 }
 
-function exportCSV() {
-    if (filteredRows.length === 0) return alert('No data to export');
-    let csv = 'Timestamp,Generator,Parameter,Value,Unit,Status\n';
-    filteredRows.forEach(row => {
-        csv += [
-            escapeCsvCell(formatReadableTimestamp(row.rawDate)),
-            escapeCsvCell(row.generator),
-            escapeCsvCell(row.label),
-            escapeCsvCell(Number(row.value).toFixed(1)),
-            escapeCsvCell(row.unit),
-            escapeCsvCell(row.status)
-        ].join(',') + '\n';
-    });
+function normalizeExportCell(value) {
+    if (value === undefined || value === null || Number.isNaN(value)) return '';
+    if (typeof value === 'number') return Number.isFinite(value) ? value : '';
+    return value;
+}
 
-    downloadBlob(csv, 'text/csv;charset=utf-8;', `history_${new Date().toISOString().slice(0, 10)}.csv`);
+function getParamStatus(paramKey, value) {
+    const conf = PARAMS[paramKey];
+    const numericValue = Number(value);
+    if (!conf || !Number.isFinite(numericValue)) return 'normal';
+    if ((conf.max !== undefined && numericValue > conf.max) || (conf.min !== undefined && numericValue < conf.min)) return 'critical';
+    if (conf.warn !== undefined && numericValue > conf.warn) return 'warning';
+    return 'normal';
+}
+
+function getRowOverallStatus(row) {
+    let hasWarning = false;
+    for (const key of Object.keys(PARAMS)) {
+        const value = key === 'volt'
+            ? (row.volt ?? row.voltage)
+            : key === 'batt'
+                ? (row.batt ?? row.battery ?? row.battVolt)
+                : row[key];
+        const status = getParamStatus(key, value);
+        if (status === 'critical') return 'critical';
+        if (status === 'warning') hasWarning = true;
+    }
+    return hasWarning ? 'warning' : 'normal';
+}
+
+function getHistoryExportRows() {
+    const allowedTimestamps = new Set(filteredRows.map((row) => String(row.timestamp)));
+    if (processedRows.length > 0 && allowedTimestamps.size === 0) return [];
+
+    return [...rawApiData]
+        .filter((row) => row && row.timestamp)
+        .filter((row) => processedRows.length === 0 || allowedTimestamps.has(String(row.timestamp)))
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        .map((row) => {
+            const exportRow = {};
+            HISTORY_EXPORT_COLUMNS.forEach((column) => {
+                exportRow[column.header] = normalizeExportCell(column.getter(row));
+            });
+            return exportRow;
+        });
+}
+
+function getHistoryExportFilename(extension) {
+    const dateFrom = document.getElementById('dateFrom')?.value || 'all';
+    const dateTo = document.getElementById('dateTo')?.value || dateFrom;
+    return `history_${dateFrom}_to_${dateTo}.${extension}`;
+}
+
+function exportCSV() {
+    const rows = getHistoryExportRows();
+    if (rows.length === 0) return alert('No data to export');
+
+    const headers = HISTORY_EXPORT_COLUMNS.map((column) => column.header);
+    const csv = [
+        headers.map(escapeCsvCell).join(','),
+        ...rows.map((row) => headers.map((header) => escapeCsvCell(row[header])).join(','))
+    ].join('\n');
+
+    downloadBlob(csv, 'text/csv;charset=utf-8;', getHistoryExportFilename('csv'));
 }
 
 function exportExcel() {
-    if (filteredRows.length === 0) return alert('No data to export');
-    const tableRows = filteredRows.map((row) => `
-        <tr>
-            <td>${formatReadableTimestamp(row.rawDate)}</td>
-            <td>${row.generator}</td>
-            <td>${row.label}</td>
-            <td>${Number(row.value).toFixed(1)}</td>
-            <td>${row.unit}</td>
-            <td>${row.status}</td>
-        </tr>
+    const rows = getHistoryExportRows();
+    if (rows.length === 0) return alert('No data to export');
+
+    const headers = HISTORY_EXPORT_COLUMNS.map((column) => column.header);
+    const tableHead = headers.map((header) => `<th>${escapeHtmlCell(header)}</th>`).join('');
+    const tableRows = rows.map((row) => `
+        <tr>${headers.map((header) => `<td>${escapeHtmlCell(row[header])}</td>`).join('')}</tr>
     `).join('');
 
     const htmlTable = `
         <table border="1">
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>Generator</th>
-                    <th>Parameter</th>
-                    <th>Value</th>
-                    <th>Unit</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
+            <thead><tr>${tableHead}</tr></thead>
             <tbody>${tableRows}</tbody>
         </table>
     `;
@@ -313,9 +379,10 @@ function exportExcel() {
     downloadBlob(
         `\ufeff${htmlTable}`,
         'application/vnd.ms-excel;charset=utf-8;',
-        `history_${new Date().toISOString().slice(0, 10)}.xls`
+        getHistoryExportFilename('xls')
     );
 }
+
 
 
 // --- 4. HISTORY EXPORT ONLY (NO TREND CHART) ---

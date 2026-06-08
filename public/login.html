@@ -528,8 +528,16 @@
           const isWargaRole = normalizedRole === 'warga' || normalizedRole === 'masyarakat';
           const storedRole = isWargaRole ? 'warga' : normalizedRole;
 
+          const storedUser = {
+            name: result.user.name || result.user.email || email,
+            email: result.user.email || email,
+            role: storedRole,
+            redirectTo: result.user.redirectTo || (isWargaRole ? 'public.html' : 'index.html')
+          };
+
           localStorage.setItem('userRole', storedRole);
-          localStorage.setItem('username', result.user.name || result.user.email || email);
+          localStorage.setItem('username', storedUser.name);
+          localStorage.setItem('user', JSON.stringify(storedUser));
           localStorage.setItem('isLoggedIn', 'true');
           localStorage.setItem('hasLoginSession', 'true');
           sessionStorage.setItem('loginFlowOk', 'true');
