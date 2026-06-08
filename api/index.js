@@ -1342,6 +1342,149 @@ app.get('/api/reports', async (req, res) => {
 });
 
 
+
+function normalizeReportStatsNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildReportStatsQuery(query = {}) {
+    const { hours, startDate, endDate } = query;
+    const requestedDeviceId = query.deviceId;
+    const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+    const timeFilter = {};
+
+    if (startDate || endDate) {
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
+        if (start && !Number.isNaN(start.getTime())) timeFilter.$gte = start;
+        if (end && !Number.isNaN(end.getTime())) timeFilter.$lte = end;
+    } else if (hours) {
+        const parsedHours = normalizeReportStatsNumber(hours);
+        if (parsedHours && parsedHours > 0) {
+            timeFilter.$gte = new Date(Date.now() - parsedHours * 60 * 60 * 1000);
+        }
+    }
+
+    const dbQuery = {};
+    if (Object.keys(timeFilter).length) dbQuery.timestamp = timeFilter;
+    if (effectiveDeviceId) dbQuery.deviceId = effectiveDeviceId;
+    return { dbQuery, effectiveDeviceId };
+}
+
+async function getReportStatsFromMongo(dbQuery) {
+    const sensorKeys = ['rpm', 'volt', 'amp', 'power', 'freq', 'temp', 'coolant', 'fuel', 'iat', 'map', 'batt', 'afr', 'tps', 'phase'];
+    const groupStage = { _id: null, count: { $sum: 1 } };
+
+    sensorKeys.forEach((key) => {
+        const dbField = key === 'phase' ? 'phaseAngle' : key;
+        groupStage[`${key}Count`] = { $sum: { $cond: [{ $ne: [`$${dbField}`, null] }, 1, 0] } };
+        groupStage[`${key}Avg`] = { $avg: `$${dbField}` };
+        groupStage[`${key}Min`] = { $min: `$${dbField}` };
+        groupStage[`${key}Max`] = { $max: `$${dbField}` };
+    });
+
+    const summary = (await GeneratorData.aggregate([{ $match: dbQuery }, { $group: groupStage }]))[0] || {};
+    const bySensor = {};
+    sensorKeys.forEach((key) => {
+        const avg = summary[`${key}Avg`];
+        const min = summary[`${key}Min`];
+        const max = summary[`${key}Max`];
+        if ([avg, min, max].some((v) => Number.isFinite(Number(v)))) {
+            bySensor[key] = {
+                count: Number(summary[`${key}Count`]) || 0,
+                avg: Number.isFinite(Number(avg)) ? Number(avg) : null,
+                min: Number.isFinite(Number(min)) ? Number(min) : null,
+                max: Number.isFinite(Number(max)) ? Number(max) : null
+            };
+        }
+    });
+
+    return { totalMatched: Number(summary.count) || 0, bySensor };
+}
+
+function buildUserProfileQuery({ username, email, name } = {}) {
+    const profileKey = String(username || email || name || '').trim();
+    if (!profileKey) return null;
+    const escaped = profileKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return {
+        $or: [
+            { email: profileKey.toLowerCase() },
+            { name: profileKey },
+            { name: { $regex: `^${escaped}$`, $options: 'i' } }
+        ]
+    };
+}
+
+function serializeUserProfile(user) {
+    const email = user.email || '';
+    const name = user.name || email.split('@')[0] || 'Pengguna';
+    return {
+        _id: user._id,
+        id: user._id,
+        name,
+        username: name,
+        email,
+        role: user.role || 'Masyarakat',
+        employeeID: user.employeeID || user.employeeId || user.idEmployee || 'EMP-2025-001',
+        employeeId: user.employeeID || user.employeeId || user.idEmployee || 'EMP-2025-001',
+        location: user.location || 'WS Bandung',
+        shift: user.shift || '07.00-16.00',
+        deviceId: user.deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'GEN-TRACK-01'
+    };
+}
+
+app.get('/api/reports/stats', async (req, res) => {
+    try {
+        const { dbQuery, effectiveDeviceId } = buildReportStatsQuery(req.query);
+        const stats = await getReportStatsFromMongo(dbQuery);
+        res.json({ success: true, stats, deviceIdUsed: effectiveDeviceId || null });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/users/profile', async (req, res) => {
+    try {
+        const profileQuery = buildUserProfileQuery(req.query);
+        if (!profileQuery) return res.status(400).json({ success: false, message: 'Parameter username atau email wajib diisi.' });
+        const user = await User.findOne(profileQuery).lean();
+        if (!user) return res.status(404).json({ success: false, message: 'Data profil tidak ditemukan.' });
+        const profile = serializeUserProfile(user);
+        res.json({ success: true, data: profile, user: profile });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Gagal mengambil profil user.', error: error.message });
+    }
+});
+
+app.put('/api/users/profile', async (req, res) => {
+    try {
+        const body = req.body || {};
+        const profileQuery = buildUserProfileQuery({ username: body.currentName || body.username, email: body.currentEmail || body.email });
+        if (!profileQuery) return res.status(400).json({ success: false, message: 'currentName atau email wajib diisi.' });
+
+        const user = await User.findOne(profileQuery);
+        if (!user) return res.status(404).json({ success: false, message: 'Data profil tidak ditemukan.' });
+        if (body.newPassword) {
+            if (!body.oldPassword || user.password !== body.oldPassword) {
+                return res.status(401).json({ success: false, message: 'Password lama tidak sesuai.' });
+            }
+            user.password = String(body.newPassword);
+        }
+        if (body.name) user.name = String(body.name).trim();
+        if (body.email) user.email = String(body.email).trim().toLowerCase();
+        if (body.location) user.location = String(body.location).trim();
+        if (body.shift) user.shift = String(body.shift).trim();
+        if (body.deviceId) user.deviceId = String(body.deviceId).trim();
+        await user.save();
+        const profile = serializeUserProfile(user.toObject());
+        res.json({ success: true, message: 'Profil berhasil diperbarui.', data: profile, user: profile });
+    } catch (error) {
+        const status = error.code === 11000 ? 409 : 500;
+        res.status(status).json({ success: false, message: status === 409 ? 'Email sudah digunakan.' : 'Gagal memperbarui profil user.', error: error.message });
+    }
+});
+
 function normalizeCbmNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
