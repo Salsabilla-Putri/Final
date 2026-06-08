@@ -17,7 +17,7 @@
 // SD Card pada TFT:
 // SD_CS   GPIO26
 // SD_MOSI GPIO13
-// SD_MISO GPIO19
+// SD_MISO GPIO12
 // SD_SCK  GPIO14
 // Init SD dilakukan SEBELUM TFT init untuk menghindari konflik SPI
 //
@@ -256,6 +256,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 // ============================================================
 // SD CARD
 // ============================================================
+// Pin SD sesuai wiring modul yang dipakai pada perangkat ini.
 #define SD_MISO 12
 #define SD_MOSI 13
 #define SD_SCK  14
@@ -3098,7 +3099,7 @@ void initSDCard() {
   if (!begun) {
     sdOK = false;
     Serial.println(F("SD INIT FAILED FINAL"));
-    Serial.println(F("[SD] Cek wiring/pin: CS=26, MOSI=13, MISO=19, SCK=14, format FAT32."));
+    Serial.println(F("[SD] Cek wiring/pin: CS=26, MOSI=13, MISO=12, SCK=14, format FAT32."));
     Serial.println(F("══════════════════════════════════════"));
     return;
   }
