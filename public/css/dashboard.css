@@ -406,3 +406,5 @@ body {
     .overview-value { font-size: 1rem; }
     .overview-label { white-space: normal; }
 }
+.hero-meta{flex-direction:column;gap:6px;}
+.last-updated{display:block;}
