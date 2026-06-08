@@ -167,6 +167,8 @@ async function fetchDashboardData() {
             updateAverageRuntimeFromDaily(activeDailyData.data);
         } else if (historyData?.success) {
             updateActiveTimeChart(historyData.data, { mode: 'session' });
+        } else if (engineHistoryData?.success && Array.isArray(engineHistoryData.data)) {
+            updateActiveTimeChart(engineHistoryData.data);
         }
 
         if (maintenanceData?.success) {

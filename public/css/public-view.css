@@ -614,6 +614,31 @@ body {
 .perf-card-body strong { font-size: 1rem; color:#0f172a; }
 .perf-card-body small { font-size:.72rem; color:#475569; }
 
+.perf-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    background: #f8fbff;
+}
+.perf-card.ok { border-color: #bbf7d0; background: #f0fdf4; }
+.perf-card.warn { border-color: #fde68a; background: #fffbeb; }
+.perf-card.danger { border-color: #fecaca; background: #fef2f2; }
+.perf-card-icon {
+    width: 40px; height: 40px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; background: #1745a5; flex-shrink: 0;
+}
+.perf-card.ok .perf-card-icon { background: #10b981; }
+.perf-card.warn .perf-card-icon { background: #f59e0b; }
+.perf-card.danger .perf-card-icon { background: #ef4444; }
+.perf-card-body { display:flex; flex-direction:column; min-width:0; }
+.perf-card-body span { font-size: .72rem; color:#64748b; font-weight:700; }
+.perf-card-body strong { font-size: 1rem; color:#0f172a; }
+.perf-card-body small { font-size:.72rem; color:#475569; }
+
 .perf-item-card {
     border: 1px solid var(--border);
     border-radius: 12px;
