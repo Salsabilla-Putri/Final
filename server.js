@@ -11,7 +11,12 @@ require('dotenv').config();
 
 const sgMail = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-const { transformPublicStatus } = require('./public_status');
+const {
+    transformPublicStatus,
+    generateAlerts,
+    getMaintenanceStatus,
+    getPublicLabels
+} = require('./public_status');
 
 mongoose.set('bufferCommands', false);
 
