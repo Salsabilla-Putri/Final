@@ -99,9 +99,7 @@ function formatLastUpdatedTimestamp(input) {
 function updateLastUpdatedInfo(data = {}, isFresh = false) {
     const el = document.getElementById('lastUpdatedInfo');
     if (!el) return;
-    const ts = isFresh
-        ? new Date()
-        : (data.realtimeReceivedAt || data.serverReceivedAt || data.lastMqttUpdate || data.lastUpdated || data.timestamp);
+    const ts = data.lastUpdated || data.lastMqttUpdate || data.realtimeReceivedAt || data.serverReceivedAt || data.timestamp;
     const formatted = formatLastUpdatedTimestamp(ts);
     el.innerText = isFresh ? `Realtime • ${formatted}` : `Disconnected • ${formatted}`;
 }

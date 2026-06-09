@@ -377,7 +377,7 @@ function sumRuntimeHoursFromHistory(historyRows = []) {
     let totalHours = 0;
     (historyRows || []).forEach((r) => {
         const start = new Date(r.startedAt);
-        const end = r.endedAt ? new Date(r.endedAt) : now;
+        const end = r.effectiveEndedAt ? new Date(r.effectiveEndedAt) : (r.endedAt ? new Date(r.endedAt) : now);
         if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
         totalHours += (end - start) / 3600000;
     });
@@ -777,7 +777,7 @@ function calculateDailySessionHours(historyRows = []) {
 
     (historyRows || []).forEach((r) => {
         const start = new Date(r.startedAt);
-        const end = r.endedAt ? new Date(r.endedAt) : now;
+        const end = r.effectiveEndedAt ? new Date(r.effectiveEndedAt) : (r.endedAt ? new Date(r.endedAt) : now);
         if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return;
 
         splitSessionByDayWIB(start, end, WIB_OFFSET).forEach(({ dateKey, hours }) => {

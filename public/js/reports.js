@@ -1519,7 +1519,7 @@ function renderSensorCards(data) {
             <div class="sensor-stats">
                 <div class="stat-item">
                     <div class="stat-label">CURRENT</div>
-                    <div class="stat-value current-value ${statusClass}">${current.toFixed(1)}<small style="font-size:12px;"> ${config.unit}</small></div>
+                    <div class="stat-value current-value">${current.toFixed(1)}<small style="font-size:12px;"> ${config.unit}</small></div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">AVERAGE</div>
