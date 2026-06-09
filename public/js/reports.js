@@ -151,7 +151,6 @@ function selectSingleSensor(key) {
 
     if (currentData.length > 0) {
         renderChart(currentData);
-        renderReportTable(currentData);
         updateChartTitle(
             document.getElementById('dateFrom')?.value,
             document.getElementById('dateTo')?.value
