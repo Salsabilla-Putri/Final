@@ -125,9 +125,9 @@
 // ============================================================
 // MQTT
 // ============================================================
-// MQTT dikembalikan seperti konfigurasi sebelumnya.
+// Default broker SmartSystem. Override lewat build flags jika diperlukan.
 #ifndef MQTT_HOST
-#define MQTT_HOST  "generatorta20.cloud.shiftr.io"
+#define MQTT_HOST  "nosql.smartsystem.id"
 #endif
 
 #ifndef MQTT_PORT
@@ -135,11 +135,20 @@
 #endif
 
 #ifndef MQTT_USER
-#define MQTT_USER  "generatorta20"
+#define MQTT_USER  "smartgen_sec8AePh"
 #endif
 
 #ifndef MQTT_PASS
-#define MQTT_PASS  "TA252601020"
+#define MQTT_PASS  "rai2Oi1U"
+#endif
+
+#ifndef MQTT_VHOST
+#define MQTT_VHOST "/smartgen"
+#endif
+
+// RabbitMQ MQTT memakai format username "vhost:username".
+#ifndef MQTT_LOGIN_USER
+#define MQTT_LOGIN_USER MQTT_VHOST ":" MQTT_USER
 #endif
 
 #ifndef MQTT_TOPIC
@@ -3849,6 +3858,7 @@ void reconnectMQTT() {
   Serial.print(F("[MQTT] Host       : ")); Serial.println(MQTT_HOST);
   Serial.print(F("[MQTT] Port       : ")); Serial.println(MQTT_PORT);
   Serial.print(F("[MQTT] Client     : ")); Serial.println(clientId);
+  Serial.print(F("[MQTT] VHost      : ")); Serial.println(MQTT_VHOST);
   Serial.print(F("[MQTT] Attempt    : ")); Serial.println(mqttReconnectAttemptCount);
   Serial.print(F("[MQTT] Backoff ms : ")); Serial.println(mqttReconnectBackoffMs);
   Serial.print(F("[MQTT] WiFi RSSI  : ")); Serial.print(WiFi.RSSI()); Serial.println(F(" dBm"));
@@ -3856,7 +3866,7 @@ void reconnectMQTT() {
   Serial.print(F("[MQTT] Max alloc  : ")); Serial.println(ESP.getMaxAllocHeap());
   Serial.print(F("[MQTT] Connecting : "));
 
-  bool ok = mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASS);
+  bool ok = mqtt.connect(clientId.c_str(), MQTT_LOGIN_USER, MQTT_PASS);
 
   if (ok) {
     mqttOK = true;
