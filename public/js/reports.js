@@ -548,6 +548,7 @@ function applyRowsToReports(rows, meta = {}) {
         updateOverview(currentData);
         renderSensorCards(currentData);
         renderChart(currentData);
+        renderReportTable(currentData);
 
         const analysisPanelEl = ENABLE_WEB_FFT ? document.querySelector('.analysis-panel') : null;
         const activeSensor    = selectedSensors[0] || 'rpm';
