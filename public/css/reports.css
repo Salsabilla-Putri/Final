@@ -949,23 +949,5 @@ body {
 .export-menu.open .export-menu-list { display: grid; gap: 6px; }
 .export-menu-list .export-btn { width: 100%; justify-content: flex-start; }
 
-/* === REPORT PARAMETER TABLE === */
-.report-table-card { margin-top: 24px; border: 1px solid var(--border); border-radius: 18px; background: #fff; overflow: hidden; }
-.report-table-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--border); background: #f8fafc; }
-.report-table-header h3 { margin: 0 0 4px; color: var(--primary); font-size: 16px; }
-.report-table-header p, .report-table-info { color: #64748b; font-size: 12px; }
-.report-table-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-.report-table-scroll { width: 100%; overflow-x: auto; overflow-y: auto; max-height: 520px; }
-.report-data-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
-.report-data-table th, .report-data-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; text-align: right; }
-.report-data-table th:first-child, .report-data-table td:first-child { position: sticky; left: 0; z-index: 1; text-align: left; background: #fff; box-shadow: 1px 0 0 #e2e8f0; }
-.report-data-table th { position: sticky; top: 0; z-index: 2; background: #eff6ff; color: #1e3a8a; font-weight: 700; }
-.report-data-table th:first-child { z-index: 3; background: #eff6ff; }
-.report-data-table tbody tr:hover td { background: #f8fafc; }
-.report-value-normal { color:#111827; font-weight:600; }
-.report-value-warning { color:#d97706; background:#fffbeb; font-weight:800; }
-.report-value-critical { color:#b91c1c; background:#fef2f2; font-weight:800; }
-.report-status-badge { display:inline-flex; align-items:center; justify-content:center; min-width:72px; padding:4px 10px; border-radius:999px; font-size:11px; font-weight:800; text-transform:capitalize; }
-.report-status-normal { background:#d1fae5; color:#065f46; }
-.report-status-warning { background:#fef3c7; color:#92400e; }
-.report-status-critical { background:#fee2e2; color:#991b1b; }
+.stat-value.status-warning { color:#d97706; background:#fffbeb; border-radius:8px; padding:2px 6px; display:inline-block; }
+.stat-value.status-critical { color:#b91c1c; background:#fef2f2; border-radius:8px; padding:2px 6px; display:inline-block; }

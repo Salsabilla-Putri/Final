@@ -2,9 +2,9 @@ const API_URL = '/api';
 let activeChart = null;
 let activeChartLoading = false;
 let auxDashboardLoading = false;
-const SENSOR_REFRESH_MS = 2000;
+const SENSOR_REFRESH_MS = 1000;
 const AUX_REFRESH_MS = 15000;
-const CHART_REFRESH_MS = 60000;
+const CHART_REFRESH_MS = 1000;
 const LAST_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
 
 // --- UTILS ---
@@ -52,6 +52,27 @@ function setDataStatus({ live = false, timestamp = null } = {}) {
             : '<i class="fas fa-circle"></i> Data terakhir';
     }
     if (lastEl) lastEl.innerText = safeDate ? `Diperbarui: ${formatLastUpdated(safeDate)}` : 'Diperbarui: --';
+}
+
+
+function setCanvasLoading(canvasId, isLoading, message = 'Loading data...') {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const box = canvas.parentElement;
+    if (!box) return;
+    let loader = box.querySelector('.chart-loading-state');
+    if (isLoading) {
+        if (!loader) {
+            loader = document.createElement('div');
+            loader.className = 'chart-loading-state loading-state';
+            box.appendChild(loader);
+        }
+        loader.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> ${message}`;
+        canvas.style.display = 'none';
+    } else {
+        if (loader) loader.remove();
+        canvas.style.display = '';
+    }
 }
 
 function setLoading(targetId, isLoading, message = 'Loading data...') {
@@ -189,7 +210,7 @@ function updateSyncStatus(id, data) {
 let _lastSensorOkAt = null;
 let _lastDisplayData = readLastSensorSnapshot();
 // Jika selama DISCONNECT_THRESHOLD_MS tidak ada data masuk → anggap mesin mati
-const DISCONNECT_THRESHOLD_MS = 30_000; // 30 detik
+const DISCONNECT_THRESHOLD_MS = 3_000; // 3 detik tanpa MQTT = ECU disconnected
 
 async function updateSensorData() {
     try {
@@ -371,6 +392,7 @@ async function initChart() {
     activeChartLoading = true;
     const ctx = document.getElementById('chartActive')?.getContext('2d');
     if (!ctx) { activeChartLoading = false; return; }
+    if (!activeChart) setCanvasLoading('chartActive', true);
 
     const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
     const WIB_OFFSET = 7 * 60 * 60 * 1000;
@@ -378,8 +400,8 @@ async function initChart() {
     const dayMap = {};
 
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
-        const key = d.toISOString().slice(0, 10);
+        const d = new Date(now.getTime() - i * 86400000);
+        const key = new Date(d.getTime() + WIB_OFFSET).toISOString().slice(0, 10);
         dayMap[key] = 0;
     }
 
@@ -466,6 +488,7 @@ async function initChart() {
 
     const tEl = document.getElementById('engToday');
     if (tEl) tEl.innerText = fmtHours(todayHours);
+    setCanvasLoading('chartActive', false);
     activeChartLoading = false;
 }
 

@@ -1,7 +1,7 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
 const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps','phase'];
-const ESP_FRESHNESS_MS = 15000;
+const ESP_FRESHNESS_MS = 3000;
 const SYNC_THRESHOLDS = {
     voltDeltaMax: 10,
     freqDeltaMax: 0.5,
@@ -86,7 +86,9 @@ function formatLastUpdatedTimestamp(input) {
 function updateLastUpdatedInfo(data = {}, isFresh = false) {
     const el = document.getElementById('lastUpdatedInfo');
     if (!el) return;
-    const ts = data.lastUpdated || data.lastMqttUpdate || data.realtimeReceivedAt || data.timestamp;
+    const ts = isFresh
+        ? new Date()
+        : (data.realtimeReceivedAt || data.serverReceivedAt || data.lastMqttUpdate || data.lastUpdated || data.timestamp);
     const formatted = formatLastUpdatedTimestamp(ts);
     el.innerText = isFresh ? `Realtime • ${formatted}` : `Disconnected • ${formatted}`;
 }
@@ -354,6 +356,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamStarted = startRealtimeEngineStream();
     fetchData();
     fetchAlerts();
-    setInterval(fetchData, streamStarted ? 5000 : 1000);
+    setInterval(fetchData, 1000);
     setInterval(fetchAlerts, 1000); 
 });

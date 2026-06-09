@@ -650,7 +650,7 @@ let latestData = {
     fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
-const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
+const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '3000', 10);
 const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
 let latestRealtimeReceivedAt = null;
 const engineStreamClients = new Set();
@@ -913,9 +913,10 @@ async function closeStaleActiveSessions(requestedDeviceId = null) {
 
 async function syncActiveTimeHistory(data) {
     const rpmThreshold = 0;
-    const eventTime = safeEventTime(data?.timestamp);
+    const eventTime = safeEventTime(data?.realtimeReceivedAt || data?.lastMqttUpdate || data?.serverReceivedAt || data?.timestamp);
     const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
-    const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
+    const payloadEcuConnected = toBooleanOrUndefined(data?.ecuConnected);
+    const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS && payloadEcuConnected !== false;
     const isRunning = isEcuConnected;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;

@@ -69,7 +69,8 @@ const REPORT_STATUS_RULES = {
     fuel:    { min: 20, warnMin: 30 },
     batt:    { min: 10.5, warnMin: 11.5, warnMax: 14.5, max: 15.5 },
     afr:     { min: 10.5, warnMin: 12, warnMax: 16, max: 18 },
-    tps:     { min: 0, max: 100 }
+    tps:     { min: 0, max: 100 },
+    temp:    { warnMax: 85, max: 95 }
 };
 
 
@@ -685,7 +686,6 @@ async function loadReportData() {
             if (!applyRowsToReports(snapshot.rows, { ...snapshot.result, source: 'memory', warning: error.message })) {
                 renderDataSourceNotice({ source: 'snapshot', mode: 'warning',
                     message: 'Data histori belum bisa diambil, mencoba snapshot terakhir.' });
-                renderReportTable([]);
                 showNoDataMessage();
             }
         } catch (snapshotError) {
@@ -1493,10 +1493,9 @@ function renderSensorCards(data) {
             : (reportTotalMatched > 0 ? reportTotalMatched : values.length);
         const current = latest[key] != null ? latest[key] : avg;
 
-        let status = 'normal', statusClass = 'status-normal';
-        if (key === 'temp'   && current > 90)                   { status = 'critical'; statusClass = 'status-critical'; }
-        else if (key === 'volt' && (current < 11 || current > 15)) { status = 'warning';  statusClass = 'status-warning'; }
-        else if (key === 'fuel' && current < 20)                   { status = 'warning';  statusClass = 'status-warning'; }
+        const paramStatus = getReportParamStatus(key, current);
+        let status = paramStatus;
+        let statusClass = `status-${paramStatus}`;
 
         const accentColor = '#1745a5';
         const hasDbStats  = !!(reportStatsBySensor && reportStatsBySensor[key]);
@@ -1520,7 +1519,7 @@ function renderSensorCards(data) {
             <div class="sensor-stats">
                 <div class="stat-item">
                     <div class="stat-label">CURRENT</div>
-                    <div class="stat-value current-value">${current.toFixed(1)}<small style="font-size:12px;"> ${config.unit}</small></div>
+                    <div class="stat-value current-value ${statusClass}">${current.toFixed(1)}<small style="font-size:12px;"> ${config.unit}</small></div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">AVERAGE</div>
