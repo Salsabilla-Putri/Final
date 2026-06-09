@@ -754,21 +754,17 @@ function enrichEngineSnapshot(data, {
     const serverUpdatedAt = getSnapshotServerUpdatedAt(data) || new Date();
     const ecuConnected = forceDisconnected ? false : isSnapshotEcuConnected(data, serverUpdatedAt);
 
-    const visibleData = ecuConnected
-        ? data
-        : { ...data, powerSource: 'OFF', sync: 'OFF-GRID', synced: false };
-
     return {
-        ...visibleData,
+        ...data,
         ecuConnected,
         engineHours,
         lastMqttUpdate: serverUpdatedAt,
         lastUpdated: serverUpdatedAt,
         realtimeReceivedAt: data.realtimeReceivedAt || data.lastMqttUpdate || (data._realtime ? serverUpdatedAt : data.realtimeReceivedAt),
         serverReceivedAt: data.serverReceivedAt || serverUpdatedAt,
-        alerts: generateAlerts(visibleData, previousDoc),
-        maintenance: getMaintenanceStatus(visibleData, recentDocs),
-        ...getPublicLabels(visibleData)
+        alerts: generateAlerts(data, previousDoc),
+        maintenance: getMaintenanceStatus(data, recentDocs),
+        ...getPublicLabels(data)
     };
 }
 
@@ -1082,9 +1078,6 @@ async function handleMqttDisconnected(reason = 'mqtt_disconnect') {
     mqttIngestStats.lastError = reason;
     if (latestData?._realtime) {
         latestData.ecuConnected = false;
-        latestData.powerSource = 'OFF';
-        latestData.sync = 'OFF-GRID';
-        latestData.synced = false;
         broadcastEngineRealtimeUpdate();
     }
     if (!isDbReady()) return;
@@ -1464,7 +1457,6 @@ function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fall
     );
     const key = String(rawSource || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
 
-    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(key)) return 'OFF';
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
     if (['GENSET', 'GENERATOR', 'GEN'].includes(key)) return 'GENSET';
     if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
@@ -1473,7 +1465,6 @@ function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fall
     if (syncStatus === 'ON-GRID') return 'SYNC';
 
     const fallbackKey = String(fallbackPowerSource || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
-    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(fallbackKey)) return 'OFF';
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(fallbackKey)) return 'GRID';
     if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(fallbackKey)) return 'SYNC';
     return 'GENSET';

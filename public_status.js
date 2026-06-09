@@ -1,7 +1,6 @@
 'use strict';
 
 const POWER_SOURCE_MAP = {
-    OFF: 'Power Source Off',
     GRID: 'Using PLN',
     GENSET: 'Using Generator',
     SYNC: 'Grid and Generator Synchronized'
@@ -21,7 +20,6 @@ const STATUS_MAP = {
 const COST_PER_KWH = 13150;
 
 function normalizePowerSource(latestDoc = {}) {
-    if (latestDoc?.ecuConnected === false) return POWER_SOURCE_MAP.OFF;
     const rawSource = String(latestDoc?.powerSource || latestDoc?.power_source || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
     if (POWER_SOURCE_MAP[rawSource]) return POWER_SOURCE_MAP[rawSource];
 
@@ -30,9 +28,7 @@ function normalizePowerSource(latestDoc = {}) {
 }
 
 function getPowerSourceLabel(latestDoc = {}) {
-    if (latestDoc?.ecuConnected === false) return 'OFF';
     const rawSource = String(latestDoc?.powerSource || latestDoc?.power_source || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
-    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(rawSource)) return 'OFF';
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return 'GRID';
     if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return 'GENSET';
     if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) return 'SYNC';

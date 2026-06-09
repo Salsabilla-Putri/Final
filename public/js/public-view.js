@@ -114,7 +114,6 @@ function normalizeSyncStatus(data = {}) {
 
 function getPowerSourceStatus(data = {}) {
     const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
-    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(rawSource) || data.ecuConnected === false) return { label: 'OFF', detail: 'ESP32/ECU MQTT disconnected', cls: 'st-err', ok: false };
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return { label: 'GRID', detail: 'Grid/PLN tersambung', cls: 'st-ok', ok: true };
     if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return { label: 'GENSET', detail: 'Genset tersambung', cls: 'st-warn', ok: true };
     if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
