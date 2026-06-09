@@ -130,7 +130,7 @@ async function loadThresholds() {
 
 async function fetchData() {
     try {
-        const res = await fetch(`${API_URL}/engine-data/latest`);
+        const res = await fetch(`${API_URL}/engine-data/latest?_=${Date.now()}`, { cache: 'no-store' });
         const json = await res.json();
         
         if (json.success) {

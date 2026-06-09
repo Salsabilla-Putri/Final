@@ -701,8 +701,10 @@ let latestData = {
     fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'OFF', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
-const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
-const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
+const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '3000', 10);
+const ACTIVE_TIME_INACTIVE_THRESHOLD_MS = parseInt(process.env.ACTIVE_TIME_INACTIVE_THRESHOLD_MS || String(2.5 * 60 * 1000), 10);
+const ACTIVE_TIME_INCREMENT_MS = parseInt(process.env.ACTIVE_TIME_INCREMENT_MS || String(2 * 60 * 1000), 10);
+const ACTIVE_SESSION_TIMEOUT_MS = Math.max(ACTIVE_TIME_INACTIVE_THRESHOLD_MS, parseInt(process.env.ACTIVE_SESSION_TIMEOUT_MS || String(ACTIVE_TIME_INACTIVE_THRESHOLD_MS), 10));
 let latestRealtimeReceivedAt = null;
 const engineStreamClients = new Set();
 
@@ -799,12 +801,16 @@ function getSessionSampledAt(row) {
 
 function getEffectiveSessionEnd(row, referenceTime = new Date()) {
     const endedAt = row?.endedAt ? new Date(row.endedAt) : null;
-    if (endedAt && !Number.isNaN(endedAt.getTime())) return endedAt;
+    if (endedAt && !Number.isNaN(endedAt.getTime())) {
+        return new Date(endedAt.getTime() + ACTIVE_TIME_INCREMENT_MS);
+    }
 
     const sampledAt = getSessionSampledAt(row);
     const reference = safeEventTime(referenceTime);
     const elapsedSinceSample = reference.getTime() - sampledAt.getTime();
-    return elapsedSinceSample > ACTIVE_SESSION_TIMEOUT_MS ? sampledAt : reference;
+    const incrementEnd = new Date(sampledAt.getTime() + ACTIVE_TIME_INCREMENT_MS);
+    if (elapsedSinceSample > ACTIVE_SESSION_TIMEOUT_MS) return incrementEnd;
+    return incrementEnd < reference ? incrementEnd : reference;
 }
 
 
@@ -888,7 +894,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, rule: 'Genset active via MQTT', sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'ECU connected via MQTT', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -962,9 +968,10 @@ async function closeStaleActiveSessions(requestedDeviceId = null) {
 
 async function syncActiveTimeHistory(data) {
     const rpmThreshold = 0;
-    const eventTime = safeEventTime(data?.realtimeReceivedAt || data?.serverReceivedAt || latestRealtimeReceivedAt || new Date());
-    const isEcuConnected = Boolean(latestRealtimeReceivedAt && (Date.now() - latestRealtimeReceivedAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
-    const isRunning = isEcuConnected && isPowerSourceGensetActive(data);
+    const eventTime = safeEventTime(data?.timestamp || data?.realtimeReceivedAt || data?.serverReceivedAt || latestRealtimeReceivedAt || new Date());
+    const currentTime = new Date();
+    const timeSinceLatestData = currentTime.getTime() - eventTime.getTime();
+    const isRunning = timeSinceLatestData >= 0 && timeSinceLatestData <= ACTIVE_TIME_INACTIVE_THRESHOLD_MS;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     let session = activeSessions.get(key);
@@ -989,12 +996,14 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, rule: 'Genset active via MQTT', sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'ECU connected via MQTT', sampledAt: eventTime }
         });
         return;
     }
 
     if (isRunning && session) {
+        if (eventTime.getTime() <= session.lastSeenAt.getTime()) return;
+
         const gapMs = eventTime.getTime() - session.lastSeenAt.getTime();
         if (gapMs > ACTIVE_SESSION_TIMEOUT_MS) {
             await finalizeOpenActiveSession(deviceId, session.startedAt, session.lastSeenAt, 'esp32_disconnect');
@@ -1004,7 +1013,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, rule: 'Genset active via MQTT', sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'ECU connected via MQTT', sampledAt: eventTime }
             });
             return;
         }
@@ -1012,7 +1021,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, rule: 'Genset active via MQTT', sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'ECU connected via MQTT', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
@@ -1025,7 +1034,7 @@ async function syncActiveTimeHistory(data) {
     }
 
     if (!isRunning) {
-        await closeActiveSessions(isEcuConnected ? 'engine_stopped' : 'esp32_disconnect', deviceId);
+        await closeActiveSessions('esp32_disconnect', deviceId);
     }
 }
 
@@ -1745,11 +1754,14 @@ mqttClient.on('message', async (topic, message) => {
             };
         }
 
-        // gen/realtime: jalur dashboard + alert + active time.
+        // Active time history diproses dari data historis/database (gen/data),
+        // bukan dari heartbeat dashboard gen/realtime, agar mengikuti timestamp
+        // data baru yang benar-benar masuk ke database.
+
+        // gen/realtime: jalur dashboard + alert.
         // Alert tidak menunggu batch MongoDB.
         if (topic === 'gen/realtime') {
             await checkAndSaveAlerts(latestData);
-            await syncActiveTimeHistory(latestData);
             return;
         }
 
@@ -1768,6 +1780,7 @@ mqttClient.on('message', async (topic, message) => {
 
             const generatorDocs = [];
             const fftDocs = [];
+            const activeTimeSnapshots = [];
 
             for (const record of records) {
                 if (!record || typeof record !== 'object') continue;
@@ -1784,6 +1797,7 @@ mqttClient.on('message', async (topic, message) => {
                     recordId: record.recordId,
                     localSeq: record.localSeq
                 }));
+                activeTimeSnapshots.push(snapshot);
 
                 const recordFftDoc = normalizeFftPayload(record, snapshot.deviceId);
                 if (recordFftDoc) fftDocs.push(recordFftDoc);
@@ -1831,6 +1845,10 @@ mqttClient.on('message', async (topic, message) => {
 
             if (fftDocs.length > 0) {
                 await FFTData.insertMany(fftDocs, { ordered: false });
+            }
+
+            for (const snapshot of activeTimeSnapshots) {
+                await syncActiveTimeHistory(snapshot);
             }
 
             console.log(
@@ -1887,7 +1905,7 @@ app.get('/api/engine-data/last-running', async (req, res) => {
 app.get('/api/engine-data/stream', (req, res) => {
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no'
     });
@@ -1901,7 +1919,7 @@ app.get('/api/engine-data/stream', (req, res) => {
             clearInterval(heartbeat);
             engineStreamClients.delete(res);
         }
-    }, 15000);
+    }, 1000);
 
     req.on('close', () => {
         clearInterval(heartbeat);
@@ -1910,6 +1928,9 @@ app.get('/api/engine-data/stream', (req, res) => {
 });
 
 app.get('/api/engine-data/latest', async (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     try {
         const requestedDeviceId = req.query.deviceId;
         const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
@@ -2281,12 +2302,26 @@ app.post('/api/daily-active-time/recalculate', async (req, res) => {
     try {
         const requestedDeviceId = req.body?.deviceId || req.query.deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
         const closed = await closeStaleActiveSessions(requestedDeviceId);
-        const startOfToday = new Date();
-        startOfToday.setHours(0, 0, 0, 0);
-        const rows = await ActiveTimeHistory.find({ deviceId: requestedDeviceId, startedAt: { $gte: startOfToday } }).lean();
         const now = new Date();
-        const totalDurationMs = rows.reduce((sum, row) => sum + decorateActiveTimeRow(row, now).effectiveDurationMs, 0);
-        res.json({ success: true, closed: closed.length, totalDurationMs, totalDurationHours: +(totalDurationMs / 3600000).toFixed(2) });
+        const startOfToday = new Date(now);
+        startOfToday.setHours(0, 0, 0, 0);
+        const rows = await ActiveTimeHistory.find({
+            deviceId: requestedDeviceId,
+            startedAt: { $lte: now },
+            $or: [
+                { endedAt: null },
+                { endedAt: { $gte: startOfToday } }
+            ]
+        }).lean();
+        const [today] = buildDailyActiveTimeSummary(rows, 1, now).slice(-1);
+        const totalDurationMs = today?.durationMs || 0;
+        res.json({
+            success: true,
+            closed: closed.length,
+            date: today?.date,
+            totalDurationMs,
+            totalDurationHours: +(totalDurationMs / 3600000).toFixed(2)
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }

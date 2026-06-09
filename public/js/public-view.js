@@ -172,7 +172,7 @@ async function fetchDashboardData() {
         const allowHeavyFetch = (nowTs - lastHeavyFetchAt) >= HEAVY_ENDPOINT_REFRESH_MS;
         // Fetch semua data, limit history ditambah ke 100 agar cukup untuk kalkulasi 7 hari
         const [engineRes, alertsRes, specsRes, historyRes, engineHistoryRes, maintenanceRes, dashRes, cbmRes] = await Promise.allSettled([
-            fetch('/api/engine-data/latest'),
+            fetch(`/api/engine-data/latest?_=${Date.now()}`, { cache: 'no-store' }),
             fetch('/api/alerts?limit=100'),
             fetch('/api/generator-specs'),
             fetch('/api/generator-active-time/history?limit=100'),

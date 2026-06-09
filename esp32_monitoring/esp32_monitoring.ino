@@ -139,9 +139,12 @@
 // ============================================================
 // MQTT
 // ============================================================
-// Default broker SmartSystem. Override lewat build flags jika diperlukan.
+// Default broker RabbitMQ MQTT SmartSystem.
+// Catatan: PubSubClient membutuhkan host polos tanpa skema, jadi gunakan
+// rmq230.smartsystem.id di MQTT_HOST. Jika build flag masih memberi URI
+// seperti mqtt://rmq230.smartsystem.id, kode akan menormalisasi saat runtime.
 #ifndef MQTT_HOST
-#define MQTT_HOST  "nosql.smartsystem.id"
+#define MQTT_HOST  "rmq230.smartsystem.id"
 #endif
 
 #ifndef MQTT_PORT
@@ -855,6 +858,9 @@ bool serialMonitorOverviewEnabled = false;     // print ringkas RAW+AGG+MQTT+BUF
 
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
+char mqttResolvedHost[96] = MQTT_HOST;
+uint16_t mqttResolvedPort = MQTT_PORT;
+bool mqttHostHadScheme = false;
 
 String serialCmd = "";
 char tmp[24];
@@ -2989,56 +2995,72 @@ void updateStorageCache() {
 
 
 bool createFreshCsvFile(const char* path, const char* header, const char* label) {
-  File f;
-
-  for (uint8_t attempt = 1; attempt <= 3 && !f; attempt++) {
+  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
     deselectAllSPI();
-    delay(30);
+    delay(80);
 
     if (SD.exists(path)) {
+      Serial.print(F("[SD] "));
+      Serial.print(path);
+      Serial.println(F(" sudah ada tetapi akan dibuat ulang/truncate."));
       SD.remove(path);
-      delay(20);
+      delay(80);
     }
 
-    // ESP32 SD/FS dapat berbeda antar core: coba mode FILE_WRITE dengan create=true,
-    // lalu fallback mode "w" agar file root /database.csv benar-benar dibuat/truncate.
-    f = SD.open(path, FILE_WRITE, true);
-    if (!f) f = SD.open(path, "w", true);
+    // Jangan pakai overload SD.open(path, mode, create) di sini. Pada sebagian
+    // kombinasi Arduino-ESP32 + SD library, overload create=true tidak stabil
+    // untuk file root di modul TFT/SD sharing SPI. FILE_WRITE tanpa argumen
+    // ketiga adalah pola yang sama dengan write-test yang sudah terbukti OK.
+    File f = SD.open(path, FILE_WRITE);
 
-    if (!f && attempt < 3) {
+    if (f) {
+      size_t written = f.println(header);
+      f.flush();
+      f.close();
+
+      delay(40);
+      File verify = SD.open(path, FILE_READ);
+      bool verified = verify && verify.size() > 0;
+      if (verify) verify.close();
+
+      if (written > 0 && verified) {
+        sdDatabaseCreateOkCount++;
+        sdLastFileOkMs = millis();
+        dbCachedAtMs = 0;
+        Serial.print(F("[SD] "));
+        Serial.print(path);
+        Serial.print(F(" berhasil dibuat dengan header "));
+        Serial.print(label);
+        Serial.println(F("."));
+        return true;
+      }
+
+      Serial.print(F("[SD] "));
+      Serial.print(path);
+      Serial.println(F(" terbuka tetapi verifikasi tulis header gagal."));
+    }
+
+    if (attempt < 5) {
       Serial.print(F("[SD] Retry membuat "));
       Serial.print(path);
       Serial.print(F(" attempt="));
       Serial.println(attempt + 1);
-      SD.end();
-      delay(150);
-      sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-      SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
     }
+
+    SD.end();
+    delay(200);
+    deselectAllSPI();
+    sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+    delay(50);
+    SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
   }
 
-  if (!f) {
-    sdDatabaseCreateFailCount++;
-    sdLastFileErrorMs = millis();
-    Serial.print(F("[SD] GAGAL membuat "));
-    Serial.print(path);
-    Serial.println(F(". Pastikan MISO=GPIO12, MOSI=GPIO13, SCK=GPIO14, CS=GPIO26, FAT32."));
-    return false;
-  }
-
-  f.println(header);
-  f.flush();
-  f.close();
-
-  sdDatabaseCreateOkCount++;
-  sdLastFileOkMs = millis();
-  dbCachedAtMs = 0;
-  Serial.print(F("[SD] "));
+  sdDatabaseCreateFailCount++;
+  sdLastFileErrorMs = millis();
+  Serial.print(F("[SD] GAGAL membuat "));
   Serial.print(path);
-  Serial.print(F(" berhasil dibuat dengan header "));
-  Serial.print(label);
-  Serial.println(F("."));
-  return true;
+  Serial.println(F(". Test write OK tetapi create CSV gagal; cek FAT32, lock/adaptor SD, kabel pendek, supply 3.3V stabil, dan pin MISO=12 MOSI=13 SCK=14 CS=26."));
+  return false;
 }
 
 bool createFreshDatabaseCsv() {
@@ -3369,6 +3391,11 @@ void saveSnapshotToSD() {
 
     File file = SD.open(DB_FILE, FILE_APPEND);
     if (!file) {
+      // Fallback untuk core/SD library yang tidak membuka FILE_APPEND pada file
+      // root setelah re-init SPI; FILE_WRITE tetap append pada ESP32 SD.
+      file = SD.open(DB_FILE, FILE_WRITE);
+    }
+    if (!file) {
       sdSaveFailCount++;
       sdConsecutiveOpenFail++;
       sdLastFileErrorMs = millis();
@@ -3539,8 +3566,48 @@ void applyWiFiStabilityConfig() {
   WiFi.persistent(false);
 }
 
+void normalizeMqttEndpoint() {
+  String endpoint = String(MQTT_HOST);
+  endpoint.trim();
+  mqttHostHadScheme = false;
+  mqttResolvedPort = MQTT_PORT;
+
+  int schemePos = endpoint.indexOf("://");
+  if (schemePos >= 0) {
+    String scheme = endpoint.substring(0, schemePos);
+    scheme.toLowerCase();
+    mqttHostHadScheme = true;
+    endpoint = endpoint.substring(schemePos + 3);
+
+    if (scheme == "mqtts" && mqttResolvedPort == 1883) {
+      mqttResolvedPort = 8883;
+    }
+  }
+
+  int pathPos = endpoint.indexOf('/');
+  if (pathPos >= 0) endpoint = endpoint.substring(0, pathPos);
+
+  int atPos = endpoint.lastIndexOf('@');
+  if (atPos >= 0) endpoint = endpoint.substring(atPos + 1);
+
+  int colonPos = endpoint.lastIndexOf(':');
+  if (colonPos > 0) {
+    String portPart = endpoint.substring(colonPos + 1);
+    endpoint = endpoint.substring(0, colonPos);
+    uint16_t parsedPort = (uint16_t)portPart.toInt();
+    if (parsedPort > 0) mqttResolvedPort = parsedPort;
+  }
+
+  endpoint.trim();
+  if (endpoint.length() == 0) endpoint = F("rmq230.smartsystem.id");
+
+  strncpy(mqttResolvedHost, endpoint.c_str(), sizeof(mqttResolvedHost) - 1);
+  mqttResolvedHost[sizeof(mqttResolvedHost) - 1] = '\0';
+}
+
 void applyMqttStabilityConfig() {
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  normalizeMqttEndpoint();
+  mqtt.setServer(mqttResolvedHost, mqttResolvedPort);
   mqtt.setBufferSize(MQTT_BUFFER_SIZE_BYTES);
   mqtt.setKeepAlive(MQTT_KEEPALIVE_SEC);
   mqtt.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SEC);
@@ -3922,10 +3989,13 @@ void reconnectMQTT() {
 
   Serial.println();
   Serial.println(F("╔════════════ MQTT RECONNECT ════════════╗"));
-  Serial.print(F("[MQTT] Host       : ")); Serial.println(MQTT_HOST);
-  Serial.print(F("[MQTT] Port       : ")); Serial.println(MQTT_PORT);
+  Serial.print(F("[MQTT] Host raw   : ")); Serial.println(MQTT_HOST);
+  Serial.print(F("[MQTT] Host used  : ")); Serial.println(mqttResolvedHost);
+  Serial.print(F("[MQTT] Port used  : ")); Serial.println(mqttResolvedPort);
   Serial.print(F("[MQTT] Client     : ")); Serial.println(clientId);
   Serial.print(F("[MQTT] VHost      : ")); Serial.println(MQTT_VHOST);
+  Serial.print(F("[MQTT] Login user : ")); Serial.println(MQTT_LOGIN_USER);
+  if (mqttHostHadScheme) Serial.println(F("[MQTT] Catatan    : skema mqtt:// dibuang sebelum koneksi PubSubClient."));
   Serial.print(F("[MQTT] Attempt    : ")); Serial.println(mqttReconnectAttemptCount);
   Serial.print(F("[MQTT] Backoff ms : ")); Serial.println(mqttReconnectBackoffMs);
   Serial.print(F("[MQTT] WiFi RSSI  : ")); Serial.print(WiFi.RSSI()); Serial.println(F(" dBm"));
@@ -4279,7 +4349,25 @@ void drawSemiGauge(int x, int y, int r, float value, float minVal, float maxVal,
 
 void drawHeaderStatusDots(bool force) {
   static bool lastLink = false, lastWifi = false, lastMqtt = false, lastSd = false;
+  static uint32_t lastShownSeq = 0;
+  static uint32_t lastShownSecond = 0xFFFFFFFF;
   bool nowMqtt = mqtt.connected();
+  uint32_t currentSeq = localRecordSeq;
+  uint32_t currentSecond = millis() / 1000UL;
+
+  if (force || currentSeq != lastShownSeq || currentSecond != lastShownSecond) {
+    tft.fillRect(132, 28, 152, 12, C_PRIMARY);
+    tft.setTextColor(C_WHITE, C_PRIMARY);
+    tft.setTextSize(1);
+    tft.setCursor(132, 30);
+    tft.print("REC#");
+    tft.print(currentSeq);
+    tft.print("  ");
+    tft.print(currentSecond);
+    tft.print("s");
+    lastShownSeq = currentSeq;
+    lastShownSecond = currentSecond;
+  }
 
   if (force || lastLink != linkOK) {
     tft.fillCircle(315, 28, 6, C_PRIMARY);
