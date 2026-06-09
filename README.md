@@ -26,3 +26,29 @@ JSON BUILD
   json += "}";
   return json;
 }
+
+EX:
+{
+  "deviceId": "ESP32_GENERATOR_01",
+  "recordId": "ESP32_GENERATOR_01_1024",
+  "localSeq": 1024,
+  "timestamp": "2026-06-09T13:25:10",
+  "espSentAtMs": 582340,
+  "ecuConnected": true,
+  "rpm": 1520.5,
+  "tps": 18.2,
+  "map": 96.4,
+  "iat": 32.1,
+  "clt": 78.5,
+  "afr": 14.72,
+  "batt": 12.61,
+  "fuel": 65.0,
+  "freq": 50.012,
+  "volt": 220.45,
+  "currentA": 4.82,
+  "powerKW": 1.061,
+  "phase_diff": 2.35,
+  "sync": "ON-GRID",
+  "powerSource": "GRID",
+  "synced": true
+}
