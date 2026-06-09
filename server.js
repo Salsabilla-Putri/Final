@@ -9,6 +9,32 @@ const tls = require('tls');
 const { EventEmitter } = require('events');
 require('dotenv').config();
 
+const DEFAULT_MONGODB_URI = 'mongodb://smartgen_sec8AePh:S6dS29VM31@nosql.smartsystem.id:27017/smartgen?authSource=smartgen';
+const DEFAULT_MESSAGE_BROKER_HOST = 'nosql.smartsystem.id';
+const DEFAULT_MESSAGE_BROKER_URL = `mqtt://${DEFAULT_MESSAGE_BROKER_HOST}:1883`;
+const DEFAULT_MESSAGE_BROKER_USERNAME = 'smartgen_sec8AePh';
+const DEFAULT_MESSAGE_BROKER_PASSWORD = 'rai2Oi1U';
+const DEFAULT_MESSAGE_BROKER_VHOST = '/smartgen';
+
+const configuredMessageBrokerVhost = process.env.MESSAGE_BROKER_VHOST || process.env.MQTT_VHOST || DEFAULT_MESSAGE_BROKER_VHOST;
+const configuredMessageBrokerUsername = process.env.MESSAGE_BROKER_USERNAME || process.env.MQTT_USERNAME || DEFAULT_MESSAGE_BROKER_USERNAME;
+const configuredMessageBrokerPassword = process.env.MESSAGE_BROKER_PASSWORD || process.env.MQTT_PASSWORD || DEFAULT_MESSAGE_BROKER_PASSWORD;
+
+function normalizeMqttBrokerUrl(value) {
+    const brokerUrl = String(value || DEFAULT_MESSAGE_BROKER_URL).trim();
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(brokerUrl)) return brokerUrl;
+    return `mqtt://${brokerUrl}`;
+}
+
+const configuredMqttBroker = normalizeMqttBrokerUrl(process.env.MQTT_BROKER || process.env.MESSAGE_BROKER_URL);
+
+function buildMqttUsername(username, vhost) {
+    if (!vhost || username.includes(':')) return username;
+    return `${vhost}:${username}`;
+}
+
+const configuredMqttUsername = buildMqttUsername(configuredMessageBrokerUsername, configuredMessageBrokerVhost);
+
 const sgMail = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 const {
@@ -75,7 +101,7 @@ async function ensureDbReady() {
         return isDbReady();
     }
 
-    dbConnectPromise = mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/generator_monitoring', {
+    dbConnectPromise = mongoose.connect(process.env.MONGODB_URI || DEFAULT_MONGODB_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
         serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000', 10),
@@ -454,7 +480,6 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
 
     if (uniqueRecipients.length === 0) return;
 
-    const sgMail = require('@sendgrid/mail');
     sgMail.setApiKey(apiKey);
 
     // LOGIKA GRUP: Membuat ringkasan untuk Subjek Email
@@ -551,12 +576,12 @@ async function loadThresholdsFromDB() {
 }
 
 // --- MQTT LOGIC ---
-// [FIX 1] Broker disamakan dengan ESP32 → shiftr.io cloud
+// Broker default mengikuti konfigurasi SmartSystem; bisa dioverride lewat environment variable.
 const mqttClient = mqtt && shouldStartMqtt
-    ? mqtt.connect(process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883', {
+    ? mqtt.connect(configuredMqttBroker, {
         clientId:        'server-' + Math.random().toString(16).slice(2, 8),
-        username:        process.env.MQTT_USERNAME || 'generatorta20',
-        password:        process.env.MQTT_PASSWORD || 'TA252601020',
+        username:        configuredMqttUsername,
+        password:        configuredMessageBrokerPassword,
         keepalive:       60,
         reconnectPeriod: 3000,
         connectTimeout:  10000
@@ -613,7 +638,13 @@ app.get('/api/health', (req, res) => {
     const mqttConnected = typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false;
     const checks = {
         mongodb: { status: mongodbStatus, connected: mongodbState === 1 },
-        mqtt: { enabled: shouldStartMqtt, connected: mqttConnected },
+        mqtt: {
+            enabled: shouldStartMqtt,
+            connected: mqttConnected,
+            broker: configuredMqttBroker,
+            vhost: configuredMessageBrokerVhost,
+            username: configuredMessageBrokerUsername
+        },
         env: {
             mongodbUri: Boolean(process.env.MONGODB_URI),
             vercel: isVercelRuntime
@@ -1058,7 +1089,7 @@ setInterval(async () => {
 
 mqttClient.on('connect', () => {
     mqttIngestStats.connectedAt = new Date();
-    console.log(`✅ Connected to MQTT Broker: ${process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883'}`);
+    console.log(`✅ Connected to MQTT Broker: ${configuredMqttBroker}`);
     mqttClient.subscribe('gen/realtime', (err) => {
         if (err) console.error('❌ Subscribe error (gen/realtime):', err.message);
         else console.log('📡 Subscribed to gen/realtime');
@@ -1891,7 +1922,9 @@ app.get('/api/mqtt-ingest/status', (req, res) => {
         success: true,
         mqttAvailable: Boolean(mqtt),
         mqttConnected: typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false,
-        broker: process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883',
+        broker: configuredMqttBroker,
+        vhost: configuredMessageBrokerVhost,
+        username: configuredMessageBrokerUsername,
         subscribedTopics: ['gen/realtime', 'gen/data'],
         dbReady: isDbReady(),
         stats: mqttIngestStats
