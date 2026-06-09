@@ -1036,11 +1036,27 @@ const char* getFFTSourceName() {
 }
 
 const char* getPowerSourceFromSynced(bool synced) {
-  return synced ? "GRID" : "GENSET";
+  return synced ? "SYNC" : "GENSET";
 }
 
 const char* getSyncTextFromSynced(bool synced) {
-  return synced ? "ON-GRID" : "OFF-GRID";
+  return synced ? "SYNC" : "GENSET";
+}
+
+const char* getPowerSourceFromAggregate(const AggregatedData &a) {
+  if (!linkOK) return "OFF";
+  if (a.synced) return "SYNC";
+
+  const bool gridAvailable = (a.voltGridAvg >= 180.0f && a.voltGridAvg <= 260.0f)
+                          || (a.freqGridAvg >= 45.0f && a.freqGridAvg <= 55.0f);
+  const bool gensetAvailable = (a.rpmAvg > 0.0f) || (a.voltAvg > 20.0f) || (a.freqAvg > 5.0f);
+
+  if (gridAvailable && !gensetAvailable) return "GRID";
+  return "GENSET";
+}
+
+const char* getSyncTextFromAggregate(const AggregatedData &a) {
+  return getPowerSourceFromAggregate(a);
 }
 
 // ============================================================
@@ -1955,8 +1971,8 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromSynced(a.synced)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromSynced(a.synced)) + "\",";
+  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
   json += "}";
   return json;
@@ -2020,8 +2036,8 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromSynced(a.synced)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromSynced(a.synced)) + "\",";
+  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
 
   json += "}";
@@ -3240,8 +3256,8 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.currentAvg, 2); line += ",";
   line += String(a.powerAvg, 3); line += ",";
   line += String(a.phaseAngleAvg, 2); line += ",";
-  line += getSyncTextFromSynced(a.synced); line += ",";
-  line += getPowerSourceFromSynced(a.synced); line += ",";
+  line += getSyncTextFromAggregate(a); line += ",";
+  line += getPowerSourceFromAggregate(a); line += ",";
   line += String(a.synced ? 1 : 0);
 
   return line;
@@ -4245,6 +4261,7 @@ void drawGeneratorPage(bool full) {
   static float lastFreqGen = NAN, lastFreqGrid = NAN, lastVoltGen = NAN, lastVoltGrid = NAN;
   static float lastPhase = NAN, lastCurrentA = NAN, lastPowerKW = NAN;
   static bool lastSynced = false;
+  static String lastSyncStatus = "";
 
   AggregatedData d;
 
@@ -4260,6 +4277,7 @@ void drawGeneratorPage(bool full) {
     initialized = true;
     lastFreqGen = lastFreqGrid = lastVoltGen = lastVoltGrid = NAN;
     lastPhase = lastCurrentA = lastPowerKW = NAN;
+    lastSyncStatus = "";
   } else {
     drawHeaderStatusDots(false);
   }
@@ -4308,10 +4326,12 @@ void drawGeneratorPage(bool full) {
     lastCurrentA = d.currentAvg;
   }
 
-  if (full || d.synced != lastSynced) {
-    drawValueBox(326, 218, 140, 56, "SYNC STATUS", d.synced ? "ON-GRID" : "OFF-GRID", "",
-                 d.synced ? C_GREEN : C_RED);
+  const char* syncStatus = getSyncTextFromAggregate(d);
+  if (full || d.synced != lastSynced || lastSyncStatus != syncStatus) {
+    uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_ORANGE : C_GREEN);
+    drawValueBox(326, 218, 140, 56, "SYNC STATUS", syncStatus, "", syncColor);
     lastSynced = d.synced;
+    lastSyncStatus = syncStatus;
   }
 }
 void drawEnginePage(bool full) {
@@ -4866,8 +4886,8 @@ String buildCloudEstimateRecordOnly() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromSynced(a.synced)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromSynced(a.synced)) + "\",";
+  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
   json += "\"synced\":" + String(a.synced ? "true" : "false");
   json += "}";
   return json;
