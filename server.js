@@ -602,7 +602,8 @@ function shouldSkipApiDbWarmup(req) {
         '/api/ingest/status',
         '/api/ingest/batch',
         '/api/mqtt-ingest/status',
-        '/api/engine-data/latest'
+        '/api/engine-data/latest',
+        '/api/engine-data/stream'
     ].includes(req.path);
 }
 
@@ -652,6 +653,42 @@ let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
 const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
 let latestRealtimeReceivedAt = null;
+const engineStreamClients = new Set();
+
+function buildEngineRealtimeStreamPayload() {
+    const lastDataAt = getValidDate(latestData?.realtimeReceivedAt || latestData?.lastMqttUpdate)
+        || getValidDate(latestData?.timestamp)
+        || getValidDate(latestRealtimeReceivedAt);
+    const ecuConnected = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+
+    return {
+        success: true,
+        source: 'realtime-stream',
+        data: {
+            ...latestData,
+            timestamp: lastDataAt || latestData?.timestamp,
+            lastUpdated: lastDataAt || latestData?.timestamp,
+            lastMqttUpdate: getValidDate(latestData?.lastMqttUpdate) || latestRealtimeReceivedAt || lastDataAt,
+            realtimeReceivedAt: getValidDate(latestData?.realtimeReceivedAt) || latestRealtimeReceivedAt || lastDataAt,
+            ecuConnected,
+            alerts: generateAlerts(latestData, null),
+            ...getPublicLabels(latestData)
+        }
+    };
+}
+
+function sendEngineStreamEvent(res, payload = buildEngineRealtimeStreamPayload()) {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function broadcastEngineRealtimeUpdate() {
+    if (!engineStreamClients.size) return;
+    const payload = buildEngineRealtimeStreamPayload();
+    for (const client of engineStreamClients) {
+        try { sendEngineStreamEvent(client, payload); }
+        catch (error) { engineStreamClients.delete(client); }
+    }
+}
 
 function isRealtimeSnapshotFresh(data = latestData, receivedAt = latestRealtimeReceivedAt) {
     if (!data || data._realtime !== true) return false;
@@ -1596,22 +1633,7 @@ mqttClient.on('message', async (topic, message) => {
         latestData.serverReceivedAt = latestRealtimeReceivedAt;
         const espTimestamp = getValidDate(latestData.timestamp);
         latestData.transportLatencyMs = espTimestamp ? Math.max(0, latestRealtimeReceivedAt.getTime() - espTimestamp.getTime()) : latestData.transportLatencyMs;
-
-        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-        if (fftDoc) {
-            latestData.fft = {
-                valid: true,
-                source: fftDoc.source,
-                sampleRateHz: fftDoc.sampleRateHz,
-                samples: fftDoc.samples,
-                resolutionHz: fftDoc.resolutionHz,
-                peakHz: fftDoc.peakHz,
-                peakMagnitude: fftDoc.peakMagnitude,
-                rms: fftDoc.rms,
-                freqBins: fftDoc.freqBins,
-                magBins: fftDoc.magBins
-            };
-        }
+        broadcastEngineRealtimeUpdate();
 
         // gen/realtime: jalur dashboard + alert + active time.
         // Alert tidak menunggu batch MongoDB.
@@ -1750,6 +1772,31 @@ app.get('/api/engine-data/last-running', async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+app.get('/api/engine-data/stream', (req, res) => {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+
+    engineStreamClients.add(res);
+    sendEngineStreamEvent(res);
+
+    const heartbeat = setInterval(() => {
+        try { sendEngineStreamEvent(res); }
+        catch (error) {
+            clearInterval(heartbeat);
+            engineStreamClients.delete(res);
+        }
+    }, 15000);
+
+    req.on('close', () => {
+        clearInterval(heartbeat);
+        engineStreamClients.delete(res);
+    });
 });
 
 app.get('/api/engine-data/latest', async (req, res) => {

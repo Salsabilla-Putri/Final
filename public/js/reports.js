@@ -54,6 +54,23 @@ let activeRange           = { start: null, end: null };
 let reportStatsBySensor   = null;
 let reportTotalMatched    = 0;
 let periodAlertCount      = 0;
+let reportTableParam      = 'all';
+
+const REPORT_TABLE_PARAM_ORDER = ['volt', 'freq', 'phase', 'power', 'rpm', 'iat', 'coolant', 'map', 'fuel', 'batt', 'afr', 'tps'];
+const REPORT_STATUS_RULES = {
+    volt:    { min: 180, warnMin: 200, warnMax: 240, max: 250 },
+    freq:    { min: 48,  warnMin: 49,  warnMax: 51,  max: 52 },
+    phase:   { warnAbs: 10, maxAbs: 15 },
+    power:   { warnMax: 8, max: 12 },
+    rpm:     { warnMax: 3500, max: 4000 },
+    iat:     { warnMax: 55, max: 70 },
+    coolant: { warnMax: 90, max: 105 },
+    map:     { warnMax: 95, max: 105 },
+    fuel:    { min: 20, warnMin: 30 },
+    batt:    { min: 10.5, warnMin: 11.5, warnMax: 14.5, max: 15.5 },
+    afr:     { min: 10.5, warnMin: 12, warnMax: 16, max: 18 },
+    tps:     { min: 0, max: 100 }
+};
 
 
 function getReportDeviceId() {
@@ -164,6 +181,10 @@ function setupEventListeners() {
     });
 
     document.getElementById('applyDateRange')?.addEventListener('click', loadReportData);
+    document.getElementById('showAllReportParams')?.addEventListener('click', () => {
+        reportTableParam = 'all';
+        renderReportTable(currentData);
+    });
 
     document.addEventListener('change', function (e) {
         if (e.target.id === 'dateFrom') {
@@ -526,6 +547,7 @@ function applyRowsToReports(rows, meta = {}) {
         updateOverview(currentData);
         renderSensorCards(currentData);
         renderChart(currentData);
+        renderReportTable(currentData);
 
         const analysisPanelEl = ENABLE_WEB_FFT ? document.querySelector('.analysis-panel') : null;
         const activeSensor    = selectedSensors[0] || 'rpm';
@@ -796,11 +818,10 @@ function buildAnalysisRows(data, sensorKey) {
 }
 
 
-function getPerSecondRows(data) {
-    const rows = aggregateDataByTimeBuckets(data || [], REPORT_SAMPLE_MS)
-        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-    return rows;
+function getReportTableRows(data) {
+    return [...(data || [])]
+        .filter((row) => row?.timestamp && !Number.isNaN(new Date(row.timestamp).getTime()))
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
 
 function formatReportTableTimestamp(timestamp) {
@@ -812,40 +833,113 @@ function formatReportTableTimestamp(timestamp) {
     });
 }
 
-function formatReportCell(row, column) {
-    if (column === 'timestamp') return formatReportTableTimestamp(row.timestamp);
-    const value = Number(row[column]);
-    if (!Number.isFinite(value)) return '-';
-    if (['rpm', 'fuel', 'tps'].includes(column)) return value.toFixed(0);
-    if (['freq', 'power', 'afr'].includes(column)) return value.toFixed(2);
-    return value.toFixed(1);
+function getReportParamValue(row, param) {
+    if (param === 'phase') return row.phase ?? row.phaseAngle ?? row.phase_angle ?? row.phaseDiff;
+    if (param === 'volt') return row.volt ?? row.voltage;
+    if (param === 'batt') return row.batt ?? row.battery ?? row.battVolt;
+    if (param === 'coolant') return row.coolant ?? row.clt ?? row.temp;
+    return row[param];
+}
+
+function formatReportValue(value, param) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '-';
+    if (['rpm', 'fuel', 'tps'].includes(param)) return num.toFixed(0);
+    if (['freq', 'power', 'afr'].includes(param)) return num.toFixed(2);
+    return num.toFixed(1);
+}
+
+function getReportParamStatus(param, value) {
+    const rule = REPORT_STATUS_RULES[param] || {};
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 'normal';
+
+    if (rule.maxAbs !== undefined && Math.abs(num) > rule.maxAbs) return 'critical';
+    if (rule.warnAbs !== undefined && Math.abs(num) > rule.warnAbs) return 'warning';
+    if ((rule.max !== undefined && num > rule.max) || (rule.min !== undefined && num < rule.min)) return 'critical';
+    if ((rule.warnMax !== undefined && num > rule.warnMax) || (rule.warnMin !== undefined && num < rule.warnMin)) return 'warning';
+    return 'normal';
+}
+
+function getReportStatusLabel(status) {
+    if (status === 'critical') return 'kritis';
+    if (status === 'warning') return 'warning';
+    return 'normal';
+}
+
+function getReportSyncStatus(row) {
+    const syncValue = String(row.sync ?? row.syncStatus ?? row.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(syncValue) || row.synced === true) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(syncValue) || row.synced === false) return 'OFF-GRID';
+    return syncValue || '-';
+}
+
+function getReportTableColumns() {
+    if (reportTableParam !== 'all' && SENSORS[reportTableParam]) {
+        const sensor = SENSORS[reportTableParam];
+        return [
+            { key: 'timestamp', label: 'Timestamp', getter: (row) => formatReportTableTimestamp(row.timestamp), type: 'text' },
+            { key: 'device', label: 'Device', getter: (row) => row.deviceId || 'Gen-01', type: 'text' },
+            { key: reportTableParam, label: `${sensor.name} (${sensor.unit || '-'})`, getter: (row) => formatReportValue(getReportParamValue(row, reportTableParam), reportTableParam), type: 'value', param: reportTableParam },
+            { key: 'status', label: 'Status', getter: (row) => getReportParamStatus(reportTableParam, getReportParamValue(row, reportTableParam)), type: 'status' }
+        ];
+    }
+
+    return [
+        { key: 'timestamp', label: 'Timestamp', getter: (row) => formatReportTableTimestamp(row.timestamp), type: 'text' },
+        { key: 'device', label: 'Device', getter: (row) => row.deviceId || 'Gen-01', type: 'text' },
+        ...REPORT_TABLE_PARAM_ORDER.map((param) => ({
+            key: param,
+            label: `${SENSORS[param]?.name || param} (${SENSORS[param]?.unit || '-'})`,
+            getter: (row) => formatReportValue(getReportParamValue(row, param), param),
+            type: 'value',
+            param
+        })),
+        { key: 'sync', label: 'Status Sinkron', getter: getReportSyncStatus, type: 'text' }
+    ];
 }
 
 function renderReportTable(data) {
     const head = document.getElementById('reportTableHead');
     const body = document.getElementById('reportTableBody');
     const info = document.getElementById('reportTableInfo');
+    const title = document.getElementById('reportTableTitle');
+    const subtitle = document.getElementById('reportTableSubtitle');
     if (!head || !body) return;
 
-    const rows = getPerSecondRows(data).filter((row) => REPORT_TABLE_COLUMNS.some((column) => {
-        if (column === 'timestamp') return true;
-        return Number.isFinite(Number(row[column]));
-    }));
+    const rows = getReportTableRows(data);
+    const columns = getReportTableColumns();
+    const isSingleParam = reportTableParam !== 'all' && SENSORS[reportTableParam];
 
-    head.innerHTML = `<tr>${REPORT_TABLE_COLUMNS.map((column) => {
-        const label = column === 'timestamp' ? 'Timestamp' : `${SENSORS[column]?.name || column} (${SENSORS[column]?.unit || '-'})`;
-        return `<th>${label}</th>`;
-    }).join('')}</tr>`;
+    if (title) title.textContent = isSingleParam ? `Tabel ${SENSORS[reportTableParam].name}` : 'Tabel Semua Parameter';
+    if (subtitle) subtitle.textContent = isSingleParam
+        ? 'Filter parameter aktif: tabel menampilkan timestamp, device, value parameter, dan status.'
+        : 'Mode biasa: tabel menampilkan semua parameter dan Status Sinkron.';
+    if (info) info.textContent = `${rows.length.toLocaleString('id-ID')} rows`;
 
-    if (info) info.textContent = `${rows.length.toLocaleString('id-ID')} rows • interval 1 detik`;
+    head.innerHTML = `<tr>${columns.map((column) => `<th>${column.label}</th>`).join('')}</tr>`;
 
     if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="${REPORT_TABLE_COLUMNS.length}" style="padding:18px; color:#64748b; text-align:center;">Tidak ada data pada filter ini.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="${columns.length}" style="padding:18px; color:#64748b; text-align:center;">Tidak ada data pada filter ini.</td></tr>`;
         return;
     }
 
-    body.innerHTML = rows.map((row) => `<tr>${REPORT_TABLE_COLUMNS.map((column) => `<td>${formatReportCell(row, column)}</td>`).join('')}</tr>`).join('');
+    body.innerHTML = rows.map((row) => `<tr>${columns.map((column) => {
+        if (column.type === 'status') {
+            const status = column.getter(row);
+            return `<td><span class="report-status-badge report-status-${status}">${getReportStatusLabel(status)}</span></td>`;
+        }
+
+        if (column.type === 'value') {
+            const rawValue = getReportParamValue(row, column.param);
+            const status = getReportParamStatus(column.param, rawValue);
+            return `<td class="report-value-${status}">${column.getter(row)}</td>`;
+        }
+
+        return `<td>${column.getter(row)}</td>`;
+    }).join('')}</tr>`).join('');
 }
+
 
 // --- 7. CHART FUNCTIONS ---
 function renderChart(data) {

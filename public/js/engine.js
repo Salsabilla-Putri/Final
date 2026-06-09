@@ -74,27 +74,33 @@ function getSyncByThreshold(data) {
 }
 
 
-function formatTimestampWithMs(input) {
+function formatLastUpdatedTimestamp(input) {
     const dateObj = input instanceof Date ? input : new Date(input);
     if (Number.isNaN(dateObj.getTime())) return '--';
-    const base = dateObj.toLocaleString('id-ID', {
+    return dateObj.toLocaleString('id-ID', {
         day: '2-digit', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
-    return `${base}.${String(dateObj.getMilliseconds()).padStart(3, '0')}`;
 }
 
-function updateTimestampLatency(data = {}) {
-    const timestampEl = document.getElementById('espTimestamp');
-    const latencyEl = document.getElementById('latencyMs');
-    const espTs = data.timestamp || data.espTimestamp || data.lastUpdated || data.lastMqttUpdate;
-    if (timestampEl) timestampEl.innerText = formatTimestampWithMs(espTs);
+function updateLastUpdatedInfo(data = {}, isFresh = false) {
+    const el = document.getElementById('lastUpdatedInfo');
+    if (!el) return;
+    const ts = data.lastUpdated || data.lastMqttUpdate || data.realtimeReceivedAt || data.timestamp;
+    const formatted = formatLastUpdatedTimestamp(ts);
+    el.innerText = isFresh ? `Realtime • ${formatted}` : `Disconnected • ${formatted}`;
+}
 
-    const latency = Number(data.transportLatencyMs ?? data.latencyMs);
-    if (latencyEl) {
-        latencyEl.innerText = Number.isFinite(latency) ? `${Math.round(latency)} ms` : '-- ms';
-        latencyEl.title = data.serverReceivedAt ? `Server received at ${formatTimestampWithMs(data.serverReceivedAt)}` : '';
-    }
+function handleEngineData(data = {}, explicitFresh = null) {
+    const lastTs = data?.lastUpdated || data?.lastMqttUpdate || data?.realtimeReceivedAt || data?.timestamp;
+    const ts = Date.parse(lastTs || '');
+    const isFresh = explicitFresh !== null
+        ? explicitFresh
+        : data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
+
+    updateDashboard(data, isFresh);
+    setEspConnectionStatus(isFresh);
+    updateLastUpdatedInfo(data, isFresh);
 }
 
 // === DATA FETCHING ===
@@ -115,19 +121,14 @@ async function fetchData() {
         const json = await res.json();
         
         if (json.success) {
-            const lastTs = json.data?.lastUpdated || json.data?.lastMqttUpdate || json.data?.timestamp;
-            const ts = Date.parse(lastTs || '');
-            const isFresh = json.data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
-            updateDashboard(json.data, isFresh);
-            updateTimestampLatency(json.data);
-            setEspConnectionStatus(isFresh);
+            handleEngineData(json.data);
         } else {
             setEspConnectionStatus(false);
-            updateTimestampLatency({});
+            updateLastUpdatedInfo({}, false);
         }
     } catch (err) {
         setEspConnectionStatus(false);
-        updateTimestampLatency({});
+        updateLastUpdatedInfo({}, false);
     }
 }
 
@@ -165,7 +166,7 @@ function updateDashboard(data, isEspConnected = true) {
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
     setVal('power', data.power, 2);
-    const phaseDiff = isEspConnected ? getPhaseDifference(data) : 0;
+    const phaseDiff = getPhaseDifference(data);
     setVal('phase', phaseDiff, 1, '0.0');
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
@@ -314,6 +315,32 @@ window.removeThreshold = async () => {
     closeModal();
 };
 
+
+function startRealtimeEngineStream() {
+    if (!('EventSource' in window)) return false;
+
+    try {
+        const source = new EventSource(`${API_URL}/engine-data/stream`);
+        source.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload?.success && payload.data) handleEngineData(payload.data);
+            } catch (error) {
+                console.error('Engine stream parse error:', error);
+            }
+        };
+        source.onerror = () => {
+            // Keep EventSource auto-reconnect enabled, and let polling remain as fallback.
+            setEspConnectionStatus(false);
+        };
+        window.addEventListener('beforeunload', () => source.close());
+        return true;
+    } catch (error) {
+        console.error('Engine stream error:', error);
+        return false;
+    }
+}
+
 // === INIT ===
 document.addEventListener('DOMContentLoaded', () => {
     // Sidebar dimuat dan dikontrol oleh public/js/sidebar.js agar konsisten
@@ -324,8 +351,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setEspConnectionStatus(false);
     loadThresholds();
+    const streamStarted = startRealtimeEngineStream();
     fetchData();
     fetchAlerts();
-    setInterval(fetchData, 1000); 
+    setInterval(fetchData, streamStarted ? 5000 : 1000);
     setInterval(fetchAlerts, 1000); 
 });
