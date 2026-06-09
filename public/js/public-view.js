@@ -113,10 +113,15 @@ function normalizeSyncStatus(data = {}) {
 }
 
 function getPowerSourceStatus(data = {}) {
+    const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return { label: 'GRID', detail: 'Grid/PLN tersambung', cls: 'st-ok', ok: true };
+    if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return { label: 'GENSET', detail: 'Genset tersambung', cls: 'st-warn', ok: true };
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
+
     const syncStatus = normalizeSyncStatus(data);
-    if (syncStatus === 'ON-GRID') return { label: 'GRID', detail: 'Grid tersambung', ok: true };
-    if (syncStatus === 'OFF-GRID') return { label: 'GENSET', detail: 'Genset tersambung', ok: true };
-    return { label: 'MENUNGGU', detail: 'Power source belum terdeteksi', ok: false };
+    if (syncStatus === 'ON-GRID') return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
+    if (syncStatus === 'OFF-GRID') return { label: 'GENSET', detail: 'Genset tersambung', cls: 'st-warn', ok: true };
+    return { label: 'MENUNGGU', detail: 'Power source belum terdeteksi', cls: 'st-warn', ok: false };
 }
 
 function updatePowerSourceStatus(data = {}) {
@@ -126,7 +131,7 @@ function updatePowerSourceStatus(data = {}) {
     const detailEl = document.getElementById('engSupply');
     if (detailEl) {
         detailEl.innerText = supply.detail;
-        detailEl.className = supply.ok ? 'st-ok' : 'st-warn';
+        detailEl.className = supply.cls;
     }
 }
 
@@ -287,12 +292,12 @@ function updateOverviewCards(data, historyRows = []) {
 function updateOperationsSection(data, cbmData, alertRows = []) {
     updatePowerSourceStatus(data);
 
-    // Sync
-    const syncEl = document.getElementById('engSync');
-    if (syncEl) {
-        const syncStatus = normalizeSyncStatus(data);
-        syncEl.innerText = syncStatus;
-        syncEl.className = syncStatus === 'ON-GRID' ? 'st-ok' : 'st-warn';
+    // Power Source (GRID / GENSET / SYNC)
+    const sourceEl = document.getElementById('engSync');
+    if (sourceEl) {
+        const supply = getPowerSourceStatus(data);
+        sourceEl.innerText = supply.label;
+        sourceEl.className = supply.cls;
     }
 
     // Status
@@ -529,8 +534,8 @@ function renderHealthScore(engineData, cbmData, alertRows = []) {
     const runtimeEl = document.getElementById('st-runtime');
     const lastMaintEl = document.getElementById('st-last-maint');
     const running = ['RUNNING', 'ON-GRID', 'ON', 'ACTIVE'].includes(String(engineData.status || '').toUpperCase()) || Number(engineData.rpm || 0) > 0;
-    const sync = normalizeSyncStatus(engineData);
-    if (ageEl) ageEl.textContent = running ? `Live • ${sync || 'UNKNOWN'}` : 'Standby/Offline';
+    const source = getPowerSourceStatus(engineData);
+    if (ageEl) ageEl.textContent = running ? `Live • ${source.label}` : 'Standby/Offline';
     if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
     if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
         ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')

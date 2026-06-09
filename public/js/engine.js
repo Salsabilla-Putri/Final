@@ -74,6 +74,19 @@ function getSyncByThreshold(data) {
 }
 
 
+
+function getPowerSourceStatus(data = {}) {
+    const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return { label: 'GRID', cls: 'indicator ind-on' };
+    if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return { label: 'GENSET', cls: 'indicator ind-warn' };
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) return { label: 'SYNC', cls: 'indicator ind-on' };
+
+    const syncStatus = getSyncByThreshold(data);
+    if (syncStatus === 'ON-GRID') return { label: 'SYNC', cls: 'indicator ind-on' };
+    if (syncStatus === 'OFF-GRID') return { label: 'GENSET', cls: 'indicator ind-warn' };
+    return { label: 'UNKNOWN', cls: 'indicator ind-neutral' };
+}
+
 function formatLastUpdatedTimestamp(input) {
     const dateObj = input instanceof Date ? input : new Date(input);
     if (Number.isNaN(dateObj.getTime())) return '--';
@@ -152,10 +165,12 @@ async function fetchAlerts() {
 
 // === UI UPDATE LOGIC ===
 function updateDashboard(data, isEspConnected = true) {
-    const syncEl = document.getElementById('syncIndicator');
-    const syncStatus = getSyncByThreshold(data);
-    syncEl.innerText = syncStatus;
-    syncEl.className = syncStatus === 'ON-GRID' ? 'indicator ind-on' : 'indicator ind-off';
+    const sourceEl = document.getElementById('powerSourceIndicator');
+    const sourceStatus = getPowerSourceStatus(data);
+    if (sourceEl) {
+        sourceEl.innerText = sourceStatus.label;
+        sourceEl.className = sourceStatus.cls;
+    }
 
     const setVal = (id, val, fixed=0, fallback='--') => {
         const el = document.getElementById(id + 'Val');
