@@ -124,7 +124,10 @@ const generatorDataSchema = new mongoose.Schema({
     batt: Number,
     afr: Number,
     tps: Number,
-    phaseAngle: Number
+    phaseAngle: Number,
+    espSentAtMs: Number,
+    serverReceivedAt: Date,
+    transportLatencyMs: Number
 }, { versionKey: false });
 
 generatorDataSchema.index({ recordId: 1 }, { unique: true, sparse: true });
@@ -599,7 +602,8 @@ function shouldSkipApiDbWarmup(req) {
         '/api/ingest/status',
         '/api/ingest/batch',
         '/api/mqtt-ingest/status',
-        '/api/engine-data/latest'
+        '/api/engine-data/latest',
+        '/api/engine-data/stream'
     ].includes(req.path);
 }
 
@@ -649,6 +653,42 @@ let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
 const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
 let latestRealtimeReceivedAt = null;
+const engineStreamClients = new Set();
+
+function buildEngineRealtimeStreamPayload() {
+    const lastDataAt = getValidDate(latestData?.realtimeReceivedAt || latestData?.lastMqttUpdate)
+        || getValidDate(latestData?.timestamp)
+        || getValidDate(latestRealtimeReceivedAt);
+    const ecuConnected = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+
+    return {
+        success: true,
+        source: 'realtime-stream',
+        data: {
+            ...latestData,
+            timestamp: lastDataAt || latestData?.timestamp,
+            lastUpdated: lastDataAt || latestData?.timestamp,
+            lastMqttUpdate: getValidDate(latestData?.lastMqttUpdate) || latestRealtimeReceivedAt || lastDataAt,
+            realtimeReceivedAt: getValidDate(latestData?.realtimeReceivedAt) || latestRealtimeReceivedAt || lastDataAt,
+            ecuConnected,
+            alerts: generateAlerts(latestData, null),
+            ...getPublicLabels(latestData)
+        }
+    };
+}
+
+function sendEngineStreamEvent(res, payload = buildEngineRealtimeStreamPayload()) {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function broadcastEngineRealtimeUpdate() {
+    if (!engineStreamClients.size) return;
+    const payload = buildEngineRealtimeStreamPayload();
+    for (const client of engineStreamClients) {
+        try { sendEngineStreamEvent(client, payload); }
+        catch (error) { engineStreamClients.delete(client); }
+    }
+}
 
 function isRealtimeSnapshotFresh(data = latestData, receivedAt = latestRealtimeReceivedAt) {
     if (!data || data._realtime !== true) return false;
@@ -1032,7 +1072,10 @@ function buildGeneratorDbDocument(data) {
         batt: toNumber(snapshot.batt, 0),
         afr: toNumber(snapshot.afr, 0),
         tps: toNumber(snapshot.tps, 0),
-        phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0)
+        phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0),
+        espSentAtMs: snapshot.espSentAtMs !== undefined ? toNumber(snapshot.espSentAtMs, 0) : undefined,
+        serverReceivedAt: snapshot.serverReceivedAt ? new Date(snapshot.serverReceivedAt) : undefined,
+        transportLatencyMs: snapshot.transportLatencyMs !== undefined ? toNumber(snapshot.transportLatencyMs, 0) : undefined
     };
 }
 
@@ -1366,10 +1409,16 @@ function normalizeGeneratorPayload(rawPayload) {
         afr: toNumber(payload.afr, latestData.afr),
         tps: toNumber(payload.tps, latestData.tps),
         phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle ?? payload.phase_diff, latestData.phaseAngle ?? 0),
+        espSentAtMs: toNumber(payload.espSentAtMs ?? payload.timestampMs, latestData.espSentAtMs),
         recordId: payload.recordId || latestData.recordId,
         localSeq: payload.localSeq ?? latestData.localSeq,
         _realtime: true
     };
+
+    const receivedAt = new Date();
+    const sentAt = getValidDate(snapshot.timestamp);
+    snapshot.serverReceivedAt = receivedAt;
+    snapshot.transportLatencyMs = sentAt ? Math.max(0, receivedAt.getTime() - sentAt.getTime()) : undefined;
 
     if (readPowerValue(payload) === undefined && snapshot.volt && snapshot.amp) {
         snapshot.power = (snapshot.volt * snapshot.amp) / 1000;
@@ -1581,6 +1630,10 @@ mqttClient.on('message', async (topic, message) => {
         latestRealtimeReceivedAt = new Date();
         latestData.lastMqttUpdate = latestRealtimeReceivedAt;
         latestData.realtimeReceivedAt = latestRealtimeReceivedAt;
+        latestData.serverReceivedAt = latestRealtimeReceivedAt;
+        const espTimestamp = getValidDate(latestData.timestamp);
+        latestData.transportLatencyMs = espTimestamp ? Math.max(0, latestRealtimeReceivedAt.getTime() - espTimestamp.getTime()) : latestData.transportLatencyMs;
+        broadcastEngineRealtimeUpdate();
 
         const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
         if (fftDoc) {
@@ -1735,6 +1788,31 @@ app.get('/api/engine-data/last-running', async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+app.get('/api/engine-data/stream', (req, res) => {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+
+    engineStreamClients.add(res);
+    sendEngineStreamEvent(res);
+
+    const heartbeat = setInterval(() => {
+        try { sendEngineStreamEvent(res); }
+        catch (error) {
+            clearInterval(heartbeat);
+            engineStreamClients.delete(res);
+        }
+    }, 15000);
+
+    req.on('close', () => {
+        clearInterval(heartbeat);
+        engineStreamClients.delete(res);
+    });
 });
 
 app.get('/api/engine-data/latest', async (req, res) => {
