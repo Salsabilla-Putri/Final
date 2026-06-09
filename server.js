@@ -3111,34 +3111,58 @@ app.post('/api/cbm/run', async (req, res) => {
 // =========================
 // START SERVER
 // =========================
+// =========================
+// START SERVER
+// =========================
 function startBackgroundWorkers() {
     startMaintenanceSuggestionWorker();
     startMonthlyReportWorker();
     startCbmWorker();
 }
 
-function readServerPort() {
-    const rawPort = process.env.SERVER_PORT || process.env.PORT || '3023';
-    const port = Number.parseInt(rawPort, 10);
+function readHttpServerPort() {
+    let rawPort = process.env.SERVER_PORT || process.env.WEB_PORT || process.env.HTTP_PORT || process.env.PORT || '3023';
+    let port = Number.parseInt(rawPort, 10);
 
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        throw new Error(`Invalid server port: ${rawPort}. Set SERVER_PORT or PORT to a valid HTTP port.`);
+        console.warn(`⚠️ Invalid HTTP port "${rawPort}", fallback ke 3023.`);
+        port = 3023;
     }
 
+    // 1883/8883 adalah port MQTT, bukan HTTP dashboard
     if (port === 1883 || port === 8883) {
-        console.warn(`⚠️ SERVER_PORT/PORT is ${port}, which is commonly used for MQTT. Use MQTT_BROKER for the broker port and set SERVER_PORT/PORT to the HTTP dashboard port, for example 3023.`);
+        console.warn(`⚠️ PORT ${port} adalah port MQTT. Dashboard HTTP dipindahkan otomatis ke 3023.`);
+        port = 3023;
     }
 
     return port;
 }
 
-const PORT = readServerPort();
+function getDashboardUrl(port) {
+    const rawUrl = String(process.env.BACKEND_URL || process.env.APP_BASE_URL || process.env.PUBLIC_BASE_URL || '').trim();
+
+    // Kalau BACKEND_URL salah diarahkan ke MQTT port, jangan dipakai
+    if (rawUrl && !rawUrl.includes(':1883') && !rawUrl.includes(':8883')) {
+        return rawUrl.replace(/\/+$/, '');
+    }
+
+    if (rawUrl.includes(':1883') || rawUrl.includes(':8883')) {
+        console.warn('⚠️ BACKEND_URL masih mengarah ke port MQTT. Gunakan BACKEND_URL=http://localhost:3023');
+    }
+
+    return `http://localhost:${port}`;
+}
+
+const PORT = readHttpServerPort();
 const HOST = process.env.HOST || '0.0.0.0';
+const DASHBOARD_URL = getDashboardUrl(PORT);
 
 if (require.main === module) {
     app.listen(PORT, HOST, () => {
-        console.log(`🚀 Server listening on ${HOST}:${PORT}`);
-        console.log(`🌐 Open dashboard at ${BACKEND_URL || `http://localhost:${PORT}`}`);
+        console.log(`🚀 HTTP Dashboard Server listening on ${HOST}:${PORT}`);
+        console.log(`🌐 Open dashboard at ${DASHBOARD_URL}`);
+        console.log(`📡 MQTT Broker URL: ${MQTT_BROKER_URL || 'MQTT disabled/not configured'}`);
+
         startBackgroundWorkers();
     });
 }
