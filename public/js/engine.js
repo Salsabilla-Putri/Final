@@ -99,9 +99,16 @@ function formatLastUpdatedTimestamp(input) {
 function updateLastUpdatedInfo(data = {}, isFresh = false) {
     const el = document.getElementById('lastUpdatedInfo');
     if (!el) return;
+    const wrapper = el.closest('.timestamp-pill');
+    if (isFresh) {
+        el.innerText = '--';
+        if (wrapper) wrapper.style.display = 'none';
+        return;
+    }
+    if (wrapper) wrapper.style.display = '';
     const ts = data.lastUpdated || data.lastMqttUpdate || data.realtimeReceivedAt || data.serverReceivedAt || data.timestamp;
     const formatted = formatLastUpdatedTimestamp(ts);
-    el.innerText = isFresh ? `Realtime • ${formatted}` : `Disconnected • ${formatted}`;
+    el.innerText = `Disconnected • ${formatted}`;
 }
 
 function handleEngineData(data = {}, explicitFresh = null) {
@@ -130,7 +137,7 @@ async function loadThresholds() {
 
 async function fetchData() {
     try {
-        const res = await fetch(`${API_URL}/engine-data/latest`);
+        const res = await fetch(`${API_URL}/engine-data/latest?_=${Date.now()}`, { cache: 'no-store' });
         const json = await res.json();
         
         if (json.success) {

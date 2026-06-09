@@ -51,7 +51,7 @@ function setDataStatus({ live = false, timestamp = null } = {}) {
             ? '<i class="fas fa-circle"></i> Live'
             : '<i class="fas fa-circle"></i> Data terakhir';
     }
-    if (lastEl) lastEl.innerText = safeDate ? `Diperbarui: ${formatLastUpdated(safeDate)}` : 'Diperbarui: --';
+    if (lastEl) lastEl.style.display = 'none';
 }
 
 
@@ -220,7 +220,7 @@ const DISCONNECT_THRESHOLD_MS = 3_000; // 3 detik tanpa MQTT = ECU disconnected
 
 async function updateSensorData() {
     try {
-        const res = await fetch(`${API_URL}/engine-data/latest`);
+        const res = await fetch(`${API_URL}/engine-data/latest?_=${Date.now()}`, { cache: 'no-store' });
         if (!res.ok) {
             _handleDisconnect();
             return;
@@ -470,7 +470,7 @@ async function initChart() {
         data: {
             labels,
             datasets: [{
-                label          : 'Genset Active',
+                label          : 'ECU Connected',
                 data           : dataPoints,
                 backgroundColor: dataPoints.map((_, i) => i === 6 ? '#f97316' : 'rgba(23,69,165,0.8)'),
                 borderRadius   : 8,
@@ -482,13 +482,13 @@ async function initChart() {
             maintainAspectRatio  : false,
             plugins: {
                 legend : { display: false },
-                tooltip: { callbacks: { label: ctx => ` Genset aktif ${ctx.parsed.y} jam` } }
+                tooltip: { callbacks: { label: ctx => ` ECU connected ${ctx.parsed.y} jam` } }
             },
             scales: {
                 y: {
                     beginAtZero : true,
                     suggestedMax: 8,
-                    title       : { display: true, text: 'Jam Genset Aktif' },
+                    title       : { display: true, text: 'Jam ECU Connected' },
                     ticks       : { callback: v => v + 'h' },
                     grid        : { color: 'rgba(0,0,0,0.05)' }
                 },
