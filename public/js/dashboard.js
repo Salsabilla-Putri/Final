@@ -4,7 +4,7 @@ let activeChartLoading = false;
 let auxDashboardLoading = false;
 const SENSOR_REFRESH_MS = 1000;
 const AUX_REFRESH_MS = 15000;
-const CHART_REFRESH_MS = 1000;
+const CHART_REFRESH_MS = 15000;
 const LAST_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
 
 // --- UTILS ---
@@ -266,7 +266,8 @@ async function _handleDisconnect(fallbackData = null) {
     if (_disconnectReported) return;
     _disconnectReported = true;
     console.warn('ESP32 disconnect detected — closing active session');
-    updatePowerSourceStatus({ ecuConnected: false, powerSource: 'OFF', sync: 'OFF' });
+    updatePowerSourceStatus({ ecuConnected: false, powerSource: 'OFF' });
+    updatePowerSourceIndicator('engSync', { ecuConnected: false, powerSource: 'OFF' });
     try {
         await fetch(`${API_URL}/active-session/close`, {
             method : 'POST',
@@ -458,14 +459,18 @@ async function initChart() {
         if (key === todayKey) todayHours = val;
     });
 
-    if (activeChart) activeChart.destroy();
-
-    activeChart = new Chart(ctx, {
+    if (activeChart) {
+        activeChart.data.labels = labels;
+        activeChart.data.datasets[0].data = dataPoints;
+        activeChart.data.datasets[0].backgroundColor = dataPoints.map((_, i) => i === dataPoints.length - 1 ? '#f97316' : 'rgba(23,69,165,0.8)');
+        activeChart.update('none');
+    } else {
+        activeChart = new Chart(ctx, {
         type: 'bar',
         data: {
             labels,
             datasets: [{
-                label          : 'ECU Connected',
+                label          : 'Genset Active',
                 data           : dataPoints,
                 backgroundColor: dataPoints.map((_, i) => i === 6 ? '#f97316' : 'rgba(23,69,165,0.8)'),
                 borderRadius   : 8,
@@ -477,20 +482,21 @@ async function initChart() {
             maintainAspectRatio  : false,
             plugins: {
                 legend : { display: false },
-                tooltip: { callbacks: { label: ctx => ` ECU connected ${ctx.parsed.y} jam` } }
+                tooltip: { callbacks: { label: ctx => ` Genset aktif ${ctx.parsed.y} jam` } }
             },
             scales: {
                 y: {
                     beginAtZero : true,
                     suggestedMax: 8,
-                    title       : { display: true, text: 'Jam ECU Connected' },
+                    title       : { display: true, text: 'Jam Genset Aktif' },
                     ticks       : { callback: v => v + 'h' },
                     grid        : { color: 'rgba(0,0,0,0.05)' }
                 },
                 x: { grid: { display: false } }
             }
         }
-    });
+        });
+    }
 
     const tEl = document.getElementById('engToday');
     if (tEl) tEl.innerText = fmtHours(todayHours);
@@ -549,7 +555,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(updateSensorData, SENSOR_REFRESH_MS);
     setInterval(updateAuxiliaryData, AUX_REFRESH_MS);
 
-    // Refresh active time secukupnya agar tidak membebani browser/server.
+    // Refresh active time secukupnya agar chart tidak terus dibuat ulang dan membebani browser/server.
     setInterval(initChart, CHART_REFRESH_MS);
 
     // Trigger recalculate sesi hari ini di server setiap 10 menit

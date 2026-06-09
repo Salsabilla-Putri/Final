@@ -1965,8 +1965,6 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"recordId\":\"" + r.recordId + "\",";
   json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
-  json += "\"espSentAtMs\":" + String(r.timestampMs) + ",";
-  json += "\"ecuConnected\":" + String(linkOK ? "true" : "false") + ",";
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
   json += "\"map\":" + String(a.mapAvg, 1) + ",";
@@ -1980,9 +1978,7 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false");
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
   json += "}";
   return json;
 }
@@ -2026,8 +2022,6 @@ String buildMqttRealtimeFlatPayload() {
   const AggregatedData &a = r.agg;
   String json = "{";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
-  json += "\"espSentAtMs\":" + String(r.timestampMs) + ",";
-  json += "\"ecuConnected\":" + String(linkOK ? "true" : "false") + ",";
 
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
@@ -2045,9 +2039,7 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false");
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
 
   json += "}";
 
@@ -2393,7 +2385,7 @@ void publishRealtimeData() {
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (storageBatch[i].valid) {
       Serial.print(storageBatch[i].timestamp);
-      Serial.print(F(" espSentAtMs="));
+      Serial.print(F(" espLocalMs="));
       Serial.print(storageBatch[i].timestampMs);
       break;
     }
@@ -4896,9 +4888,7 @@ String buildCloudEstimateRecordOnly() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false");
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
   json += "}";
   return json;
 }
