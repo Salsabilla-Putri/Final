@@ -1635,22 +1635,6 @@ mqttClient.on('message', async (topic, message) => {
         latestData.transportLatencyMs = espTimestamp ? Math.max(0, latestRealtimeReceivedAt.getTime() - espTimestamp.getTime()) : latestData.transportLatencyMs;
         broadcastEngineRealtimeUpdate();
 
-        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-        if (fftDoc) {
-            latestData.fft = {
-                valid: true,
-                source: fftDoc.source,
-                sampleRateHz: fftDoc.sampleRateHz,
-                samples: fftDoc.samples,
-                resolutionHz: fftDoc.resolutionHz,
-                peakHz: fftDoc.peakHz,
-                peakMagnitude: fftDoc.peakMagnitude,
-                rms: fftDoc.rms,
-                freqBins: fftDoc.freqBins,
-                magBins: fftDoc.magBins
-            };
-        }
-
         // gen/realtime: jalur dashboard + alert + active time.
         // Alert tidak menunggu batch MongoDB.
         if (topic === 'gen/realtime') {
