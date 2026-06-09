@@ -9,25 +9,6 @@ const tls = require('tls');
 const { EventEmitter } = require('events');
 require('dotenv').config();
 
-const DEFAULT_MONGODB_URI = 'mongodb://smartgen_sec8AePh:S6dS29VM31@nosql.smartsystem.id:27017/smartgen?authSource=smartgen';
-const DEFAULT_MESSAGE_BROKER_HOST = 'nosql.smartsystem.id';
-const DEFAULT_MESSAGE_BROKER_URL = `mqtt://${DEFAULT_MESSAGE_BROKER_HOST}:1883`;
-const DEFAULT_MESSAGE_BROKER_USERNAME = 'smartgen_sec8AePh';
-const DEFAULT_MESSAGE_BROKER_PASSWORD = 'rai2Oi1U';
-const DEFAULT_MESSAGE_BROKER_VHOST = '/smartgen';
-
-const configuredMessageBrokerVhost = process.env.MESSAGE_BROKER_VHOST || process.env.MQTT_VHOST || DEFAULT_MESSAGE_BROKER_VHOST;
-const configuredMessageBrokerUsername = process.env.MESSAGE_BROKER_USERNAME || process.env.MQTT_USERNAME || DEFAULT_MESSAGE_BROKER_USERNAME;
-const configuredMessageBrokerPassword = process.env.MESSAGE_BROKER_PASSWORD || process.env.MQTT_PASSWORD || DEFAULT_MESSAGE_BROKER_PASSWORD;
-const configuredMqttBroker = process.env.MQTT_BROKER || process.env.MESSAGE_BROKER_URL || DEFAULT_MESSAGE_BROKER_URL;
-
-function buildMqttUsername(username, vhost) {
-    if (!vhost || username.includes(':')) return username;
-    return `${vhost}:${username}`;
-}
-
-const configuredMqttUsername = buildMqttUsername(configuredMessageBrokerUsername, configuredMessageBrokerVhost);
-
 const sgMail = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 const {
@@ -94,11 +75,29 @@ async function ensureDbReady() {
         return isDbReady();
     }
 
-    dbConnectPromise = mongoose.connect(process.env.MONGODB_URI || DEFAULT_MONGODB_URI, {
+    // Normalisasi URI MongoDB: pastikan ada protokol
+    const rawMongoUri = (process.env.MONGODB_URI || '').trim();
+    // Tambahkan directConnection=true otomatis jika belum ada
+    // Ini mencegah Mongoose mengikuti hostname replica set internal (mis. 'nappa:27017')
+    function addDirectConnection(uri) {
+        if (!uri || uri.includes('directConnection')) return uri;
+        const sep = uri.includes('?') ? '&' : '?';
+        return `${uri}${sep}directConnection=true`;
+    }
+
+    const mongoUri = addDirectConnection(
+        rawMongoUri
+            ? (/^mongodb(\+srv)?:\/\//i.test(rawMongoUri) ? rawMongoUri : `mongodb://${rawMongoUri}`)
+            : 'mongodb://smartgen_sec8AePh:S6dS29VM31@nosql.smartsystem.id:27017/smartgen?authSource=smartgen'
+    );
+
+    dbConnectPromise = mongoose.connect(mongoUri, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
-        serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000', 10),
-        socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '10000', 10)
+        serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '30000', 10),
+        socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '45000', 10),
+        connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || '30000', 10),
+        heartbeatFrequencyMS: 10000
     })
     .then(async () => {
         console.log('✅ MongoDB Connected');
@@ -214,9 +213,8 @@ const configSchema = new mongoose.Schema({
 });
 const Config = mongoose.model('Config', configSchema);
 
-// DATABASE (startup connect + auto retry via ensureDbReady saat endpoint dipanggil)
 // Di Vercel, jangan membuka koneksi MongoDB saat module di-import agar cold start
-// tidak berubah menjadi 502. Koneksi dibuat saat request API pertama yang butuh DB.
+// tidak berubah menjadi 502. Koneksi dibuka saat pertama kali request API butuh DB.
 if (shouldWarmDbOnStartup) {
     ensureDbReady().catch(() => undefined);
 }
@@ -473,6 +471,7 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
 
     if (uniqueRecipients.length === 0) return;
 
+    const sgMail = require('@sendgrid/mail');
     sgMail.setApiKey(apiKey);
 
     // LOGIKA GRUP: Membuat ringkasan untuk Subjek Email
@@ -569,15 +568,34 @@ async function loadThresholdsFromDB() {
 }
 
 // --- MQTT LOGIC ---
-// Broker default mengikuti konfigurasi SmartSystem; bisa dioverride lewat environment variable.
+// Normalisasi URL broker: tambah protokol default jika tidak ada
+function normalizeBrokerUrl(raw, defaultProtocol = 'mqtt') {
+    const url = (raw || '').trim();
+    if (!url) return null;
+    if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) return url;
+    return `${defaultProtocol}://${url}`;
+}
+
+// RabbitMQ MQTT credentials
+const MQTT_BROKER_URL = normalizeBrokerUrl(process.env.MQTT_BROKER) || 'mqtt://rmq230.smartsystem.id:1883';
+const MQTT_VHOST     = process.env.MQTT_VHOST    || '/smartgen';
+const MQTT_USERNAME  = process.env.MQTT_USERNAME || 'smartgen_sec8AePh';
+const MQTT_PASSWORD  = process.env.MQTT_PASSWORD || 'rai2Oi1U';
+
+// RabbitMQ MQTT plugin: format username adalah "username:vhost"
+// Contoh: "smartgen_sec8AePh:/smartgen"
+const MQTT_AUTH_USERNAME = process.env.MQTT_AUTH_USERNAME
+    || `${MQTT_VHOST}:${MQTT_USERNAME}`;
+
 const mqttClient = mqtt && shouldStartMqtt
-    ? mqtt.connect(configuredMqttBroker, {
-        clientId:        'server-' + Math.random().toString(16).slice(2, 8),
-        username:        configuredMqttUsername,
-        password:        configuredMessageBrokerPassword,
-        keepalive:       60,
-        reconnectPeriod: 3000,
-        connectTimeout:  10000
+    ? mqtt.connect(MQTT_BROKER_URL, {
+        clientId: 'server-' + Math.random().toString(16).slice(2, 8),
+        username: MQTT_AUTH_USERNAME,
+        password: MQTT_PASSWORD,
+        keepalive: 60,
+        reconnectPeriod: 5000,
+        connectTimeout: 15000,
+        clean: true
     })
     : createDisabledMqttClient(
         shouldStartMqtt
@@ -631,13 +649,7 @@ app.get('/api/health', (req, res) => {
     const mqttConnected = typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false;
     const checks = {
         mongodb: { status: mongodbStatus, connected: mongodbState === 1 },
-        mqtt: {
-            enabled: shouldStartMqtt,
-            connected: mqttConnected,
-            broker: configuredMqttBroker,
-            vhost: configuredMessageBrokerVhost,
-            username: configuredMessageBrokerUsername
-        },
+        mqtt: { enabled: shouldStartMqtt, connected: mqttConnected },
         env: {
             mongodbUri: Boolean(process.env.MONGODB_URI),
             vercel: isVercelRuntime
@@ -671,10 +683,10 @@ app.use('/api', async (req, res, next) => {
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: null,
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF', synced: false, powerSource: 'OFF', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
+    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
-const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '3000', 10);
+const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
 const ACTIVE_SESSION_TIMEOUT_MS = ECU_DISCONNECT_THRESHOLD_MS;
 let latestRealtimeReceivedAt = null;
 const engineStreamClients = new Set();
@@ -730,71 +742,21 @@ function getValidDate(value) {
     return dt && Number.isFinite(dt.getTime()) ? dt : null;
 }
 
-function getLatestMqttSnapshot(deviceId = null) {
-    if (!latestData || latestData._realtime !== true) return null;
-    if (deviceId && latestData.deviceId && latestData.deviceId !== deviceId) return null;
+function getLatestRealtimeSnapshot() {
+    if (!isRealtimeSnapshotFresh()) return null;
 
-    const serverSeenAt = getValidDate(latestData.realtimeReceivedAt)
-        || getValidDate(latestData.lastMqttUpdate)
-        || getValidDate(latestData.serverReceivedAt)
-        || getValidDate(latestRealtimeReceivedAt);
-    const timestamp = getValidDate(latestData.timestamp) || serverSeenAt || new Date();
-
+    const timestamp = getValidDate(latestData?.timestamp) || getValidDate(latestRealtimeReceivedAt) || new Date();
     return {
         ...latestData,
         timestamp,
-        lastMqttUpdate: serverSeenAt,
-        realtimeReceivedAt: serverSeenAt,
-        serverReceivedAt: serverSeenAt
-    };
-}
-
-function getLatestRealtimeSnapshot(deviceId = null) {
-    const snapshot = getLatestMqttSnapshot(deviceId);
-    if (!snapshot || !isRealtimeSnapshotFresh(snapshot, snapshot.realtimeReceivedAt)) return null;
-    return snapshot;
-}
-
-function getSnapshotServerUpdatedAt(data = {}) {
-    return getValidDate(data.realtimeReceivedAt)
-        || getValidDate(data.lastMqttUpdate)
-        || getValidDate(data.serverReceivedAt)
-        || getValidDate(data.timestamp);
-}
-
-function isSnapshotEcuConnected(data = {}, serverUpdatedAt = getSnapshotServerUpdatedAt(data)) {
-    const payloadEcuConnected = toBooleanOrUndefined(data.ecuConnected);
-    return Boolean(serverUpdatedAt)
-        && (Date.now() - serverUpdatedAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS
-        && payloadEcuConnected !== false;
-}
-
-function enrichEngineSnapshot(data, {
-    previousDoc = null,
-    recentDocs = [],
-    engineHours = 0,
-    forceDisconnected = false
-} = {}) {
-    const serverUpdatedAt = getSnapshotServerUpdatedAt(data) || new Date();
-    const ecuConnected = forceDisconnected ? false : isSnapshotEcuConnected(data, serverUpdatedAt);
-
-    return {
-        ...data,
-        ecuConnected,
-        engineHours,
-        lastMqttUpdate: serverUpdatedAt,
-        lastUpdated: serverUpdatedAt,
-        realtimeReceivedAt: data.realtimeReceivedAt || data.lastMqttUpdate || (data._realtime ? serverUpdatedAt : data.realtimeReceivedAt),
-        serverReceivedAt: data.serverReceivedAt || serverUpdatedAt,
-        alerts: generateAlerts(data, previousDoc),
-        maintenance: getMaintenanceStatus(data, recentDocs),
-        ...getPublicLabels(data)
+        lastMqttUpdate: latestRealtimeReceivedAt,
+        realtimeReceivedAt: latestRealtimeReceivedAt
     };
 }
 
 function pickLatestEngineSnapshot(dbData, deviceId) {
     const dbTimestamp = getValidDate(dbData?.timestamp);
-    const realtimeData = getLatestRealtimeSnapshot(deviceId);
+    const realtimeData = getLatestRealtimeSnapshot();
 
     // Page engine harus menampilkan data MQTT yang baru diterima secara real-time.
     // Timestamp dari ESP32/backup kadang lebih tua/lebih baru dari dokumen MongoDB,
@@ -913,7 +875,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, rule: 'ECU/MQTT connected', sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'ECU connected', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -987,15 +949,10 @@ async function closeStaleActiveSessions(requestedDeviceId = null) {
 
 async function syncActiveTimeHistory(data) {
     const rpmThreshold = 0;
-    const eventTime = safeEventTime(data?.realtimeReceivedAt || data?.lastMqttUpdate || data?.serverReceivedAt || data?.timestamp);
+    const eventTime = safeEventTime(data?.timestamp);
     const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
-    const payloadEcuConnected = toBooleanOrUndefined(data?.ecuConnected);
-    const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS && payloadEcuConnected !== false;
-    // Active time mengikuti durasi koneksi per hari, bukan RPM/status mesin.
-    // Jika payload ECU tersedia, gunakan ECU connected; jika tidak tersedia, fallback ke
-    // durasi ESP32 yang masih aktif mengirim MQTT realtime.
-    const isMqttConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
-    const isRunning = payloadEcuConnected === undefined ? isMqttConnected : isEcuConnected;
+    const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
+    const isRunning = isEcuConnected;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     let session = activeSessions.get(key);
@@ -1020,7 +977,7 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, rule: 'ECU/MQTT connected', sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
         });
         return;
     }
@@ -1035,7 +992,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, rule: 'ECU/MQTT connected', sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
             });
             return;
         }
@@ -1043,7 +1000,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, rule: 'ECU/MQTT connected', sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
@@ -1082,7 +1039,7 @@ setInterval(async () => {
 
 mqttClient.on('connect', () => {
     mqttIngestStats.connectedAt = new Date();
-    console.log(`✅ Connected to MQTT Broker: ${configuredMqttBroker}`);
+    console.log(`✅ Connected to RabbitMQ MQTT | broker: ${MQTT_BROKER_URL} | vhost: ${MQTT_VHOST} | user: ${MQTT_USERNAME}`);
     mqttClient.subscribe('gen/realtime', (err) => {
         if (err) console.error('❌ Subscribe error (gen/realtime):', err.message);
         else console.log('📡 Subscribed to gen/realtime');
@@ -1099,27 +1056,6 @@ mqttClient.on('offline',   () => console.warn('⚠️  MQTT Offline'));
 mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
-
-async function handleMqttDisconnected(reason = 'mqtt_disconnect') {
-    mqttIngestStats.lastErrorAt = new Date();
-    mqttIngestStats.lastError = reason;
-    if (latestData?._realtime) {
-        latestData.ecuConnected = false;
-        latestData.powerSource = 'OFF';
-        latestData.sync = 'OFF';
-        latestData.synced = false;
-        broadcastEngineRealtimeUpdate();
-    }
-    if (!isDbReady()) return;
-    try {
-        await closeActiveSessions('esp32_disconnect');
-    } catch (error) {
-        console.error('Failed closing active sessions after MQTT disconnect:', error.message);
-    }
-}
-
-mqttClient.on('offline', () => { handleMqttDisconnected('mqtt_offline'); });
-mqttClient.on('close', () => { handleMqttDisconnected('mqtt_close'); });
 
 // gen/realtime memperbarui dashboard/alert secara langsung.
 // gen/data menyimpan record history realtime dari ESP32 ke MongoDB.
@@ -1141,7 +1077,7 @@ function buildGeneratorDbDocument(data) {
     const snapshot = { ...data };
 
     if (snapshot.rpm > 0) {
-        snapshot.status = snapshot.powerSource === 'SYNC' ? 'ON-GRID' : 'RUNNING';
+        snapshot.status = snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
     } else {
         snapshot.status = 'STOPPED';
     }
@@ -1165,9 +1101,9 @@ function buildGeneratorDbDocument(data) {
         temp: toNumber(snapshot.temp, 0),
         coolant: toNumber(snapshot.coolant ?? snapshot.clt, 0),
         fuel: toNumber(snapshot.fuel, 0),
-        sync: normalizeSyncStatus(snapshot, snapshot.sync || snapshot.powerSource || 'GENSET'),
-        synced: normalizePowerSource(snapshot, snapshot.powerSource, snapshot.sync) === 'SYNC',
-        powerSource: normalizePowerSource(snapshot, snapshot.powerSource, snapshot.sync),
+        sync: snapshot.sync || 'OFF-GRID',
+        synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
+        powerSource: snapshot.powerSource || (snapshot.sync === 'ON-GRID' || snapshot.synced === true ? 'GRID' : 'GENSET'),
         status: snapshot.status,
         iat: toNumber(snapshot.iat, 0),
         map: toNumber(snapshot.map, 0),
@@ -1463,64 +1399,18 @@ function readPowerValue(payload = {}) {
     return Number.isFinite(parsedWatt) ? parsedWatt / 1000 : undefined;
 }
 
-function normalizeFourStatePowerSourceValue(value) {
-    const key = String(value || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
-    if (['OFF', 'ECU-OFF', 'ECU-DISCONNECTED', 'DISCONNECTED', 'OFFLINE', 'NO-DATA'].includes(key)) return 'OFF';
-    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
-    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
-    if (['GENSET', 'GENERATOR', 'GEN', 'OFF-GRID', 'OFFGRID'].includes(key)) return 'GENSET';
-    return null;
-}
-
-function normalizeSyncStatus(payload = {}, fallbackSync = 'GENSET') {
-    const rawSync = firstDefined(payload.sync, payload.syncStatus, payload.gridStatus);
-    const syncState = normalizeFourStatePowerSourceValue(rawSync);
-    if (syncState) return syncState;
-
+function normalizeSyncStatus(payload = {}, fallbackSync = 'OFF-GRID') {
     if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
         const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
-        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid' || value === 'sync') return 'SYNC';
-        if (value === false || value === 0 || value === 'false' || value === '0') return 'GENSET';
+        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid') return 'ON-GRID';
+        if (value === false || value === 0 || value === 'false' || value === '0' || value === 'off-grid' || value === 'offgrid') return 'OFF-GRID';
     }
 
-    return normalizeFourStatePowerSourceValue(fallbackSync) || 'GENSET';
-}
-
-function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fallbackSync = 'GENSET') {
-    const payloadEcuConnected = toBooleanOrUndefined(payload.ecuConnected);
-    if (payloadEcuConnected === false) return 'OFF';
-
-    const rawSource = firstDefined(
-        payload.powerSource,
-        payload.power_source,
-        payload.supplySource,
-        payload.supply_source,
-        payload.source
-    );
-    const sourceState = normalizeFourStatePowerSourceValue(rawSource);
-    if (sourceState) return sourceState;
-
-    const rawSyncState = normalizeFourStatePowerSourceValue(firstDefined(payload.sync, payload.syncStatus, payload.gridStatus));
-    if (rawSyncState) return rawSyncState;
-
-    if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
-        const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
-        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid' || value === 'sync') return 'SYNC';
-        if (value === false || value === 0 || value === 'false' || value === '0') return 'GENSET';
-    }
-
-    const hasGensetPayload = [payload.rpm, payload.volt, payload.freq, payload.power, payload.powerKW]
-        .some((value) => toNumber(value, 0) > 0);
-    if (hasGensetPayload) return 'GENSET';
-
-    const fallbackState = normalizeFourStatePowerSourceValue(fallbackPowerSource);
-    if (fallbackState) return fallbackState;
-
-    return normalizeSyncStatus(payload, fallbackSync) || 'GENSET';
-}
-
-function powerSourceToSyncStatus(powerSource) {
-    return normalizeFourStatePowerSourceValue(powerSource) || 'GENSET';
+    const rawSync = firstDefined(payload.sync, payload.syncStatus, payload.gridStatus, fallbackSync, 'OFF-GRID');
+    const key = String(rawSync).trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(key)) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(key)) return 'OFF-GRID';
+    return key || 'OFF-GRID';
 }
 
 function pickEffectivePayload(rawPayload) {
@@ -1542,8 +1432,7 @@ function normalizeGeneratorPayload(rawPayload) {
     const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
     const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
 
-    const powerSource = normalizePowerSource(payload, latestData.powerSource, latestData.sync);
-    const syncStatus = powerSourceToSyncStatus(powerSource);
+    const syncStatus = normalizeSyncStatus(payload, latestData.sync);
 
     const snapshot = {
         ...latestData,
@@ -1558,8 +1447,8 @@ function normalizeGeneratorPayload(rawPayload) {
         coolant: toNumber(readCoolantValue(payload), latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
         sync: syncStatus,
-        synced: powerSource === 'SYNC',
-        powerSource,
+        synced: syncStatus === 'ON-GRID',
+        powerSource: String(payload.powerSource || payload.power_source || (syncStatus === 'ON-GRID' ? 'GRID' : 'GENSET')).toUpperCase(),
         status: String(payload.status || latestData.status || 'STOPPED'),
         oil: toNumber(payload.oil, latestData.oil),
         iat: toNumber(payload.iat, latestData.iat),
@@ -1586,7 +1475,7 @@ function normalizeGeneratorPayload(rawPayload) {
 
     if (!payload.status) {
         snapshot.status = snapshot.rpm > 0
-            ? (snapshot.powerSource === 'SYNC' ? 'ON-GRID' : 'RUNNING')
+            ? (snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING')
             : 'STOPPED';
     }
 
@@ -1915,9 +1804,7 @@ app.get('/api/mqtt-ingest/status', (req, res) => {
         success: true,
         mqttAvailable: Boolean(mqtt),
         mqttConnected: typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false,
-        broker: configuredMqttBroker,
-        vhost: configuredMessageBrokerVhost,
-        username: configuredMessageBrokerUsername,
+        broker: process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883',
         subscribedTopics: ['gen/realtime', 'gen/data'],
         dbReady: isDbReady(),
         stats: mqttIngestStats
@@ -1981,40 +1868,56 @@ app.get('/api/engine-data/latest', async (req, res) => {
     try {
         const requestedDeviceId = req.query.deviceId;
         const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
-        const realtimeData = getLatestRealtimeSnapshot(effectiveDeviceId);
-        const cachedMqttData = getLatestMqttSnapshot(effectiveDeviceId);
+        const realtimeData = getLatestRealtimeSnapshot();
 
-        // Jika MQTT masih fresh, dashboard langsung memakai snapshot memory dengan timestamp server.
-        if (realtimeData) {
-            const enrichedRealtime = enrichEngineSnapshot(realtimeData, { engineHours: 0 });
+        // Untuk Render/live dashboard: jangan tunggu MongoDB bila MQTT baru saja masuk.
+        // Page engine polling endpoint ini tiap detik, sehingga snapshot memory harus langsung dikirim.
+        if (realtimeData && (!effectiveDeviceId || realtimeData.deviceId === effectiveDeviceId)) {
+            const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
+                || getValidDate(realtimeData.timestamp)
+                || new Date();
+            const payloadEcuConnected = toBooleanOrUndefined(realtimeData.ecuConnected);
+            const enrichedRealtime = {
+                ...realtimeData,
+                timestamp: lastDataAt,
+                ecuConnected: payloadEcuConnected !== false,
+                engineHours: 0,
+                lastMqttUpdate: lastDataAt,
+                lastUpdated: lastDataAt,
+                alerts: generateAlerts(realtimeData, null),
+                maintenance: getMaintenanceStatus(realtimeData, []),
+                ...getPublicLabels(realtimeData)
+            };
             return res.json({ success: true, data: enrichedRealtime, source: 'realtime-memory' });
-        }
-
-        // Jika ESP32/MQTT tidak connect, tetap tampilkan data terakhir saat masih connected.
-        // lastUpdated dikunci ke waktu server terakhir menerima MQTT, bukan waktu browser sekarang.
-        if (cachedMqttData) {
-            const totalEngineHours = isDbReady() ? await getTotalOperatingHours(effectiveDeviceId).catch(() => 0) : 0;
-            const enrichedCached = enrichEngineSnapshot(cachedMqttData, { engineHours: totalEngineHours, forceDisconnected: true });
-            return res.json({ success: true, data: enrichedCached, source: 'realtime-memory-stale' });
         }
 
         if (!isDbReady()) await ensureDbReady();
 
         const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
-        const latestDocs = await GeneratorData.find(filter).sort({ serverReceivedAt: -1, timestamp: -1 }).limit(5).lean();
+        const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
         const dbData = latestDocs[0] || null;
         const baseData = pickLatestEngineSnapshot(dbData, effectiveDeviceId);
         if (!baseData) {
             return res.status(404).json({ success: false, error: 'No generator data found' });
         }
 
+        const baseTimestamp = getValidDate(baseData.timestamp);
+        const realtimeReceivedAt = getValidDate(baseData.realtimeReceivedAt || baseData.lastMqttUpdate);
+        const lastDataAt = realtimeReceivedAt || baseTimestamp || getValidDate(dbData?.timestamp) || latestRealtimeReceivedAt;
+        const ecuConnected = lastDataAt ? (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS : false;
         const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
-        const enrichedData = enrichEngineSnapshot(baseData, {
-            previousDoc,
-            recentDocs: latestDocs.slice(1),
-            engineHours: totalEngineHours
-        });
+        const enrichedData = {
+            ...baseData,
+            timestamp: lastDataAt || baseData.timestamp,
+            ecuConnected,
+            engineHours: totalEngineHours,
+            lastMqttUpdate: lastDataAt || baseData.timestamp,
+            lastUpdated: lastDataAt || baseData.timestamp,
+            alerts: generateAlerts(baseData, previousDoc),
+            maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
+            ...getPublicLabels(baseData)
+        };
         const source = baseData._realtime ? 'realtime-memory' : 'database';
         res.json({ success: true, data: enrichedData, source });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -2405,43 +2308,6 @@ app.post('/api/thresholds', async (req, res) => {
 });
 // --- TAMBAHAN API UNTUK ALARM (ACKNOWLEDGE & REMOVE) ---
 
-// 1. API untuk tombol ACKNOWLEDGE (Ubah status jadi resolved)
-app.put('/api/alerts/:id/ack', async (req, res) => {
-    try {
-        // Cari alarm berdasarkan ID dan ubah 'resolved' jadi true
-        const updatedAlert = await Alert.findByIdAndUpdate(
-            req.params.id, 
-            { acknowledged: true, acknowledgedAt: new Date() },
-            { new: true } // Opsi ini agar data yang dikembalikan adalah yang terbaru
-        );
-        
-        if (!updatedAlert) {
-            return res.status(404).json({ success: false, message: "Alarm not found" });
-        }
-
-        console.log(`✅ Alarm Acknowledged: ${req.params.id}`);
-        res.json({ success: true, data: updatedAlert });
-    } catch (error) {
-        console.error("Ack Error:", error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// 2. API untuk tombol REMOVE (Hapus permanen dari database)
-app.delete('/api/alerts/:id', async (req, res) => {
-    try {
-        const alert = await Alert.findById(req.params.id);
-        if (!alert) return res.status(404).json({ success: false, message: 'Alarm not found' });
-        if (!alert.resolved) return res.status(409).json({ success: false, message: 'Confirm alert before deleting it' });
-        await Alert.findByIdAndDelete(req.params.id);
-        console.log(`🗑️ Alarm Deleted: ${req.params.id}`);
-        res.json({ success: true, message: 'Alarm deleted successfully' });
-    } catch (error) {
-        console.error("Delete Error:", error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
 // --- 1. UPDATE SCHEMA MAINTENANCE ---
 // ==========================================
 //  TAMBAHAN: MAINTENANCE API (LOGIC BARU)
@@ -2542,70 +2408,6 @@ async function buildMaintenanceDecisionPayload() {
         suggestion: pendingSuggestion || null
     };
 }
-
-app.get('/api/maintenance/suggestion', async (req, res) => {
-    try {
-        const payload = await buildMaintenanceDecisionPayload();
-        res.json({ success: true, data: payload });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.get('/maintenance/suggestion', async (req, res) => {
-    try {
-        const payload = await buildMaintenanceDecisionPayload();
-        res.json({ success: true, data: payload });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.post('/api/maintenance/suggestion', async (req, res) => {
-    try {
-        const { decisionStatus, status, message, recommendation, suggestedDate, source } = req.body || {};
-        if (!decisionStatus || !message || !recommendation) {
-            return res.status(400).json({ success: false, error: 'decisionStatus, message, recommendation are required' });
-        }
-
-        const suggestion = await new MaintenanceSuggestion({
-            source: source || 'system',
-            status: status || 'pending',
-            decisionStatus,
-            message,
-            recommendation,
-            suggestedDate: suggestedDate ? new Date(suggestedDate) : null,
-            approvedAt: new Date()
-        }).save();
-
-        res.json({ success: true, data: suggestion });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.post('/maintenance/suggestion', async (req, res) => {
-    try {
-        const { decisionStatus, status, message, recommendation, suggestedDate, source } = req.body || {};
-        if (!decisionStatus || !message || !recommendation) {
-            return res.status(400).json({ success: false, error: 'decisionStatus, message, recommendation are required' });
-        }
-
-        const suggestion = await new MaintenanceSuggestion({
-            source: source || 'system',
-            status: status || 'pending',
-            decisionStatus,
-            message,
-            recommendation,
-            suggestedDate: suggestedDate ? new Date(suggestedDate) : null,
-            approvedAt: new Date()
-        }).save();
-
-        res.json({ success: true, data: suggestion });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
 
 app.put('/api/maintenance/suggestion/:id/status', async (req, res) => {
     try {
