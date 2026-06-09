@@ -234,8 +234,115 @@ function applyPublicSectionSidebar() {
   document.getElementById('logout-btn')?.addEventListener('click', (e) => { e.preventDefault(); handleLogout(); });
 }
 
+
+function setupChartFullscreen() {
+  if (document.body?.dataset.chartFullscreenReady === '1') return;
+  if (!document.body) return;
+  document.body.dataset.chartFullscreenReady = '1';
+
+  if (!document.getElementById('chart-fullscreen-style')) {
+    const style = document.createElement('style');
+    style.id = 'chart-fullscreen-style';
+    style.textContent = `
+      .chart-fullscreen-hint { cursor: zoom-in; }
+      .chart-fullscreen-backdrop {
+        position: fixed; inset: 0; z-index: 9999; background: rgba(15, 23, 42, 0.82);
+        display: flex; align-items: center; justify-content: center; padding: 24px;
+      }
+      .chart-fullscreen-panel {
+        position: relative; width: min(1180px, 96vw); height: min(760px, 88vh);
+        background: #fff; border-radius: 18px; box-shadow: 0 24px 80px rgba(0,0,0,.35);
+        padding: 54px 22px 22px; overflow: hidden;
+      }
+      .chart-fullscreen-title {
+        position: absolute; left: 24px; top: 18px; right: 72px; color: #0f172a;
+        font: 700 16px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .chart-fullscreen-close {
+        position: absolute; top: 12px; right: 14px; width: 38px; height: 38px; border: 0; border-radius: 999px;
+        background: #ef4444; color: #fff; font-size: 24px; line-height: 1; cursor: pointer;
+      }
+      .chart-fullscreen-canvas-wrap { width: 100%; height: 100%; }
+      .chart-fullscreen-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+      body.chart-fullscreen-open { overflow: hidden; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const resizeChart = (canvas) => {
+    if (window.Chart?.getChart) {
+      const chart = window.Chart.getChart(canvas);
+      if (chart) setTimeout(() => chart.resize(), 60);
+    }
+  };
+
+  document.addEventListener('mouseover', (event) => {
+    const canvas = event.target.closest?.('canvas');
+    if (canvas && window.Chart?.getChart?.(canvas)) canvas.classList.add('chart-fullscreen-hint');
+  });
+
+  const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+
+  document.addEventListener('click', (event) => {
+    const canvas = event.target.closest?.('canvas');
+    if (!canvas || !window.Chart?.getChart?.(canvas)) return;
+    if (canvas.closest('.chart-fullscreen-backdrop')) return;
+
+    if (!canvas.parentElement) return;
+    const sourceNext = canvas.nextSibling;
+    const sourceParent = canvas.parentNode;
+    const title = canvas.closest('.card, .chart-container, .trend-card, .fft-card')?.querySelector('h3, .chart-title')?.textContent?.trim()
+      || canvas.getAttribute('aria-label')
+      || canvas.id
+      || 'Grafik';
+
+    const safeTitle = escapeHtml(title);
+    const backdrop = document.createElement('div');
+    backdrop.className = 'chart-fullscreen-backdrop';
+    backdrop.innerHTML = `
+      <div class="chart-fullscreen-panel" role="dialog" aria-modal="true" aria-label="${safeTitle}">
+        <div class="chart-fullscreen-title">${safeTitle}</div>
+        <button class="chart-fullscreen-close" type="button" aria-label="Tutup grafik fullscreen">×</button>
+        <div class="chart-fullscreen-canvas-wrap"></div>
+      </div>`;
+
+    const fullscreenWrap = backdrop.querySelector('.chart-fullscreen-canvas-wrap');
+    const close = () => {
+      if (sourceNext && sourceNext.parentNode === sourceParent) sourceParent.insertBefore(canvas, sourceNext);
+      else sourceParent.appendChild(canvas);
+      backdrop.remove();
+      document.body.classList.remove('chart-fullscreen-open');
+      resizeChart(canvas);
+    };
+
+    fullscreenWrap.appendChild(canvas);
+    document.body.appendChild(backdrop);
+    document.body.classList.add('chart-fullscreen-open');
+    resizeChart(canvas);
+
+    backdrop.querySelector('.chart-fullscreen-close')?.addEventListener('click', close);
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    const onKey = (e) => {
+      if (e.key === 'Escape' && document.body.contains(backdrop)) {
+        close();
+        document.removeEventListener('keydown', onKey);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+  });
+}
+
 // Inisialisasi sidebar (load template, lalu render menu)
 document.addEventListener('DOMContentLoaded', function () {
+  setupChartFullscreen();
+
   const container = document.getElementById('sidebar-container');
   if (!container) return;
 

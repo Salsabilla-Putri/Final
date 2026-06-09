@@ -4349,7 +4349,25 @@ void drawSemiGauge(int x, int y, int r, float value, float minVal, float maxVal,
 
 void drawHeaderStatusDots(bool force) {
   static bool lastLink = false, lastWifi = false, lastMqtt = false, lastSd = false;
+  static uint32_t lastShownSeq = 0;
+  static uint32_t lastShownSecond = 0xFFFFFFFF;
   bool nowMqtt = mqtt.connected();
+  uint32_t currentSeq = localRecordSeq;
+  uint32_t currentSecond = millis() / 1000UL;
+
+  if (force || currentSeq != lastShownSeq || currentSecond != lastShownSecond) {
+    tft.fillRect(132, 28, 152, 12, C_PRIMARY);
+    tft.setTextColor(C_WHITE, C_PRIMARY);
+    tft.setTextSize(1);
+    tft.setCursor(132, 30);
+    tft.print("REC#");
+    tft.print(currentSeq);
+    tft.print("  ");
+    tft.print(currentSecond);
+    tft.print("s");
+    lastShownSeq = currentSeq;
+    lastShownSecond = currentSecond;
+  }
 
   if (force || lastLink != linkOK) {
     tft.fillCircle(315, 28, 6, C_PRIMARY);
