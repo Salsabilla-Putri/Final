@@ -52,7 +52,7 @@ const HISTORY_TABLE_COLUMNS = [
     { key: 'batt', header: 'Battery (V)', getter: (row) => formatHistoryValue(row.batt) },
     { key: 'afr', header: 'AFR', getter: (row) => formatHistoryValue(row.afr) },
     { key: 'tps', header: 'TPS (%)', getter: (row) => formatHistoryValue(row.tps) },
-    { key: 'status', header: 'Status', getter: (row) => row.status || 'normal' }
+    { key: 'sync', header: 'Status Sync', getter: (row) => getHistorySyncStatus(row) }
 ];
 
 const HISTORY_EXPORT_COLUMNS = HISTORY_TABLE_COLUMNS;
@@ -159,6 +159,13 @@ function updateSummaryTimeRange(startStr, endStr) {
 
 // --- 2. DATA PROCESSING ---
 
+function getHistorySyncStatus(row = {}) {
+    const rawSync = String(row.sync ?? row.syncStatus ?? row.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync) || row.synced === true) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync) || row.synced === false) return 'OFF-GRID';
+    return rawSync || '-';
+}
+
 function readHistoryParamValue(item, key) {
     if (key === 'phase') return getPhaseDifferenceValue(item);
     if (key === 'volt') return item.volt ?? item.voltage;
@@ -171,7 +178,8 @@ function buildTimestampRow(item) {
     const row = {
         timestamp: item.timestamp,
         rawDate: new Date(item.timestamp),
-        generator: item.deviceId || 'Gen-01'
+        generator: item.deviceId || 'Gen-01',
+        sync: getHistorySyncStatus(item)
     };
 
     Object.keys(PARAMS).forEach((key) => {
@@ -254,8 +262,10 @@ function renderTable() {
     pageData.forEach(row => {
         const tr = document.createElement('tr');
         tr.innerHTML = HISTORY_TABLE_COLUMNS.map((column) => {
-            if (column.key === 'status') {
-                return `<td><span class="status-badge status-${row.status}">${row.status}</span></td>`;
+            if (column.key === 'sync') {
+                const syncStatus = column.getter(row);
+                const cls = syncStatus === 'ON-GRID' ? 'status-normal' : syncStatus === 'OFF-GRID' ? 'status-critical' : 'status-warning';
+                return `<td><span class="status-badge ${cls}">${syncStatus}</span></td>`;
             }
             const value = column.getter(row);
             const cellClass = column.key !== 'timestamp' && column.key !== 'generator' ? ` class="value-cell value-${getParamStatus(column.key, row[column.key])}"` : '';

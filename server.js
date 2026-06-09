@@ -647,7 +647,7 @@ app.use('/api', async (req, res, next) => {
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: null,
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0
+    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
@@ -659,7 +659,9 @@ function buildEngineRealtimeStreamPayload() {
     const lastDataAt = getValidDate(latestData?.realtimeReceivedAt || latestData?.lastMqttUpdate)
         || getValidDate(latestData?.timestamp)
         || getValidDate(latestRealtimeReceivedAt);
-    const ecuConnected = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+    const freshByReceiveTime = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+    const payloadEcuConnected = toBooleanOrUndefined(latestData?.ecuConnected);
+    const ecuConnected = freshByReceiveTime && payloadEcuConnected !== false;
 
     return {
         success: true,
@@ -1304,6 +1306,16 @@ function toNumber(value, fallback = 0) {
     return Number.isFinite(n) ? n : fallback;
 }
 
+function toBooleanOrUndefined(value) {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes', 'connected', 'online'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'disconnected', 'offline'].includes(normalized)) return false;
+    return undefined;
+}
+
 function firstDefined(...values) {
     return values.find((value) => value !== undefined && value !== null && value !== '');
 }
@@ -1409,6 +1421,7 @@ function normalizeGeneratorPayload(rawPayload) {
         afr: toNumber(payload.afr, latestData.afr),
         tps: toNumber(payload.tps, latestData.tps),
         phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle ?? payload.phase_diff, latestData.phaseAngle ?? 0),
+        ecuConnected: toBooleanOrUndefined(payload.ecuConnected) ?? latestData.ecuConnected,
         espSentAtMs: toNumber(payload.espSentAtMs ?? payload.timestampMs, latestData.espSentAtMs),
         recordId: payload.recordId || latestData.recordId,
         localSeq: payload.localSeq ?? latestData.localSeq,
@@ -1635,6 +1648,22 @@ mqttClient.on('message', async (topic, message) => {
         latestData.transportLatencyMs = espTimestamp ? Math.max(0, latestRealtimeReceivedAt.getTime() - espTimestamp.getTime()) : latestData.transportLatencyMs;
         broadcastEngineRealtimeUpdate();
 
+        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
+        if (fftDoc) {
+            latestData.fft = {
+                valid: true,
+                source: fftDoc.source,
+                sampleRateHz: fftDoc.sampleRateHz,
+                samples: fftDoc.samples,
+                resolutionHz: fftDoc.resolutionHz,
+                peakHz: fftDoc.peakHz,
+                peakMagnitude: fftDoc.peakMagnitude,
+                rms: fftDoc.rms,
+                freqBins: fftDoc.freqBins,
+                magBins: fftDoc.magBins
+            };
+        }
+
         // gen/realtime: jalur dashboard + alert + active time.
         // Alert tidak menunggu batch MongoDB.
         if (topic === 'gen/realtime') {
@@ -1811,10 +1840,11 @@ app.get('/api/engine-data/latest', async (req, res) => {
             const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
                 || getValidDate(realtimeData.timestamp)
                 || new Date();
+            const payloadEcuConnected = toBooleanOrUndefined(realtimeData.ecuConnected);
             const enrichedRealtime = {
                 ...realtimeData,
                 timestamp: lastDataAt,
-                ecuConnected: true,
+                ecuConnected: payloadEcuConnected !== false,
                 engineHours: 0,
                 lastMqttUpdate: lastDataAt,
                 lastUpdated: lastDataAt,

@@ -1941,6 +1941,7 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
   json += "\"espSentAtMs\":" + String(r.timestampMs) + ",";
+  json += "\"ecuConnected\":" + String(linkOK ? "true" : "false") + ",";
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
   json += "\"map\":" + String(a.mapAvg, 1) + ",";
@@ -2001,6 +2002,7 @@ String buildMqttRealtimeFlatPayload() {
   String json = "{";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
   json += "\"espSentAtMs\":" + String(r.timestampMs) + ",";
+  json += "\"ecuConnected\":" + String(linkOK ? "true" : "false") + ",";
 
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";

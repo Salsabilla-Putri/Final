@@ -1,6 +1,6 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
-const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps'];
+const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps','phase'];
 const ESP_FRESHNESS_MS = 15000;
 const SYNC_THRESHOLDS = {
     voltDeltaMax: 10,
