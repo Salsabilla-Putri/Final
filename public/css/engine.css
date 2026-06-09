@@ -120,6 +120,10 @@ body {
 .ind-off { background: #fee2e2; color: #7f1d1d; }
 .ind-neutral { background: #f3f4f6; color: #374151; }
 
+.engine-live-meta { display:flex; gap:12px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+.timestamp-pill { display:inline-flex; flex-direction:column; gap:2px; padding:6px 10px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; color:var(--accent); min-width:130px; }
+.timestamp-pill span { font-size:10px; text-transform:uppercase; color:#64748b; font-weight:700; }
+.timestamp-pill b { font-size:12px; color:#0f172a; }
 
 .esp-connection {
     display: inline-flex;

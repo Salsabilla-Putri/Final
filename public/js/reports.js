@@ -55,8 +55,6 @@ let reportStatsBySensor   = null;
 let reportTotalMatched    = 0;
 let periodAlertCount      = 0;
 
-const REPORT_SAMPLE_MS = 1000;
-const REPORT_TABLE_COLUMNS = ['timestamp', 'rpm', 'volt', 'amp', 'power', 'freq', 'temp', 'coolant', 'fuel', 'iat', 'map', 'batt', 'afr', 'tps', 'phase'];
 
 function getReportDeviceId() {
     const params = new URLSearchParams(window.location.search);
@@ -136,7 +134,6 @@ function selectSingleSensor(key) {
 
     if (currentData.length > 0) {
         renderChart(currentData);
-        renderReportTable(currentData);
         updateChartTitle(
             document.getElementById('dateFrom')?.value,
             document.getElementById('dateTo')?.value
@@ -640,7 +637,6 @@ async function loadReportData() {
                 if (!applyRowsToReports(snapshot.rows, { ...snapshot.result, source: 'memory' })) {
                     renderDataSourceNotice({ source: 'empty range', mode: 'warning',
                         message: 'Belum ada data sensor untuk rentang waktu ini.' });
-                    renderReportTable([]);
                     showNoDataMessage();
                 }
             }
@@ -736,8 +732,15 @@ function computeTimeRange(data) {
     return Math.max(...stamps) - Math.min(...stamps);
 }
 
-function getBucketMsByRange() {
-    return REPORT_SAMPLE_MS;
+function getBucketMsByRange(timeRange) {
+    const hour = 60 * 60 * 1000;
+    const day  = 24 * hour;
+    if (timeRange > 120 * day) return 3 * day;
+    if (timeRange > 45  * day) return 2 * day;
+    if (timeRange > 7   * day) return 1 * day;
+    if (timeRange > 2   * day) return 6 * hour;
+    if (timeRange > day)       return 30 * 60 * 1000;
+    return 5 * 60 * 1000;
 }
 
 function aggregateDataByTimeBuckets(data, bucketMs) {
@@ -779,6 +782,9 @@ function buildAnalysisRows(data, sensorKey) {
     const timeRange  = computeTimeRange(data);
     const bucketMs   = getBucketMsByRange(timeRange);
     let aggregated   = aggregateDataByTimeBuckets(data, bucketMs);
+    if (Number.isFinite(activeRange.start) && Number.isFinite(activeRange.end)) {
+        aggregated = buildContinuousBuckets(aggregated, bucketMs, activeRange.start, activeRange.end);
+    }
     aggregated = aggregated.filter((row) => Number.isFinite(Number(row[sensorKey])));
 
     const maxRows = 1200;
@@ -1130,7 +1136,11 @@ function prepareChartData(data) {
     const bucketMs   = getBucketMsByRange(timeRange);
     let displayData  = aggregateDataByTimeBuckets(sortedData, bucketMs);
 
-    const maxPoints = 1800;
+    if (Number.isFinite(activeRange.start) && Number.isFinite(activeRange.end)) {
+        displayData = buildContinuousBuckets(displayData, bucketMs, activeRange.start, activeRange.end);
+    }
+
+    const maxPoints = 900;
     if (displayData.length > maxPoints) {
         const step = Math.ceil(displayData.length / maxPoints);
         displayData = displayData.filter((_, index) => index % step === 0);
@@ -1184,11 +1194,9 @@ function prepareChartData(data) {
 }
 
 function formatBucketLabel(bucketMs) {
-    const second = 1000;
     const minute = 60 * 1000;
     const hour   = 60 * minute;
     if (!bucketMs || bucketMs <= 0)    return '-';
-    if (bucketMs < minute)             return `${Math.max(1, Math.round(bucketMs / second))} sec`;
     if (bucketMs % (24 * hour) === 0)  return `${bucketMs / (24 * hour)} day`;
     if (bucketMs % hour === 0)         return `${bucketMs / hour} hour`;
     return `${Math.round(bucketMs / minute)} min`;
@@ -1199,7 +1207,7 @@ function updateChartDescription(bucketMs, sampleCount, insights = []) {
     if (!desc) return;
     const suffix      = Number.isFinite(sampleCount) ? ` (samples: ${sampleCount})` : '';
     const insightText = Array.isArray(insights) && insights.length ? ` | ${insights.join(' ')}` : '';
-    desc.textContent  = `Tren dan tabel menampilkan data per ${formatBucketLabel(bucketMs)}${suffix}.${insightText}`;
+    desc.textContent  = `Tren menampilkan nilai rata-rata per ${formatBucketLabel(bucketMs)}${suffix}.${insightText}`;
 }
 
 function getChartOptions(timeRange, yScale) {

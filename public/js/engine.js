@@ -73,6 +73,30 @@ function getSyncByThreshold(data) {
     return (voltOk && freqOk && phaseOk) ? 'ON-GRID' : 'OFF-GRID';
 }
 
+
+function formatTimestampWithMs(input) {
+    const dateObj = input instanceof Date ? input : new Date(input);
+    if (Number.isNaN(dateObj.getTime())) return '--';
+    const base = dateObj.toLocaleString('id-ID', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    return `${base}.${String(dateObj.getMilliseconds()).padStart(3, '0')}`;
+}
+
+function updateTimestampLatency(data = {}) {
+    const timestampEl = document.getElementById('espTimestamp');
+    const latencyEl = document.getElementById('latencyMs');
+    const espTs = data.timestamp || data.espTimestamp || data.lastUpdated || data.lastMqttUpdate;
+    if (timestampEl) timestampEl.innerText = formatTimestampWithMs(espTs);
+
+    const latency = Number(data.transportLatencyMs ?? data.latencyMs);
+    if (latencyEl) {
+        latencyEl.innerText = Number.isFinite(latency) ? `${Math.round(latency)} ms` : '-- ms';
+        latencyEl.title = data.serverReceivedAt ? `Server received at ${formatTimestampWithMs(data.serverReceivedAt)}` : '';
+    }
+}
+
 // === DATA FETCHING ===
 async function loadThresholds() {
     try {
@@ -95,12 +119,15 @@ async function fetchData() {
             const ts = Date.parse(lastTs || '');
             const isFresh = json.data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
             updateDashboard(json.data, isFresh);
+            updateTimestampLatency(json.data);
             setEspConnectionStatus(isFresh);
         } else {
             setEspConnectionStatus(false);
+            updateTimestampLatency({});
         }
     } catch (err) {
         setEspConnectionStatus(false);
+        updateTimestampLatency({});
     }
 }
 

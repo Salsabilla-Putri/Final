@@ -3,6 +3,7 @@ const API_URL = '/api/alerts';
 let currentFilter = 'all';
 let allAlarms = [];
 let currentPage = 1;
+let appliedDateRange = { startDate: '', endDate: '' };
 const PAGE_SIZE = 20;
 const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
   day: '2-digit',
@@ -72,9 +73,11 @@ async function fetchAlarms() {
     const dFrom = document.getElementById('dateFrom')?.value;
     const dTo = document.getElementById('dateTo')?.value;
 
-    let url = `${API_URL}?limit=10000`;
-    if (dFrom) url += `&startDate=${encodeURIComponent(dFrom)}`;
-    if (dTo) url += `&endDate=${encodeURIComponent(dTo)}`;
+    appliedDateRange = { startDate: dFrom || '', endDate: dTo || '' };
+    const params = new URLSearchParams({ limit: '10000' });
+    if (dFrom) params.set('startDate', dFrom);
+    if (dTo) params.set('endDate', dTo);
+    let url = `${API_URL}?${params.toString()}`;
 
     const res = await fetch(url, { headers: { Accept: 'application/json' } });
     const contentType = res.headers.get('content-type') || '';
@@ -95,7 +98,7 @@ async function fetchAlarms() {
 
 function updateStats() {
   const critical = allAlarms.filter(a => a.severity === 'critical').length;
-  const warning = allAlarms.filter(a => a.severity === 'medium' || a.severity === 'low').length;
+  const warning = allAlarms.filter(a => a.severity !== 'critical').length;
   const active = allAlarms.filter(a => !a.resolved).length;
   const total = allAlarms.length;
 
@@ -255,8 +258,36 @@ function downloadBlob(content, type, filename) {
   window.URL.revokeObjectURL(url);
 }
 
-window.exportAlarmCSV = function() {
-  const rows = getFilteredAlarms();
+
+function getAlertExportParams() {
+  const params = new URLSearchParams({ limit: '10000' });
+  const startDate = appliedDateRange.startDate || document.getElementById('dateFrom')?.value;
+  const endDate = appliedDateRange.endDate || document.getElementById('dateTo')?.value;
+  if (startDate) params.set('startDate', startDate);
+  if (endDate) params.set('endDate', endDate);
+  if (currentFilter === 'active') params.set('status', 'active');
+  if (currentFilter === 'critical') params.set('severity', 'critical');
+  if (currentFilter === 'warning') params.set('severity', 'warning');
+  return params;
+}
+
+async function getAlarmsForExport() {
+  const params = getAlertExportParams();
+  const res = await fetch(`${API_URL}?${params.toString()}`, { headers: { Accept: 'application/json' } });
+  const json = await res.json();
+  if (!res.ok || !json.success) throw new Error(json.error || json.message || 'Failed to export alerts');
+  return Array.isArray(json.data) ? json.data : [];
+}
+
+function getAlarmExportFilename(extension) {
+  const startDate = appliedDateRange.startDate || document.getElementById('dateFrom')?.value || 'all';
+  const endDate = appliedDateRange.endDate || document.getElementById('dateTo')?.value || 'all';
+  return `alarms_${currentFilter}_${startDate}_to_${endDate}.${extension}`;
+}
+window.exportAlarmCSV = async function() {
+  let rows = [];
+  try { rows = await getAlarmsForExport(); }
+  catch (error) { console.error(error); return showNotification('Failed to export filtered alerts', 'error'); }
   if (rows.length === 0) return alert('No alarms to export');
 
   let csv = 'Timestamp,Generator,Parameter,Value,Unit,Status\n';
@@ -273,11 +304,13 @@ window.exportAlarmCSV = function() {
     ].join(',') + '\n';
   });
 
-  downloadBlob(csv, 'text/csv;charset=utf-8;', `alarms_${currentFilter}_${document.getElementById('dateFrom')?.value || 'all'}_to_${document.getElementById('dateTo')?.value || 'all'}.csv`);
+  downloadBlob(csv, 'text/csv;charset=utf-8;', getAlarmExportFilename('csv'));
 }
 
-window.exportAlarmExcel = function() {
-  const rows = getFilteredAlarms();
+window.exportAlarmExcel = async function() {
+  let rows = [];
+  try { rows = await getAlarmsForExport(); }
+  catch (error) { console.error(error); return showNotification('Failed to export filtered alerts', 'error'); }
   if (rows.length === 0) return alert('No alarms to export');
 
   const tableRows = rows.map((alarm) => {
@@ -314,7 +347,7 @@ window.exportAlarmExcel = function() {
   downloadBlob(
     `\ufeff${htmlTable}`,
     'application/vnd.ms-excel;charset=utf-8;',
-    `alarms_${currentFilter}_${document.getElementById('dateFrom')?.value || 'all'}_to_${document.getElementById('dateTo')?.value || 'all'}.xls`
+    getAlarmExportFilename('xls')
   );
 }
 
