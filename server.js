@@ -46,7 +46,7 @@ const { analyzeCBM } = require('./lib_cbm_analysis');
 const app = express();
 const isVercelRuntime = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const enableServerlessMqtt = process.env.ENABLE_SERVERLESS_MQTT === 'true';
-const shouldStartMqtt = !isVercelRuntime || enableServerlessMqtt;
+let shouldStartMqtt = !isVercelRuntime || enableServerlessMqtt;
 const shouldWarmDbOnStartup = !isVercelRuntime || process.env.ENABLE_SERVERLESS_DB_WARMUP === 'true';
 
 // SECURITY HEADERS
@@ -85,10 +85,12 @@ async function ensureDbReady() {
         return `${uri}${sep}directConnection=true`;
     }
 
+    if (!rawMongoUri) {
+        throw new Error('MONGODB_URI is required. Set it in .env or environment variables.');
+    }
+
     const mongoUri = addDirectConnection(
-        rawMongoUri
-            ? (/^mongodb(\+srv)?:\/\//i.test(rawMongoUri) ? rawMongoUri : `mongodb://${rawMongoUri}`)
-            : 'mongodb://smartgen_sec8AePh:S6dS29VM31@nosql.smartsystem.id:27017/smartgen?authSource=smartgen'
+        /^mongodb(\+srv)?:\/\//i.test(rawMongoUri) ? rawMongoUri : `mongodb://${rawMongoUri}`
     );
 
     dbConnectPromise = mongoose.connect(mongoUri, {
@@ -325,6 +327,14 @@ const activeTimeHistorySchema = new mongoose.Schema({
 const ActiveTimeHistory = mongoose.models.ActiveTimeHistory || mongoose.model('ActiveTimeHistory', activeTimeHistorySchema, 'activetimehistories');
 
 
+function normalizeHttpUrl(raw) {
+    const url = (raw || '').trim();
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url.replace(/\/+$/, '');
+    return `https://${url}`.replace(/\/+$/, '');
+}
+
+const BACKEND_URL = normalizeHttpUrl(process.env.BACKEND_URL || process.env.APP_BASE_URL || process.env.PUBLIC_BASE_URL);
 const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || 'onboarding@resend.dev';
 const ALERT_EMAIL_COOLDOWN_MS = parseInt(process.env.ALERT_EMAIL_COOLDOWN_MS || '60000', 10);
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
@@ -517,12 +527,13 @@ async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
                     <p style="font-size: 14px; color: #666;">
                         <b>Waktu Kejadian:</b> ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB
                     </p>
+                    ${BACKEND_URL ? `
                     <div style="text-align: center; margin-top: 30px;">
-                        <a href="https://generator-monitoring-system.onrender.com" 
+                        <a href="${BACKEND_URL}"
                            style="background-color: #0275d8; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
                            Buka Dashboard Monitoring
                         </a>
-                    </div>
+                    </div>` : ''}
                 </div>
                 <div style="background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 12px; color: #999;">
                     Pesan otomatis - Harap tidak membalas email ini.
@@ -576,16 +587,21 @@ function normalizeBrokerUrl(raw, defaultProtocol = 'mqtt') {
     return `${defaultProtocol}://${url}`;
 }
 
-// RabbitMQ MQTT credentials
-const MQTT_BROKER_URL = normalizeBrokerUrl(process.env.MQTT_BROKER) || 'mqtt://rmq230.smartsystem.id:1883';
-const MQTT_VHOST     = process.env.MQTT_VHOST    || '/smartgen';
-const MQTT_USERNAME  = process.env.MQTT_USERNAME || 'smartgen_sec8AePh';
-const MQTT_PASSWORD  = process.env.MQTT_PASSWORD || 'rai2Oi1U';
+// RabbitMQ MQTT credentials: wajib diatur melalui .env / environment variables
+const MQTT_BROKER_URL = normalizeBrokerUrl(process.env.MQTT_BROKER);
+const MQTT_VHOST = process.env.MQTT_VHOST || '';
+const MQTT_USERNAME = process.env.MQTT_USERNAME || '';
+const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
+const isMqttConfigured = Boolean(MQTT_BROKER_URL && MQTT_USERNAME && MQTT_PASSWORD);
 
-// RabbitMQ MQTT plugin: format username adalah "username:vhost"
-// Contoh: "smartgen_sec8AePh:/smartgen"
+if (!isMqttConfigured) {
+    shouldStartMqtt = false;
+    console.warn('⚠️ MQTT disabled: set MQTT_BROKER, MQTT_USERNAME, and MQTT_PASSWORD in .env.');
+}
+
+// RabbitMQ MQTT plugin: set MQTT_AUTH_USERNAME jika broker membutuhkan format username khusus.
 const MQTT_AUTH_USERNAME = process.env.MQTT_AUTH_USERNAME
-    || `${MQTT_VHOST}:${MQTT_USERNAME}`;
+    || (MQTT_VHOST ? `${MQTT_VHOST}:${MQTT_USERNAME}` : MQTT_USERNAME);
 
 const mqttClient = mqtt && shouldStartMqtt
     ? mqtt.connect(MQTT_BROKER_URL, {
@@ -1804,7 +1820,7 @@ app.get('/api/mqtt-ingest/status', (req, res) => {
         success: true,
         mqttAvailable: Boolean(mqtt),
         mqttConnected: typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false,
-        broker: process.env.MQTT_BROKER || 'mqtt://generatorta20.cloud.shiftr.io:1883',
+        broker: MQTT_BROKER_URL,
         subscribedTopics: ['gen/realtime', 'gen/data'],
         dbReady: isDbReady(),
         stats: mqttIngestStats
@@ -3101,11 +3117,28 @@ function startBackgroundWorkers() {
     startCbmWorker();
 }
 
-const PORT = process.env.PORT || 3023;
+function readServerPort() {
+    const rawPort = process.env.SERVER_PORT || process.env.PORT || '3023';
+    const port = Number.parseInt(rawPort, 10);
+
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`Invalid server port: ${rawPort}. Set SERVER_PORT or PORT to a valid HTTP port.`);
+    }
+
+    if (port === 1883 || port === 8883) {
+        console.warn(`⚠️ SERVER_PORT/PORT is ${port}, which is commonly used for MQTT. Use MQTT_BROKER for the broker port and set SERVER_PORT/PORT to the HTTP dashboard port, for example 3023.`);
+    }
+
+    return port;
+}
+
+const PORT = readServerPort();
+const HOST = process.env.HOST || '0.0.0.0';
 
 if (require.main === module) {
-    app.listen(PORT, '0.0.0.0', () => {
-        console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+    app.listen(PORT, HOST, () => {
+        console.log(`🚀 Server listening on ${HOST}:${PORT}`);
+        console.log(`🌐 Open dashboard at ${BACKEND_URL || `http://localhost:${PORT}`}`);
         startBackgroundWorkers();
     });
 }
