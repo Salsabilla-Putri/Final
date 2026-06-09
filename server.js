@@ -706,21 +706,75 @@ function getValidDate(value) {
     return dt && Number.isFinite(dt.getTime()) ? dt : null;
 }
 
-function getLatestRealtimeSnapshot() {
-    if (!isRealtimeSnapshotFresh()) return null;
+function getLatestMqttSnapshot(deviceId = null) {
+    if (!latestData || latestData._realtime !== true) return null;
+    if (deviceId && latestData.deviceId && latestData.deviceId !== deviceId) return null;
 
-    const timestamp = getValidDate(latestData?.timestamp) || getValidDate(latestRealtimeReceivedAt) || new Date();
+    const serverSeenAt = getValidDate(latestData.realtimeReceivedAt)
+        || getValidDate(latestData.lastMqttUpdate)
+        || getValidDate(latestData.serverReceivedAt)
+        || getValidDate(latestRealtimeReceivedAt);
+    const timestamp = getValidDate(latestData.timestamp) || serverSeenAt || new Date();
+
     return {
         ...latestData,
         timestamp,
-        lastMqttUpdate: latestRealtimeReceivedAt,
-        realtimeReceivedAt: latestRealtimeReceivedAt
+        lastMqttUpdate: serverSeenAt,
+        realtimeReceivedAt: serverSeenAt,
+        serverReceivedAt: serverSeenAt
+    };
+}
+
+function getLatestRealtimeSnapshot(deviceId = null) {
+    const snapshot = getLatestMqttSnapshot(deviceId);
+    if (!snapshot || !isRealtimeSnapshotFresh(snapshot, snapshot.realtimeReceivedAt)) return null;
+    return snapshot;
+}
+
+function getSnapshotServerUpdatedAt(data = {}) {
+    return getValidDate(data.realtimeReceivedAt)
+        || getValidDate(data.lastMqttUpdate)
+        || getValidDate(data.serverReceivedAt)
+        || getValidDate(data.timestamp);
+}
+
+function isSnapshotEcuConnected(data = {}, serverUpdatedAt = getSnapshotServerUpdatedAt(data)) {
+    const payloadEcuConnected = toBooleanOrUndefined(data.ecuConnected);
+    return Boolean(serverUpdatedAt)
+        && (Date.now() - serverUpdatedAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS
+        && payloadEcuConnected !== false;
+}
+
+function enrichEngineSnapshot(data, {
+    previousDoc = null,
+    recentDocs = [],
+    engineHours = 0,
+    forceDisconnected = false
+} = {}) {
+    const serverUpdatedAt = getSnapshotServerUpdatedAt(data) || new Date();
+    const ecuConnected = forceDisconnected ? false : isSnapshotEcuConnected(data, serverUpdatedAt);
+
+    const visibleData = ecuConnected
+        ? data
+        : { ...data, powerSource: 'OFF', sync: 'OFF-GRID', synced: false };
+
+    return {
+        ...visibleData,
+        ecuConnected,
+        engineHours,
+        lastMqttUpdate: serverUpdatedAt,
+        lastUpdated: serverUpdatedAt,
+        realtimeReceivedAt: data.realtimeReceivedAt || data.lastMqttUpdate || (data._realtime ? serverUpdatedAt : data.realtimeReceivedAt),
+        serverReceivedAt: data.serverReceivedAt || serverUpdatedAt,
+        alerts: generateAlerts(visibleData, previousDoc),
+        maintenance: getMaintenanceStatus(visibleData, recentDocs),
+        ...getPublicLabels(visibleData)
     };
 }
 
 function pickLatestEngineSnapshot(dbData, deviceId) {
     const dbTimestamp = getValidDate(dbData?.timestamp);
-    const realtimeData = getLatestRealtimeSnapshot();
+    const realtimeData = getLatestRealtimeSnapshot(deviceId);
 
     // Page engine harus menampilkan data MQTT yang baru diterima secara real-time.
     // Timestamp dari ESP32/backup kadang lebih tua/lebih baru dari dokumen MongoDB,
@@ -917,6 +971,7 @@ async function syncActiveTimeHistory(data) {
     const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
     const payloadEcuConnected = toBooleanOrUndefined(data?.ecuConnected);
     const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS && payloadEcuConnected !== false;
+    // Active time mengikuti koneksi ECU/ESP32 via MQTT, bukan RPM/status mesin.
     const isRunning = isEcuConnected;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
@@ -1022,6 +1077,27 @@ mqttClient.on('error', (error) => {
     console.warn('⚠️ MQTT Error:', error.message);
 });
 
+async function handleMqttDisconnected(reason = 'mqtt_disconnect') {
+    mqttIngestStats.lastErrorAt = new Date();
+    mqttIngestStats.lastError = reason;
+    if (latestData?._realtime) {
+        latestData.ecuConnected = false;
+        latestData.powerSource = 'OFF';
+        latestData.sync = 'OFF-GRID';
+        latestData.synced = false;
+        broadcastEngineRealtimeUpdate();
+    }
+    if (!isDbReady()) return;
+    try {
+        await closeActiveSessions('esp32_disconnect');
+    } catch (error) {
+        console.error('Failed closing active sessions after MQTT disconnect:', error.message);
+    }
+}
+
+mqttClient.on('offline', () => { handleMqttDisconnected('mqtt_offline'); });
+mqttClient.on('close', () => { handleMqttDisconnected('mqtt_close'); });
+
 // gen/realtime memperbarui dashboard/alert secara langsung.
 // gen/data menyimpan record history realtime dari ESP32 ke MongoDB.
 // ============================================================
@@ -1068,7 +1144,7 @@ function buildGeneratorDbDocument(data) {
         fuel: toNumber(snapshot.fuel, 0),
         sync: snapshot.sync || 'OFF-GRID',
         synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
-        powerSource: snapshot.powerSource || (snapshot.sync === 'ON-GRID' || snapshot.synced === true ? 'GRID' : 'GENSET'),
+        powerSource: normalizePowerSource(snapshot, snapshot.powerSource, snapshot.sync),
         status: snapshot.status,
         iat: toNumber(snapshot.iat, 0),
         map: toNumber(snapshot.map, 0),
@@ -1378,6 +1454,35 @@ function normalizeSyncStatus(payload = {}, fallbackSync = 'OFF-GRID') {
     return key || 'OFF-GRID';
 }
 
+function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fallbackSync = 'OFF-GRID') {
+    const rawSource = firstDefined(
+        payload.powerSource,
+        payload.power_source,
+        payload.supplySource,
+        payload.supply_source,
+        payload.source
+    );
+    const key = String(rawSource || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+
+    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(key)) return 'OFF';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
+    if (['GENSET', 'GENERATOR', 'GEN'].includes(key)) return 'GENSET';
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
+
+    const syncStatus = normalizeSyncStatus(payload, fallbackSync);
+    if (syncStatus === 'ON-GRID') return 'SYNC';
+
+    const fallbackKey = String(fallbackPowerSource || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(fallbackKey)) return 'OFF';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(fallbackKey)) return 'GRID';
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(fallbackKey)) return 'SYNC';
+    return 'GENSET';
+}
+
+function powerSourceToSyncStatus(powerSource) {
+    return powerSource === 'SYNC' ? 'ON-GRID' : 'OFF-GRID';
+}
+
 function pickEffectivePayload(rawPayload) {
     const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
     const records = Array.isArray(payload.records) ? payload.records : [];
@@ -1397,7 +1502,8 @@ function normalizeGeneratorPayload(rawPayload) {
     const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
     const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
 
-    const syncStatus = normalizeSyncStatus(payload, latestData.sync);
+    const powerSource = normalizePowerSource(payload, latestData.powerSource, latestData.sync);
+    const syncStatus = powerSourceToSyncStatus(powerSource);
 
     const snapshot = {
         ...latestData,
@@ -1412,8 +1518,8 @@ function normalizeGeneratorPayload(rawPayload) {
         coolant: toNumber(readCoolantValue(payload), latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
         sync: syncStatus,
-        synced: syncStatus === 'ON-GRID',
-        powerSource: String(payload.powerSource || payload.power_source || (syncStatus === 'ON-GRID' ? 'GRID' : 'GENSET')).toUpperCase(),
+        synced: powerSource === 'SYNC',
+        powerSource,
         status: String(payload.status || latestData.status || 'STOPPED'),
         oil: toNumber(payload.oil, latestData.oil),
         iat: toNumber(payload.iat, latestData.iat),
@@ -1833,56 +1939,40 @@ app.get('/api/engine-data/latest', async (req, res) => {
     try {
         const requestedDeviceId = req.query.deviceId;
         const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
-        const realtimeData = getLatestRealtimeSnapshot();
+        const realtimeData = getLatestRealtimeSnapshot(effectiveDeviceId);
+        const cachedMqttData = getLatestMqttSnapshot(effectiveDeviceId);
 
-        // Untuk Render/live dashboard: jangan tunggu MongoDB bila MQTT baru saja masuk.
-        // Page engine polling endpoint ini tiap detik, sehingga snapshot memory harus langsung dikirim.
-        if (realtimeData && (!effectiveDeviceId || realtimeData.deviceId === effectiveDeviceId)) {
-            const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
-                || getValidDate(realtimeData.timestamp)
-                || new Date();
-            const payloadEcuConnected = toBooleanOrUndefined(realtimeData.ecuConnected);
-            const enrichedRealtime = {
-                ...realtimeData,
-                timestamp: lastDataAt,
-                ecuConnected: payloadEcuConnected !== false,
-                engineHours: 0,
-                lastMqttUpdate: lastDataAt,
-                lastUpdated: lastDataAt,
-                alerts: generateAlerts(realtimeData, null),
-                maintenance: getMaintenanceStatus(realtimeData, []),
-                ...getPublicLabels(realtimeData)
-            };
+        // Jika MQTT masih fresh, dashboard langsung memakai snapshot memory dengan timestamp server.
+        if (realtimeData) {
+            const enrichedRealtime = enrichEngineSnapshot(realtimeData, { engineHours: 0 });
             return res.json({ success: true, data: enrichedRealtime, source: 'realtime-memory' });
+        }
+
+        // Jika ESP32/MQTT tidak connect, tetap tampilkan data terakhir saat masih connected.
+        // lastUpdated dikunci ke waktu server terakhir menerima MQTT, bukan waktu browser sekarang.
+        if (cachedMqttData) {
+            const totalEngineHours = isDbReady() ? await getTotalOperatingHours(effectiveDeviceId).catch(() => 0) : 0;
+            const enrichedCached = enrichEngineSnapshot(cachedMqttData, { engineHours: totalEngineHours, forceDisconnected: true });
+            return res.json({ success: true, data: enrichedCached, source: 'realtime-memory-stale' });
         }
 
         if (!isDbReady()) await ensureDbReady();
 
         const filter = effectiveDeviceId ? { deviceId: effectiveDeviceId } : {};
-        const latestDocs = await GeneratorData.find(filter).sort({ timestamp: -1 }).limit(5).lean();
+        const latestDocs = await GeneratorData.find(filter).sort({ serverReceivedAt: -1, timestamp: -1 }).limit(5).lean();
         const dbData = latestDocs[0] || null;
         const baseData = pickLatestEngineSnapshot(dbData, effectiveDeviceId);
         if (!baseData) {
             return res.status(404).json({ success: false, error: 'No generator data found' });
         }
 
-        const baseTimestamp = getValidDate(baseData.timestamp);
-        const realtimeReceivedAt = getValidDate(baseData.realtimeReceivedAt || baseData.lastMqttUpdate);
-        const lastDataAt = realtimeReceivedAt || baseTimestamp || getValidDate(dbData?.timestamp) || latestRealtimeReceivedAt;
-        const ecuConnected = lastDataAt ? (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS : false;
         const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
-        const enrichedData = {
-            ...baseData,
-            timestamp: lastDataAt || baseData.timestamp,
-            ecuConnected,
-            engineHours: totalEngineHours,
-            lastMqttUpdate: lastDataAt || baseData.timestamp,
-            lastUpdated: lastDataAt || baseData.timestamp,
-            alerts: generateAlerts(baseData, previousDoc),
-            maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
-            ...getPublicLabels(baseData)
-        };
+        const enrichedData = enrichEngineSnapshot(baseData, {
+            previousDoc,
+            recentDocs: latestDocs.slice(1),
+            engineHours: totalEngineHours
+        });
         const source = baseData._realtime ? 'realtime-memory' : 'database';
         res.json({ success: true, data: enrichedData, source });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }

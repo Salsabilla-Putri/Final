@@ -1,9 +1,16 @@
 'use strict';
 
+const POWER_SOURCE_MAP = {
+    OFF: 'Power Source Off',
+    GRID: 'Using PLN',
+    GENSET: 'Using Generator',
+    SYNC: 'Grid and Generator Synchronized'
+};
+
 const SYNC_MAP = {
-    'OFF-GRID': 'Using Generator',
-    'ON-GRID': 'Using PLN',
-    HYBRID: 'Using Both'
+    'OFF-GRID': POWER_SOURCE_MAP.GENSET,
+    'ON-GRID': POWER_SOURCE_MAP.SYNC,
+    HYBRID: POWER_SOURCE_MAP.SYNC
 };
 
 const STATUS_MAP = {
@@ -13,9 +20,23 @@ const STATUS_MAP = {
 
 const COST_PER_KWH = 13150;
 
-function normalizeSync(syncValue) {
-    const key = String(syncValue || '').toUpperCase();
-    return SYNC_MAP[key] || 'Power Source Unknown';
+function normalizePowerSource(latestDoc = {}) {
+    if (latestDoc?.ecuConnected === false) return POWER_SOURCE_MAP.OFF;
+    const rawSource = String(latestDoc?.powerSource || latestDoc?.power_source || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (POWER_SOURCE_MAP[rawSource]) return POWER_SOURCE_MAP[rawSource];
+
+    const syncKey = String(latestDoc?.sync || '').toUpperCase();
+    return SYNC_MAP[syncKey] || 'Power Source Unknown';
+}
+
+function getPowerSourceLabel(latestDoc = {}) {
+    if (latestDoc?.ecuConnected === false) return 'OFF';
+    const rawSource = String(latestDoc?.powerSource || latestDoc?.power_source || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(rawSource)) return 'OFF';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return 'GRID';
+    if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return 'GENSET';
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) return 'SYNC';
+    return String(latestDoc?.sync || '').toUpperCase() === 'ON-GRID' ? 'SYNC' : 'GENSET';
 }
 
 function normalizeStatus(statusValue) {
@@ -134,17 +155,18 @@ function getMaintenanceStatus(latestDoc, recentDocs = []) {
 // NEW CODE
 // EXTENSION ONLY: simple public labels without removing raw data
 function getPublicLabels(latestDoc) {
-    const syncValue = String(latestDoc?.sync || '').toUpperCase();
+    const powerSourceLabel = getPowerSourceLabel(latestDoc);
     const statusValue = String(latestDoc?.status || '').toUpperCase();
 
     return {
-        sync_label: syncValue === 'ON-GRID' ? 'Terhubung PLN' : 'Generator Aktif',
+        power_source_label: powerSourceLabel,
+        sync_label: powerSourceLabel,
         status_label: statusValue === 'RUNNING' ? 'Generator Menyala' : 'Generator Tidak Aktif'
     };
 }
 
 function transformPublicStatus(latestDoc, previousDoc = null) {
-    const powerStatus = normalizeSync(latestDoc?.sync);
+    const powerStatus = normalizePowerSource(latestDoc);
     const generatorCondition = normalizeStatus(latestDoc?.status);
     const fuelStatus = getFuelStatus(latestDoc?.fuel);
     const engineActivity = getEngineActivity(latestDoc?.rpm);

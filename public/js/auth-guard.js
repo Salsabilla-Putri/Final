@@ -16,7 +16,7 @@
 
   function getStoredAuth() {
     const storedUser = readStoredUser();
-    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true' || Boolean(storedUser?.email || storedUser?.name);
+    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true' && localStorage.getItem('hasLoginSession') === 'true';
     const role = normalizeRole(localStorage.getItem('userRole') || storedUser?.role);
     return { isLoggedIn, role, storedUser };
   }

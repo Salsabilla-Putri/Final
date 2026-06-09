@@ -98,7 +98,7 @@ function renderSensorSnapshot(data = {}, { live = false } = {}) {
     setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm)).toLocaleString('id-ID')} RPM`);
     setVal('val-volt', `${numberOrZero(snapshot.volt).toFixed(1)} V`);
 
-    updateSyncStatus('engSync', snapshot);
+    updatePowerSourceIndicator('engSync', snapshot);
     updatePowerSourceStatus(snapshot);
 
     const stateEl = document.getElementById('engStat');
@@ -167,22 +167,28 @@ function normalizeSyncStatus(data = {}) {
 
 
 function getPowerSourceStatus(data = {}) {
-    const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase();
-    if (['GRID', 'PLN', 'UTILITY'].includes(rawSource)) {
-        return { label: 'GRID', detail: 'Power dari grid/PLN', ok: true };
+    const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['OFF', 'DISCONNECTED', 'OFFLINE', 'NO-MQTT', 'NO-MQTT-CONNECTION'].includes(rawSource) || data.ecuConnected === false) {
+        return { label: 'OFF', detail: 'ESP32/ECU MQTT disconnected', cls: 'st-err', ok: false };
     }
-    if (['GENSET', 'GENERATOR'].includes(rawSource)) {
-        return { label: 'GENSET', detail: 'Power dari genset', ok: true };
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) {
+        return { label: 'GRID', detail: 'Power dari grid/PLN', cls: 'st-ok', ok: true };
+    }
+    if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) {
+        return { label: 'GENSET', detail: 'Power dari genset', cls: 'st-warn', ok: true };
+    }
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) {
+        return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
     }
 
     const syncStatus = normalizeSyncStatus(data);
     if (syncStatus === 'ON-GRID') {
-        return { label: 'GRID', detail: 'Power dari grid/PLN', ok: true };
+        return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
     }
     if (syncStatus === 'OFF-GRID') {
-        return { label: 'GENSET', detail: 'Power dari genset', ok: true };
+        return { label: 'GENSET', detail: 'Power dari genset', cls: 'st-warn', ok: true };
     }
-    return { label: '--', detail: 'Supply source belum terdeteksi', ok: false };
+    return { label: '--', detail: 'Power source belum terdeteksi', cls: 'st-err', ok: false };
 }
 
 function updatePowerSourceStatus(data) {
@@ -193,16 +199,16 @@ function updatePowerSourceStatus(data) {
     const detailEl = document.getElementById('engSupply');
     if (detailEl) {
         detailEl.innerText = supply.detail;
-        detailEl.className = supply.ok ? 'st-ok' : 'st-err';
+        detailEl.className = supply.cls;
     }
 }
 
-function updateSyncStatus(id, data) {
+function updatePowerSourceIndicator(id, data) {
     const el = document.getElementById(id);
     if (!el) return;
-    const syncStatus = normalizeSyncStatus(data);
-    el.innerText = syncStatus;
-    el.className = syncStatus === 'ON-GRID' ? 'st-ok' : 'st-err';
+    const supply = getPowerSourceStatus(data);
+    el.innerText = supply.label;
+    el.className = supply.cls;
 }
 
 // ─── 1. SENSOR DATA ──────────────────────────────────────────────────────────
