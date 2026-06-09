@@ -980,6 +980,8 @@ async function syncActiveTimeHistory(data) {
         const openRow = await ActiveTimeHistory.findOne({ deviceId, endedAt: null }).sort({ startedAt: -1 }).lean();
         if (openRow) {
             const sampledAt = getSessionSampledAt(openRow);
+            if (eventTime.getTime() <= sampledAt.getTime()) return;
+
             const gapMs = eventTime.getTime() - sampledAt.getTime();
             if (isRunning && gapMs >= 0 && gapMs <= ACTIVE_SESSION_TIMEOUT_MS) {
                 session = { startedAt: safeEventTime(openRow.startedAt), lastSeenAt: sampledAt };

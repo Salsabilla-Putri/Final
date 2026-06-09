@@ -78,7 +78,7 @@ function setConnectionStatus(online, label = null) {
 
 function setDataStatus({ live = false, timestamp = null } = {}) {
     setConnectionStatus(live, live ? 'Live' : 'Data terakhir');
-    setLastUpdated(timestamp);
+    setLastUpdated(timestamp, !live);
 }
 
 function getDataAgeMs(timestamp) {
@@ -136,16 +136,18 @@ function updatePowerSourceStatus(data = {}) {
 }
 
 // ── Last updated timestamp ───────────────────────────────────────────────────
-function setLastUpdated(timestamp = null) {
+function setLastUpdated(timestamp = null, visible = false) {
     const el = document.getElementById('lastUpdated');
     const dt = timestamp ? new Date(timestamp) : null;
     const safeDate = dt && Number.isFinite(dt.getTime()) ? dt : null;
     if (!el) return;
+    el.style.display = visible ? '' : 'none';
+    if (!visible) return;
     if (!safeDate) {
-        el.innerText = 'Diperbarui: --';
+        el.innerText = 'Disconnected: --';
         return;
     }
-    el.innerText = 'Diperbarui: ' + safeDate.toLocaleString('id-ID', {
+    el.innerText = 'Disconnected: ' + safeDate.toLocaleString('id-ID', {
             day: '2-digit', month: 'short', year: 'numeric',
             hour: '2-digit', minute: '2-digit', second: '2-digit'
         }) + ' WIB';

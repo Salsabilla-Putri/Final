@@ -51,7 +51,7 @@ function setDataStatus({ live = false, timestamp = null } = {}) {
             ? '<i class="fas fa-circle"></i> Live'
             : '<i class="fas fa-circle"></i> Data terakhir';
     }
-    if (lastEl) lastEl.innerText = safeDate ? `Diperbarui: ${formatLastUpdated(safeDate)}` : 'Diperbarui: --';
+    if (lastEl) lastEl.style.display = 'none';
 }
 
 

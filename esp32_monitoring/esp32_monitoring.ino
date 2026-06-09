@@ -323,14 +323,14 @@ const char* FFT_CSV_HEADER =
 // ============================================================
 // Realtime dashboard dan MongoDB/history dikirim tiap 1 detik tanpa batch di ESP32.
 
-#define MONGODB_BATCH_INTERVAL_MS 1000UL     // realtime 1 detik (tanpa batch ESP32)
-#define MONGODB_BATCH_RECORDS     1          // 1 record/detik langsung kirim
+#define MONGODB_BATCH_INTERVAL_MS 600000UL  // kirim history/cloud ke MongoDB per 10 menit
+#define MONGODB_BATCH_RECORDS     600        // 1 record/detik x 10 menit
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
 // MQTT broker/cloud sering menolak payload besar. Agar data benar-benar masuk
 // ke server.js + MongoDB, 600 record per 10 menit dikirim sebagai 60 publish
 // kecil berisi 10 record. Total data tetap 600 record per siklus batch.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 1
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 0UL
+#define MONGODB_UPLOAD_CHUNK_RECORDS 10
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 20UL
 
 // TEST DATABASE: tetap tulis database.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
@@ -699,6 +699,8 @@ unsigned long lastDBStorageReport = 0;
 uint32_t storageBatchSeq = 0;
 uint8_t storageBatchCount = 0;
 uint32_t localRecordSeq = 0;
+uint32_t lastSdSavedLocalSeq = 0;
+uint32_t lastMongoBufferedLocalSeq = 0;
 
 unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
@@ -2359,9 +2361,9 @@ void publishRealtimeData() {
   }
   if (!hasData) return;
 
-  // MQTT hanya untuk realtime dashboard 1 detik.
-  // MQTT realtime tetap ke gen/realtime setiap 1 detik.
-  // History/cloud MongoDB dikirim realtime ke topic gen/data setiap 1 detik tanpa batch ESP32.
+  // MQTT publish langsung hanya untuk realtime dashboard/web setiap 1 detik.
+  // History/cloud MongoDB TIDAK dikirim di sini; record history masuk RAM buffer
+  // dari saveSnapshotToSD() dan dikirim batch ke MQTT_TOPIC/gen/data tiap 10 menit.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
@@ -2374,14 +2376,12 @@ void publishRealtimeData() {
   bool historyOk = false;
   if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
-    bool dataOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
-    historyOk = dataOk;
+    historyOk = true;
     mqtt.loop();
     xSemaphoreGive(mqttMutex);
   } else if (mqttMutex == NULL) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
-    bool dataOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
-    historyOk = dataOk;
+    historyOk = true;
     mqtt.loop();
   }
   bool ok = realtimeOk && historyOk;
@@ -2445,7 +2445,7 @@ void publishRealtimeData() {
                     MQTT_REALTIME_TOPIC,
                     (unsigned long)mqttLastPayloadBytes,
                     (unsigned long)mqttLastRecordsSent);
-      Serial.println(F("[TEST] MongoDB dikirim realtime tiap 1 detik via MQTT topic gen/data; SD hanya backup lokal."));
+      Serial.println(F("[TEST] Realtime terkirim tiap 1 detik; MongoDB/history dikirim batch 10 menit via gen/data."));
       Serial.println(F("╚══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -3007,19 +3007,23 @@ bool createFreshCsvFile(const char* path, const char* header, const char* label)
       delay(80);
     }
 
-    // Jangan pakai overload SD.open(path, mode, create) di sini. Pada sebagian
-    // kombinasi Arduino-ESP32 + SD library, overload create=true tidak stabil
-    // untuk file root di modul TFT/SD sharing SPI. FILE_WRITE tanpa argumen
-    // ketiga adalah pola yang sama dengan write-test yang sudah terbukti OK.
+    // Coba beberapa mode open. Beberapa versi FS/SD ESP32 berbeda perilaku:
+    // FILE_WRITE paling kompatibel, mode "w" memaksa truncate/create, dan
+    // path tanpa slash membantu library lama yang sensitif terhadap root path.
     File f = SD.open(path, FILE_WRITE);
+    if (!f) f = SD.open(path, "w");
+    if (!f && path[0] == '/') f = SD.open(path + 1, FILE_WRITE);
+    if (!f && path[0] == '/') f = SD.open(path + 1, "w");
 
     if (f) {
       size_t written = f.println(header);
       f.flush();
       f.close();
 
-      delay(40);
+      delay(80);
+      deselectAllSPI();
       File verify = SD.open(path, FILE_READ);
+      if (!verify && path[0] == '/') verify = SD.open(path + 1, FILE_READ);
       bool verified = verify && verify.size() > 0;
       if (verify) verify.close();
 
@@ -3038,6 +3042,10 @@ bool createFreshCsvFile(const char* path, const char* header, const char* label)
       Serial.print(F("[SD] "));
       Serial.print(path);
       Serial.println(F(" terbuka tetapi verifikasi tulis header gagal."));
+    } else {
+      Serial.print(F("[SD] "));
+      Serial.print(path);
+      Serial.println(F(" gagal dibuka untuk create; mencoba re-init SPI/SD."));
     }
 
     if (attempt < 5) {
@@ -3342,21 +3350,37 @@ void saveSnapshotToSD() {
 
   uint32_t saveStart = micros();
 
-  bool backupNeeded = testOnceMode || (SD_SAVE_ONLINE_FOR_DB_TEST == 1);
+  // Buffer MongoDB/history diisi setiap ada record baru (1 record/detik).
+  // Upload ke server/MongoDB dilakukan terpisah oleh MongoBufferTask setiap 10 menit.
+  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
+    if (!storageBatch[i].valid) continue;
+    if (storageBatch[i].localSeq <= lastMongoBufferedLocalSeq) continue;
+
+    bool mongoAccepted = addRecordToMongoDbBuffer(storageBatch[i]);
+    if (mongoAccepted) {
+      lastMongoBufferedLocalSeq = storageBatch[i].localSeq;
+    } else {
+      sdBackupBecauseBufferFullCount++;
+      // Tetap lanjut ke SD agar record tidak hilang saat buffer penuh.
+    }
+  }
+
+  bool backupNeeded = true; // User requirement: database.csv ditulis tiap 1 detik walaupun online.
   uint8_t validRecords = 0;
+  uint8_t unsavedSdRecords = 0;
 
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
     validRecords++;
+    if (storageBatch[i].localSeq > lastSdSavedLocalSeq) unsavedSdRecords++;
 
     if ((WiFi.status() != WL_CONNECTED) || !wifiOK || !mqtt.connected()) {
-      backupNeeded = true;
       sdBackupBecauseNetworkCount++;
     }
   }
 
-  if (!backupNeeded) {
-    sdBackupSkipOnlineCount += validRecords;
+  if (!backupNeeded || unsavedSdRecords == 0) {
+    if (!backupNeeded) sdBackupSkipOnlineCount += validRecords;
 
     perfSdSaveUs = micros() - saveStart;
     perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
@@ -3421,6 +3445,7 @@ void saveSnapshotToSD() {
 
     for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
       if (!storageBatch[i].valid) continue;
+      if (storageBatch[i].localSeq <= lastSdSavedLocalSeq) continue;
 
       String line = buildCsvLine(storageBatch[i]);
       String queueJson = buildJsonRecordParametersOnly(storageBatch[i]);
@@ -3430,6 +3455,7 @@ void saveSnapshotToSD() {
       dbLastLineBytes = line.length() + 2;
       dbTotalWrittenBytes += dbLastLineBytes;
       sdBackupRecordCount++;
+      lastSdSavedLocalSeq = storageBatch[i].localSeq;
       cacheLastDatabasePayload(storageBatch[i], line, queueJson);
     }
 
@@ -5552,7 +5578,7 @@ void resetSDDatabase() {
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
     if (SD.exists(FFT_FILE)) SD.remove(FFT_FILE);
     if (createFreshDatabaseCsv() && createFreshFftCsv()) {
-      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; mongoUploadSuccessRecords = 0; mongoUploadFailCount = 0; mongoUploadLastHttpCode = 0; mongoUploadLastAckedRecords = 0; mongoUploadLastAttemptMs = 0; mongoUploadLastBatchRecords = 0; mongoUploadLastPayloadBytes = 0; mongoUploadLastRunChunks = 0; mongoUploadLastRunRecords = 0; mongoUploadLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
+      dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; mongoUploadSuccessRecords = 0; mongoUploadFailCount = 0; mongoUploadLastHttpCode = 0; mongoUploadLastAckedRecords = 0; mongoUploadLastAttemptMs = 0; mongoUploadLastBatchRecords = 0; mongoUploadLastPayloadBytes = 0; mongoUploadLastRunChunks = 0; mongoUploadLastRunRecords = 0; mongoUploadLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; lastMongoBufferedLocalSeq = 0; lastSdSavedLocalSeq = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
       Serial.println(F("[DB] database.csv dan fft.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
@@ -5785,6 +5811,16 @@ void setup() {
     2,
     NULL,
     1
+  );
+
+  xTaskCreatePinnedToCore(
+    MongoBufferTask,
+    "MongoBufferTask",
+    10000,
+    NULL,
+    1,
+    NULL,
+    0
   );
 
   drawBootSplashStep("GENSYS ready", 100);
