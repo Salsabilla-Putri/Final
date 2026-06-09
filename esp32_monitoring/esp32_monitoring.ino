@@ -90,6 +90,20 @@
 #define WIFI_MANAGER_SETTLE_MS 3000UL
 #endif
 
+// ESP32 hanya radio 2.4 GHz. Set country agar scan tidak terkunci
+// ke channel 1-11 saja; di Indonesia AP/router bisa muncul di channel 12/13.
+#ifndef WIFI_COUNTRY_CC
+#define WIFI_COUNTRY_CC "ID"
+#endif
+
+#ifndef WIFI_COUNTRY_CHANNELS
+#define WIFI_COUNTRY_CHANNELS 13
+#endif
+
+#ifndef WIFI_MANAGER_SCAN_DEBUG
+#define WIFI_MANAGER_SCAN_DEBUG 1
+#endif
+
 // Set 1 hanya jika ingin reset/portal WiFiManager dipaksa muncul.
 // Pada mode eduroam-first, nilai ini hanya berpengaruh saat fallback portal.
 #ifndef FORCE_WIFI_PORTAL
@@ -3486,6 +3500,21 @@ void updateHeapMonitor() {
   }
 }
 
+void applyWiFiCountryConfig() {
+  wifi_country_t wifiCountry;
+  memset(&wifiCountry, 0, sizeof(wifiCountry));
+  strncpy(wifiCountry.cc, WIFI_COUNTRY_CC, sizeof(wifiCountry.cc));
+  wifiCountry.schan = 1;
+  wifiCountry.nchan = WIFI_COUNTRY_CHANNELS;
+  wifiCountry.policy = WIFI_COUNTRY_POLICY_MANUAL;
+
+  esp_err_t err = esp_wifi_set_country(&wifiCountry);
+  if (err != ESP_OK) {
+    Serial.print(F("[WIFI] Warning: failed to set WiFi country/channel range, err="));
+    Serial.println((int)err);
+  }
+}
+
 bool isWiFiUsableForMongoUpload() {
   if (WiFi.status() != WL_CONNECTED) {
     return false;
@@ -3503,6 +3532,7 @@ bool isWiFiUsableForMongoUpload() {
 }
 
 void applyWiFiStabilityConfig() {
+  applyWiFiCountryConfig();
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
   WiFi.setAutoReconnect(true);
@@ -3517,6 +3547,48 @@ void applyMqttStabilityConfig() {
 }
 
 const char* wifiStatusText(wl_status_t st);
+
+void debugScanWiFiBeforePortal() {
+#if WIFI_MANAGER_SCAN_DEBUG
+  Serial.println(F("[WIFI MANAGER] Pre-scan visible 2.4GHz networks..."));
+
+  WiFi.mode(WIFI_STA);
+  delay(200);
+
+  int networkCount = WiFi.scanNetworks(false, true);
+  if (networkCount < 0) {
+    Serial.print(F("[WIFI MANAGER] Pre-scan failed, result="));
+    Serial.println(networkCount);
+    return;
+  }
+
+  Serial.print(F("[WIFI MANAGER] Pre-scan found "));
+  Serial.print(networkCount);
+  Serial.println(F(" network(s)."));
+
+  for (int i = 0; i < networkCount; i++) {
+    String ssid = WiFi.SSID(i);
+    Serial.print(F("[WIFI MANAGER] #"));
+    Serial.print(i + 1);
+    Serial.print(F(" SSID='"));
+    if (ssid.length()) {
+      Serial.print(ssid);
+    } else {
+      Serial.print(F("<hidden>"));
+    }
+    Serial.print(F("' RSSI="));
+    Serial.print(WiFi.RSSI(i));
+    Serial.print(F(" dBm CH="));
+    Serial.print(WiFi.channel(i));
+    Serial.print(F(" ENC="));
+    Serial.println((int)WiFi.encryptionType(i));
+  }
+
+  WiFi.scanDelete();
+#else
+  return;
+#endif
+}
 
 void stopWiFiCleanly(bool eraseCredentials) {
   Serial.println(F("[WIFI] Stopping current STA connection..."));
@@ -3726,7 +3798,10 @@ bool connectWiFiManagerFallback() {
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_STA);
+  applyWiFiCountryConfig();
   delay(1000);
+
+  debugScanWiFiBeforePortal();
 
   static WiFiManager wm;
   wm.setDebugOutput(false);
