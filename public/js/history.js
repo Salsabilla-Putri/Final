@@ -17,6 +17,7 @@ const PARAMS = {
     amp: { unit: 'A', color: '#ec4899' }, // Pink
     power: { unit: 'kW', color: '#14b8a6' }, // Teal
     freq: { unit: 'Hz', color: '#8b5cf6' }, // Ungu
+    coolant: { unit: '°C', max: 105, warn: 90, color: '#06b6d4', label: 'Coolant Temp' },
     fuel: { unit: '%', min: 20, warn: 30, color: '#10b981' }, // Hijau
     phase: { unit: '°', max: 15, warn: 10, min: -15, color: '#0ea5e9', label: 'Phase Difference' }, // Sky
     iat: { unit: '°C', color: '#f59e0b' }, // Amber
@@ -35,14 +36,26 @@ const USER_DATETIME_FORMAT = new Intl.DateTimeFormat('id-ID', {
     second: '2-digit'
 });
 
-const HISTORY_EXPORT_COLUMNS = [
-    { header: 'Timestamp', getter: (row) => formatReadableTimestamp(row.rawDate || row.timestamp) },
-    { header: 'Generator', getter: (row) => row.generator || 'Gen-01' },
-    { header: 'Parameter', getter: (row) => row.label || String(row.param || '').toUpperCase() },
-    { header: 'Value', getter: (row) => formatHistoryValue(row.value) },
-    { header: 'Unit', getter: (row) => row.unit || '-' },
-    { header: 'Status', getter: (row) => row.status || 'normal' }
+const HISTORY_TABLE_COLUMNS = [
+    { key: 'timestamp', header: 'Timestamp', getter: (row) => formatReadableTimestamp(row.rawDate || row.timestamp) },
+    { key: 'generator', header: 'Generator', getter: (row) => row.generator || 'Gen-01' },
+    { key: 'rpm', header: 'RPM', getter: (row) => formatHistoryValue(row.rpm) },
+    { key: 'volt', header: 'Voltage (V)', getter: (row) => formatHistoryValue(row.volt) },
+    { key: 'amp', header: 'Current (A)', getter: (row) => formatHistoryValue(row.amp) },
+    { key: 'power', header: 'Power (kW)', getter: (row) => formatHistoryValue(row.power) },
+    { key: 'freq', header: 'Frequency (Hz)', getter: (row) => formatHistoryValue(row.freq) },
+    { key: 'coolant', header: 'Coolant (°C)', getter: (row) => formatHistoryValue(row.coolant) },
+    { key: 'fuel', header: 'Fuel (%)', getter: (row) => formatHistoryValue(row.fuel) },
+    { key: 'phase', header: 'Phase (°)', getter: (row) => formatHistoryValue(row.phase) },
+    { key: 'iat', header: 'IAT (°C)', getter: (row) => formatHistoryValue(row.iat) },
+    { key: 'map', header: 'MAP (kPa)', getter: (row) => formatHistoryValue(row.map) },
+    { key: 'batt', header: 'Battery (V)', getter: (row) => formatHistoryValue(row.batt) },
+    { key: 'afr', header: 'AFR', getter: (row) => formatHistoryValue(row.afr) },
+    { key: 'tps', header: 'TPS (%)', getter: (row) => formatHistoryValue(row.tps) },
+    { key: 'sync', header: 'Status Sync', getter: (row) => getHistorySyncStatus(row) }
 ];
+
+const HISTORY_EXPORT_COLUMNS = HISTORY_TABLE_COLUMNS;
 
 
 // --- 1. FILTER & DATE INPUT LOGIC ---
@@ -116,11 +129,11 @@ async function loadDataFromAPI() {
             rawApiData = json.data;
             processDataAndRender();
         } else {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:red">Error: ${json.error}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${HISTORY_TABLE_COLUMNS.length}" style="text-align:center; color:red">Error: ${json.error}</td></tr>`;
         }
     } catch (err) {
         console.error(err);
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:red">Connection Failed</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${HISTORY_TABLE_COLUMNS.length}" style="text-align:center; color:red">Connection Failed</td></tr>`;
     } finally {
         loader.style.display = 'none';
     }
@@ -146,66 +159,76 @@ function updateSummaryTimeRange(startStr, endStr) {
 
 // --- 2. DATA PROCESSING ---
 
-function processDataAndRender() {
-    processedRows = [];
-    let alertCount = 0;
+function getHistorySyncStatus(row = {}) {
+    const rawSync = String(row.sync ?? row.syncStatus ?? row.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
+    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync) || row.synced === true) return 'ON-GRID';
+    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync) || row.synced === false) return 'OFF-GRID';
+    return rawSync || '-';
+}
 
-    // Flatten Data
-    rawApiData.forEach(item => {
-        const ts = item.timestamp;
-        const genName = item.deviceId || 'Gen-01'; 
-        
-        Object.keys(PARAMS).forEach(key => {
-            const val = key === 'phase' ? getPhaseDifferenceValue(item) : item[key];
-            // Pastikan nilai valid (bukan undefined/null)
-            if (val !== undefined && val !== null) {
-                const conf = PARAMS[key];
-                let status = 'normal';
+function readHistoryParamValue(item, key) {
+    if (key === 'phase') return getPhaseDifferenceValue(item);
+    if (key === 'volt') return item.volt ?? item.voltage;
+    if (key === 'coolant') return item.coolant ?? item.clt ?? item.temp;
+    if (key === 'batt') return item.batt ?? item.battery ?? item.battVolt;
+    return item[key];
+}
 
-                // Logic Status
-                const numericVal = Number(val);
-                if (key === 'phase' && Number.isFinite(numericVal)) {
-                    if (Math.abs(numericVal) > conf.max) status = 'critical';
-                    else if (Math.abs(numericVal) > conf.warn) status = 'warning';
-                } else if (conf.max && val > conf.max) status = 'critical';
-                else if (conf.warn && val > conf.warn) status = 'warning';
-                else if (conf.min && val < conf.min) status = 'critical';
+function buildTimestampRow(item) {
+    const row = {
+        timestamp: item.timestamp,
+        rawDate: new Date(item.timestamp),
+        generator: item.deviceId || 'Gen-01',
+        sync: getHistorySyncStatus(item)
+    };
 
-                if (status !== 'normal') alertCount++;
-
-                processedRows.push({
-                    timestamp: ts,
-                    rawDate: new Date(ts),
-                    generator: genName,
-                    param: key,
-                    label: conf.label || key.toUpperCase(), // Nama Parameter (RPM, VOLT)
-                    value: key === 'phase' ? getPhaseDifferenceValue(item) : val,
-                    unit: conf.unit,
-                    status: status
-                });
-            }
-        });
+    Object.keys(PARAMS).forEach((key) => {
+        const val = readHistoryParamValue(item, key);
+        if (val !== undefined && val !== null) row[key] = val;
     });
 
-    // Client-Side Filtering (Untuk Tabel)
+    row.status = getRowOverallStatus(row);
+    return row;
+}
+
+function rowMatchesParameter(row, paramKey) {
+    if (paramKey === 'all') return true;
+    return row[paramKey] !== undefined && row[paramKey] !== null;
+}
+
+function rowMatchesSearch(row, query) {
+    if (!query) return true;
+    const haystack = [
+        row.generator,
+        row.status,
+        formatReadableTimestamp(row.rawDate),
+        ...Object.keys(PARAMS).flatMap((key) => [key, PARAMS[key].label || key.toUpperCase(), row[key]])
+    ].join(' ').toLowerCase();
+    return haystack.includes(query);
+}
+
+function processDataAndRender() {
+    processedRows = rawApiData
+        .map(buildTimestampRow)
+        .filter((row) => !Number.isNaN(row.rawDate.getTime()))
+        .sort((a, b) => b.rawDate - a.rawDate);
+
+    const alertCount = processedRows.filter((row) => row.status !== 'normal').length;
+
     const pFilter = document.getElementById('paramFilter').value;
     const sFilter = document.getElementById('statusFilter').value;
-    const qSearch = document.getElementById('searchQuery').value.toLowerCase();
+    const qSearch = document.getElementById('searchQuery').value.toLowerCase().trim();
 
     filteredRows = processedRows.filter(row => {
-        if (pFilter !== 'all' && row.param !== pFilter) return false;
+        if (!rowMatchesParameter(row, pFilter)) return false;
         if (sFilter !== 'all' && row.status !== sFilter) return false;
-        if (qSearch && 
-            !row.label.toLowerCase().includes(qSearch) && 
-            !String(row.value).includes(qSearch) &&
-            !row.generator.toLowerCase().includes(qSearch)) return false;
+        if (!rowMatchesSearch(row, qSearch)) return false;
         return true;
     });
 
-    // Update Info Cards
     document.getElementById('totalRecords').innerText = processedRows.length.toLocaleString();
     document.getElementById('alertCount').innerText = alertCount;
-    
+
     currentPage = 1;
     renderTable();
 }
@@ -214,36 +237,48 @@ function processDataAndRender() {
 
 function renderTable() {
     const tbody = document.getElementById('historyTableBody');
+    const thead = document.getElementById('historyTableHead');
     tbody.innerHTML = '';
+
+    if (thead) {
+        thead.innerHTML = `<tr>${HISTORY_TABLE_COLUMNS.map((column) => `<th>${column.header}</th>`).join('')}</tr>`;
+    }
 
     const start = (currentPage - 1) * itemsPerPage;
     const end = start + itemsPerPage;
     const pageData = filteredRows.slice(start, end);
 
     if (pageData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px;">No data match filters</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${HISTORY_TABLE_COLUMNS.length}" style="text-align:center; padding:20px;">No data match filters</td></tr>`;
+        document.getElementById('pageStart').innerText = 0;
+        document.getElementById('pageEnd').innerText = 0;
+        document.getElementById('totalItems').innerText = 0;
+        document.getElementById('pageNum').innerText = 1;
+        document.getElementById('btnPrev').disabled = true;
+        document.getElementById('btnNext').disabled = true;
         return;
     }
 
     pageData.forEach(row => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>${formatReadableTimestamp(row.rawDate)}</td>
-            <td>${row.generator}</td>
-            <td>${row.label}</td>
-            <td class="value-cell value-${row.status}">${Number(row.value).toFixed(1)}</td>
-            <td>${row.unit}</td>
-            <td><span class="status-badge status-${row.status}">${row.status}</span></td>
-        `;
+        tr.innerHTML = HISTORY_TABLE_COLUMNS.map((column) => {
+            if (column.key === 'sync') {
+                const syncStatus = column.getter(row);
+                const cls = syncStatus === 'ON-GRID' ? 'status-normal' : syncStatus === 'OFF-GRID' ? 'status-critical' : 'status-warning';
+                return `<td><span class="status-badge ${cls}">${syncStatus}</span></td>`;
+            }
+            const value = column.getter(row);
+            const cellClass = column.key !== 'timestamp' && column.key !== 'generator' ? ` class="value-cell value-${getParamStatus(column.key, row[column.key])}"` : '';
+            return `<td${cellClass}>${value === '' ? '-' : value}</td>`;
+        }).join('');
         tbody.appendChild(tr);
     });
 
-    // Pagination Info
     document.getElementById('pageStart').innerText = start + 1;
     document.getElementById('pageEnd').innerText = Math.min(end, filteredRows.length);
     document.getElementById('totalItems').innerText = filteredRows.length;
     document.getElementById('pageNum').innerText = currentPage;
-    
+
     document.getElementById('btnPrev').disabled = (currentPage === 1);
     document.getElementById('btnNext').disabled = (end >= filteredRows.length);
 }
@@ -325,12 +360,7 @@ function getParamStatus(paramKey, value) {
 function getRowOverallStatus(row) {
     let hasWarning = false;
     for (const key of Object.keys(PARAMS)) {
-        const value = key === 'volt'
-            ? (row.volt ?? row.voltage)
-            : key === 'batt'
-                ? (row.batt ?? row.battery ?? row.battVolt)
-                : row[key];
-        const status = getParamStatus(key, value);
+        const status = getParamStatus(key, row[key]);
         if (status === 'critical') return 'critical';
         if (status === 'warning') hasWarning = true;
     }

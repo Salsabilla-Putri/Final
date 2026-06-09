@@ -120,10 +120,13 @@
                     <div class="report-table-card">
                         <div class="report-table-header">
                             <div>
-                                <h3>Per-Second Sensor Rows</h3>
-                                <p>Geser tabel ke kiri/kanan untuk melihat semua parameter.</p>
+                                <h3 id="reportTableTitle">Tabel Parameter</h3>
+                                <p id="reportTableSubtitle">Geser tabel ke kanan untuk melihat semua parameter.</p>
                             </div>
-                            <div id="reportTableInfo" class="report-table-info">0 rows</div>
+                            <div class="report-table-actions">
+                                <button class="chart-action-btn" id="showAllReportParams" type="button">All Parameters</button>
+                                <div id="reportTableInfo" class="report-table-info">0 rows</div>
+                            </div>
                         </div>
                         <div class="report-table-scroll">
                             <table class="report-data-table">
