@@ -124,7 +124,10 @@ const generatorDataSchema = new mongoose.Schema({
     batt: Number,
     afr: Number,
     tps: Number,
-    phaseAngle: Number
+    phaseAngle: Number,
+    espSentAtMs: Number,
+    serverReceivedAt: Date,
+    transportLatencyMs: Number
 }, { versionKey: false });
 
 generatorDataSchema.index({ recordId: 1 }, { unique: true, sparse: true });
@@ -1032,7 +1035,10 @@ function buildGeneratorDbDocument(data) {
         batt: toNumber(snapshot.batt, 0),
         afr: toNumber(snapshot.afr, 0),
         tps: toNumber(snapshot.tps, 0),
-        phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0)
+        phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0),
+        espSentAtMs: snapshot.espSentAtMs !== undefined ? toNumber(snapshot.espSentAtMs, 0) : undefined,
+        serverReceivedAt: snapshot.serverReceivedAt ? new Date(snapshot.serverReceivedAt) : undefined,
+        transportLatencyMs: snapshot.transportLatencyMs !== undefined ? toNumber(snapshot.transportLatencyMs, 0) : undefined
     };
 }
 
@@ -1366,10 +1372,16 @@ function normalizeGeneratorPayload(rawPayload) {
         afr: toNumber(payload.afr, latestData.afr),
         tps: toNumber(payload.tps, latestData.tps),
         phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle ?? payload.phase_diff, latestData.phaseAngle ?? 0),
+        espSentAtMs: toNumber(payload.espSentAtMs ?? payload.timestampMs, latestData.espSentAtMs),
         recordId: payload.recordId || latestData.recordId,
         localSeq: payload.localSeq ?? latestData.localSeq,
         _realtime: true
     };
+
+    const receivedAt = new Date();
+    const sentAt = getValidDate(snapshot.timestamp);
+    snapshot.serverReceivedAt = receivedAt;
+    snapshot.transportLatencyMs = sentAt ? Math.max(0, receivedAt.getTime() - sentAt.getTime()) : undefined;
 
     if (readPowerValue(payload) === undefined && snapshot.volt && snapshot.amp) {
         snapshot.power = (snapshot.volt * snapshot.amp) / 1000;
@@ -1581,6 +1593,9 @@ mqttClient.on('message', async (topic, message) => {
         latestRealtimeReceivedAt = new Date();
         latestData.lastMqttUpdate = latestRealtimeReceivedAt;
         latestData.realtimeReceivedAt = latestRealtimeReceivedAt;
+        latestData.serverReceivedAt = latestRealtimeReceivedAt;
+        const espTimestamp = getValidDate(latestData.timestamp);
+        latestData.transportLatencyMs = espTimestamp ? Math.max(0, latestRealtimeReceivedAt.getTime() - espTimestamp.getTime()) : latestData.transportLatencyMs;
 
         const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
         if (fftDoc) {

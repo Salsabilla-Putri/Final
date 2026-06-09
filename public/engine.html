@@ -35,11 +35,13 @@
       <div class="card" style="margin-bottom:14px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <h3 style="margin:0; color:var(--accent)">Engine Parameters</h3>
-            <div style="display:flex; gap:12px; align-items:center;">
+            <div class="engine-live-meta">
                 <div style="font-weight:700; color:var(--accent)">Sync Status:</div>
                 <div id="syncIndicator" class="indicator ind-neutral">--</div>
                 <div style="font-weight:700; color:var(--accent)">ECU:</div>
                 <div id="espConnection" class="indicator ind-neutral">Menghubungkan...</div>
+                <div class="timestamp-pill"><span>ESP Timestamp</span><b id="espTimestamp">--</b></div>
+                <div class="timestamp-pill"><span>Latency</span><b id="latencyMs">-- ms</b></div>
             </div>
         </div>
       </div>
