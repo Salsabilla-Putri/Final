@@ -1,14 +1,19 @@
 'use strict';
 
 const POWER_SOURCE_MAP = {
+    OFF: 'ECU Disconnected',
     GRID: 'Using PLN',
     GENSET: 'Using Generator',
     SYNC: 'Grid and Generator Synchronized'
 };
 
 const SYNC_MAP = {
+    OFF: POWER_SOURCE_MAP.OFF,
     'OFF-GRID': POWER_SOURCE_MAP.GENSET,
     'ON-GRID': POWER_SOURCE_MAP.SYNC,
+    GENSET: POWER_SOURCE_MAP.GENSET,
+    GRID: POWER_SOURCE_MAP.GRID,
+    SYNC: POWER_SOURCE_MAP.SYNC,
     HYBRID: POWER_SOURCE_MAP.SYNC
 };
 
@@ -29,10 +34,15 @@ function normalizePowerSource(latestDoc = {}) {
 
 function getPowerSourceLabel(latestDoc = {}) {
     const rawSource = String(latestDoc?.powerSource || latestDoc?.power_source || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['OFF', 'ECU-OFF', 'ECU-DISCONNECTED', 'DISCONNECTED', 'OFFLINE'].includes(rawSource) || latestDoc?.ecuConnected === false) return 'OFF';
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return 'GRID';
-    if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return 'GENSET';
+    if (['GENSET', 'GENERATOR', 'GEN', 'OFF-GRID', 'OFFGRID'].includes(rawSource)) return 'GENSET';
     if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) return 'SYNC';
-    return String(latestDoc?.sync || '').toUpperCase() === 'ON-GRID' ? 'SYNC' : 'GENSET';
+    const sync = String(latestDoc?.sync || '').toUpperCase().replace(/[\s_-]+/g, '-');
+    if (sync === 'OFF') return 'OFF';
+    if (sync === 'GRID') return 'GRID';
+    if (sync === 'SYNC' || sync === 'ON-GRID' || sync === 'ONGRID') return 'SYNC';
+    return 'GENSET';
 }
 
 function normalizeStatus(statusValue) {

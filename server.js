@@ -647,7 +647,7 @@ app.use('/api', async (req, res, next) => {
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: null,
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
+    fuel: 0, sync: 'OFF', synced: false, powerSource: 'OFF', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '3000', 10);
@@ -889,7 +889,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, rule: 'ECU connected', sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'ECU/MQTT connected', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -967,8 +967,11 @@ async function syncActiveTimeHistory(data) {
     const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
     const payloadEcuConnected = toBooleanOrUndefined(data?.ecuConnected);
     const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS && payloadEcuConnected !== false;
-    // Active time mengikuti koneksi ECU/ESP32 via MQTT, bukan RPM/status mesin.
-    const isRunning = isEcuConnected;
+    // Active time mengikuti durasi koneksi per hari, bukan RPM/status mesin.
+    // Jika payload ECU tersedia, gunakan ECU connected; jika tidak tersedia, fallback ke
+    // durasi ESP32 yang masih aktif mengirim MQTT realtime.
+    const isMqttConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
+    const isRunning = payloadEcuConnected === undefined ? isMqttConnected : isEcuConnected;
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     let session = activeSessions.get(key);
@@ -993,7 +996,7 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'ECU/MQTT connected', sampledAt: eventTime }
         });
         return;
     }
@@ -1008,7 +1011,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'ECU/MQTT connected', sampledAt: eventTime }
             });
             return;
         }
@@ -1016,7 +1019,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'ECU/MQTT connected', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
@@ -1078,6 +1081,9 @@ async function handleMqttDisconnected(reason = 'mqtt_disconnect') {
     mqttIngestStats.lastError = reason;
     if (latestData?._realtime) {
         latestData.ecuConnected = false;
+        latestData.powerSource = 'OFF';
+        latestData.sync = 'OFF';
+        latestData.synced = false;
         broadcastEngineRealtimeUpdate();
     }
     if (!isDbReady()) return;
@@ -1111,7 +1117,7 @@ function buildGeneratorDbDocument(data) {
     const snapshot = { ...data };
 
     if (snapshot.rpm > 0) {
-        snapshot.status = snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
+        snapshot.status = snapshot.powerSource === 'SYNC' ? 'ON-GRID' : 'RUNNING';
     } else {
         snapshot.status = 'STOPPED';
     }
@@ -1135,8 +1141,8 @@ function buildGeneratorDbDocument(data) {
         temp: toNumber(snapshot.temp, 0),
         coolant: toNumber(snapshot.coolant ?? snapshot.clt, 0),
         fuel: toNumber(snapshot.fuel, 0),
-        sync: snapshot.sync || 'OFF-GRID',
-        synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
+        sync: normalizeSyncStatus(snapshot, snapshot.sync || snapshot.powerSource || 'GENSET'),
+        synced: normalizePowerSource(snapshot, snapshot.powerSource, snapshot.sync) === 'SYNC',
         powerSource: normalizePowerSource(snapshot, snapshot.powerSource, snapshot.sync),
         status: snapshot.status,
         iat: toNumber(snapshot.iat, 0),
@@ -1433,21 +1439,33 @@ function readPowerValue(payload = {}) {
     return Number.isFinite(parsedWatt) ? parsedWatt / 1000 : undefined;
 }
 
-function normalizeSyncStatus(payload = {}, fallbackSync = 'OFF-GRID') {
-    if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
-        const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
-        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid') return 'ON-GRID';
-        if (value === false || value === 0 || value === 'false' || value === '0' || value === 'off-grid' || value === 'offgrid') return 'OFF-GRID';
-    }
-
-    const rawSync = firstDefined(payload.sync, payload.syncStatus, payload.gridStatus, fallbackSync, 'OFF-GRID');
-    const key = String(rawSync).trim().toUpperCase().replace(/\s+/g, '-');
-    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(key)) return 'ON-GRID';
-    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(key)) return 'OFF-GRID';
-    return key || 'OFF-GRID';
+function normalizeFourStatePowerSourceValue(value) {
+    const key = String(value || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['OFF', 'ECU-OFF', 'ECU-DISCONNECTED', 'DISCONNECTED', 'OFFLINE', 'NO-DATA'].includes(key)) return 'OFF';
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
+    if (['GENSET', 'GENERATOR', 'GEN', 'OFF-GRID', 'OFFGRID'].includes(key)) return 'GENSET';
+    return null;
 }
 
-function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fallbackSync = 'OFF-GRID') {
+function normalizeSyncStatus(payload = {}, fallbackSync = 'GENSET') {
+    const rawSync = firstDefined(payload.sync, payload.syncStatus, payload.gridStatus);
+    const syncState = normalizeFourStatePowerSourceValue(rawSync);
+    if (syncState) return syncState;
+
+    if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
+        const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
+        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid' || value === 'sync') return 'SYNC';
+        if (value === false || value === 0 || value === 'false' || value === '0') return 'GENSET';
+    }
+
+    return normalizeFourStatePowerSourceValue(fallbackSync) || 'GENSET';
+}
+
+function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fallbackSync = 'GENSET') {
+    const payloadEcuConnected = toBooleanOrUndefined(payload.ecuConnected);
+    if (payloadEcuConnected === false) return 'OFF';
+
     const rawSource = firstDefined(
         payload.powerSource,
         payload.power_source,
@@ -1455,23 +1473,30 @@ function normalizePowerSource(payload = {}, fallbackPowerSource = 'GENSET', fall
         payload.supply_source,
         payload.source
     );
-    const key = String(rawSource || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    const sourceState = normalizeFourStatePowerSourceValue(rawSource);
+    if (sourceState) return sourceState;
 
-    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
-    if (['GENSET', 'GENERATOR', 'GEN'].includes(key)) return 'GENSET';
-    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
+    const rawSyncState = normalizeFourStatePowerSourceValue(firstDefined(payload.sync, payload.syncStatus, payload.gridStatus));
+    if (rawSyncState) return rawSyncState;
 
-    const syncStatus = normalizeSyncStatus(payload, fallbackSync);
-    if (syncStatus === 'ON-GRID') return 'SYNC';
+    if (payload.synced !== undefined && payload.synced !== null && payload.synced !== '') {
+        const value = typeof payload.synced === 'string' ? payload.synced.trim().toLowerCase() : payload.synced;
+        if (value === true || value === 1 || value === 'true' || value === '1' || value === 'on-grid' || value === 'ongrid' || value === 'sync') return 'SYNC';
+        if (value === false || value === 0 || value === 'false' || value === '0') return 'GENSET';
+    }
 
-    const fallbackKey = String(fallbackPowerSource || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
-    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(fallbackKey)) return 'GRID';
-    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(fallbackKey)) return 'SYNC';
-    return 'GENSET';
+    const hasGensetPayload = [payload.rpm, payload.volt, payload.freq, payload.power, payload.powerKW]
+        .some((value) => toNumber(value, 0) > 0);
+    if (hasGensetPayload) return 'GENSET';
+
+    const fallbackState = normalizeFourStatePowerSourceValue(fallbackPowerSource);
+    if (fallbackState) return fallbackState;
+
+    return normalizeSyncStatus(payload, fallbackSync) || 'GENSET';
 }
 
 function powerSourceToSyncStatus(powerSource) {
-    return powerSource === 'SYNC' ? 'ON-GRID' : 'OFF-GRID';
+    return normalizeFourStatePowerSourceValue(powerSource) || 'GENSET';
 }
 
 function pickEffectivePayload(rawPayload) {
@@ -1537,7 +1562,7 @@ function normalizeGeneratorPayload(rawPayload) {
 
     if (!payload.status) {
         snapshot.status = snapshot.rpm > 0
-            ? (snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING')
+            ? (snapshot.powerSource === 'SYNC' ? 'ON-GRID' : 'RUNNING')
             : 'STOPPED';
     }
 

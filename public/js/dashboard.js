@@ -152,39 +152,47 @@ async function updateAuxiliaryData() {
 }
 
 
-function normalizeSyncStatus(data = {}) {
-    if (data.synced !== undefined && data.synced !== null && data.synced !== '') {
-        const value = typeof data.synced === 'string' ? data.synced.trim().toLowerCase() : data.synced;
-        if ([true, 1, 'true', '1', 'on-grid', 'ongrid'].includes(value)) return 'ON-GRID';
-        if ([false, 0, 'false', '0', 'off-grid', 'offgrid'].includes(value)) return 'OFF-GRID';
-    }
-
-    const rawSync = String(data.sync ?? data.syncStatus ?? data.gridStatus ?? '').trim().toUpperCase().replace(/\s+/g, '-');
-    if (['ON-GRID', 'ONGRID', 'SYNC', 'SYNCHRONIZED'].includes(rawSync)) return 'ON-GRID';
-    if (['OFF-GRID', 'OFFGRID', 'UNSYNC', 'UNSYNCHRONIZED'].includes(rawSync)) return 'OFF-GRID';
-    return rawSync || 'UNKNOWN';
+function normalizeFourStatePowerSourceValue(value) {
+    const key = String(value ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['OFF', 'ECU-OFF', 'ECU-DISCONNECTED', 'DISCONNECTED', 'OFFLINE', 'NO-DATA'].includes(key)) return 'OFF';
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
+    if (['GENSET', 'GENERATOR', 'GEN', 'OFF-GRID', 'OFFGRID'].includes(key)) return 'GENSET';
+    return null;
 }
 
+function normalizeSyncStatus(data = {}) {
+    const fromSync = normalizeFourStatePowerSourceValue(data.sync ?? data.syncStatus ?? data.gridStatus);
+    if (fromSync) return fromSync;
+
+    if (data.synced !== undefined && data.synced !== null && data.synced !== '') {
+        const value = typeof data.synced === 'string' ? data.synced.trim().toLowerCase() : data.synced;
+        if ([true, 1, 'true', '1', 'on-grid', 'ongrid', 'sync'].includes(value)) return 'SYNC';
+        if ([false, 0, 'false', '0'].includes(value)) return 'GENSET';
+    }
+
+    return 'UNKNOWN';
+}
+
+function isEcuDisconnected(data = {}) {
+    if (data.ecuConnected === false) return true;
+    const ts = data.realtimeReceivedAt || data.lastMqttUpdate || data.lastUpdated || data.timestamp;
+    const time = ts ? new Date(ts).getTime() : NaN;
+    return Number.isFinite(time) && Date.now() - time > DISCONNECT_THRESHOLD_MS;
+}
 
 function getPowerSourceStatus(data = {}) {
-    const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
-    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) {
-        return { label: 'GRID', detail: 'Power dari grid/PLN', cls: 'st-ok', ok: true };
-    }
-    if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) {
-        return { label: 'GENSET', detail: 'Power dari genset', cls: 'st-warn', ok: true };
-    }
-    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(rawSource)) {
-        return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
+    if (isEcuDisconnected(data)) {
+        return { label: 'OFF', detail: 'ECU disconnected', cls: 'st-err', ok: false };
     }
 
-    const syncStatus = normalizeSyncStatus(data);
-    if (syncStatus === 'ON-GRID') {
-        return { label: 'SYNC', detail: 'Grid dan genset tersinkron', cls: 'st-ok', ok: true };
-    }
-    if (syncStatus === 'OFF-GRID') {
-        return { label: 'GENSET', detail: 'Power dari genset', cls: 'st-warn', ok: true };
-    }
+    const sourceState = normalizeFourStatePowerSourceValue(data.powerSource ?? data.power_source);
+    const state = sourceState || normalizeSyncStatus(data);
+
+    if (state === 'OFF') return { label: 'OFF', detail: 'ECU disconnected', cls: 'st-err', ok: false };
+    if (state === 'SYNC') return { label: 'SYNC', detail: 'Sinkron dari ESP32', cls: 'st-ok', ok: true };
+    if (state === 'GRID') return { label: 'GRID', detail: 'Grid dari ESP32', cls: 'st-ok', ok: true };
+    if (state === 'GENSET') return { label: 'GENSET', detail: 'Genset dari payload ESP32', cls: 'st-warn', ok: true };
     return { label: '--', detail: 'Power source belum terdeteksi', cls: 'st-err', ok: false };
 }
 
@@ -192,12 +200,6 @@ function updatePowerSourceStatus(data) {
     const supply = getPowerSourceStatus(data);
     const overviewEl = document.getElementById('val-supply');
     if (overviewEl) overviewEl.innerText = supply.label;
-
-    const detailEl = document.getElementById('engSupply');
-    if (detailEl) {
-        detailEl.innerText = supply.detail;
-        detailEl.className = supply.cls;
-    }
 }
 
 function updatePowerSourceIndicator(id, data) {
@@ -207,6 +209,7 @@ function updatePowerSourceIndicator(id, data) {
     el.innerText = supply.label;
     el.className = supply.cls;
 }
+
 
 // ─── 1. SENSOR DATA ──────────────────────────────────────────────────────────
 // Lacak timestamp data terakhir yang berhasil diterima dari ESP32
@@ -263,7 +266,7 @@ async function _handleDisconnect(fallbackData = null) {
     if (_disconnectReported) return;
     _disconnectReported = true;
     console.warn('ESP32 disconnect detected — closing active session');
-    updatePowerSourceStatus({ sync: '' });
+    updatePowerSourceStatus({ ecuConnected: false, powerSource: 'OFF', sync: 'OFF' });
     try {
         await fetch(`${API_URL}/active-session/close`, {
             method : 'POST',
