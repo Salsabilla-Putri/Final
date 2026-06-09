@@ -1940,6 +1940,8 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"recordId\":\"" + r.recordId + "\",";
   json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
+  json += "\"espSentAtMs\":" + String(r.timestampMs) + ",";
+  json += "\"ecuConnected\":" + String(linkOK ? "true" : "false") + ",";
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
   json += "\"map\":" + String(a.mapAvg, 1) + ",";
@@ -1999,6 +2001,8 @@ String buildMqttRealtimeFlatPayload() {
   const AggregatedData &a = r.agg;
   String json = "{";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
+  json += "\"espSentAtMs\":" + String(r.timestampMs) + ",";
+  json += "\"ecuConnected\":" + String(linkOK ? "true" : "false") + ",";
 
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
@@ -2359,6 +2363,24 @@ void publishRealtimeData() {
   lastMqttPayloadCacheAtMs = millis();
   lastMqttPayloadRecordsCache = recordsInPayload;
   hasLastMqttPayloadCache = true;
+
+  Serial.print(F("[MQTT-LATENCY] espTimestamp="));
+  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
+    if (storageBatch[i].valid) {
+      Serial.print(storageBatch[i].timestamp);
+      Serial.print(F(" espSentAtMs="));
+      Serial.print(storageBatch[i].timestampMs);
+      break;
+    }
+  }
+  Serial.print(F(" publishMillis="));
+  Serial.print(millis());
+  Serial.print(F(" realtimeOk="));
+  Serial.print(realtimeOk ? F("1") : F("0"));
+  Serial.print(F(" historyOk="));
+  Serial.print(historyOk ? F("1") : F("0"));
+  Serial.print(F(" publishUs="));
+  Serial.println(perfMqttPublishUs);
 
   if (serialMqttPayloadEnabled || serialRealtimePayloadEnabled) {
     printMqttPayloadReport(
@@ -2936,15 +2958,40 @@ void updateStorageCache() {
 
 
 bool createFreshCsvFile(const char* path, const char* header, const char* label) {
-  deselectAllSPI();
+  File f;
 
-  File f = SD.open(path, FILE_WRITE);
+  for (uint8_t attempt = 1; attempt <= 3 && !f; attempt++) {
+    deselectAllSPI();
+    delay(30);
+
+    if (SD.exists(path)) {
+      SD.remove(path);
+      delay(20);
+    }
+
+    // ESP32 SD/FS dapat berbeda antar core: coba mode FILE_WRITE dengan create=true,
+    // lalu fallback mode "w" agar file root /database.csv benar-benar dibuat/truncate.
+    f = SD.open(path, FILE_WRITE, true);
+    if (!f) f = SD.open(path, "w", true);
+
+    if (!f && attempt < 3) {
+      Serial.print(F("[SD] Retry membuat "));
+      Serial.print(path);
+      Serial.print(F(" attempt="));
+      Serial.println(attempt + 1);
+      SD.end();
+      delay(150);
+      sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+      SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
+    }
+  }
+
   if (!f) {
     sdDatabaseCreateFailCount++;
     sdLastFileErrorMs = millis();
     Serial.print(F("[SD] GAGAL membuat "));
     Serial.print(path);
-    Serial.println(F("."));
+    Serial.println(F(". Pastikan MISO=GPIO12, MOSI=GPIO13, SCK=GPIO14, CS=GPIO26, FAT32."));
     return false;
   }
 
@@ -4535,16 +4582,22 @@ void handleTouchNavigation() {
 
   int targetPage = -1;
 
-  // Area navbar bawah layar.
-  // Generator : x 10-235
-  // Engine    : x 245-470
-  if (y >= 285 && y <= 320) {
-    if (x >= 10 && x <= 235) {
-      targetPage = PAGE_GENERATOR;
-    } else if (x >= 245 && x <= 470) {
-      targetPage = PAGE_ENGINE;
-    }
-  }
+  auto navHit = [](int tx, int ty) -> int {
+    // Area navbar bawah layar dibuat sedikit lebih tinggi agar tap tetap masuk
+    // walaupun mapping touch FT6206 bergeser beberapa piksel.
+    if (ty < 270 || ty > 320) return -1;
+    if (tx >= 0 && tx <= 240) return PAGE_GENERATOR;
+    if (tx >= 240 && tx <= 480) return PAGE_ENGINE;
+    return -1;
+  };
+
+  targetPage = navHit(x, y);
+
+  // Fallback untuk modul FT6206 yang orientasi raw-nya berbeda setelah TFT rotation(1).
+  // Ini membuat tombol bawah tetap bisa pindah page tanpa harus reflash hanya untuk kalibrasi.
+  if (targetPage < 0) targetPage = navHit(rawY, rawX);
+  if (targetPage < 0) targetPage = navHit(rawY, 320 - rawX);
+  if (targetPage < 0) targetPage = navHit(480 - rawY, rawX);
 
   if (targetPage >= 0) {
     lastTouchMs = millis();

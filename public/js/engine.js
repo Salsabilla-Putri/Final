@@ -1,7 +1,7 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
-const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps'];
-const ESP_FRESHNESS_MS = 15000;
+const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps','phase'];
+const ESP_FRESHNESS_MS = 3000;
 const SYNC_THRESHOLDS = {
     voltDeltaMax: 10,
     freqDeltaMax: 0.5,
@@ -73,6 +73,38 @@ function getSyncByThreshold(data) {
     return (voltOk && freqOk && phaseOk) ? 'ON-GRID' : 'OFF-GRID';
 }
 
+
+function formatLastUpdatedTimestamp(input) {
+    const dateObj = input instanceof Date ? input : new Date(input);
+    if (Number.isNaN(dateObj.getTime())) return '--';
+    return dateObj.toLocaleString('id-ID', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+}
+
+function updateLastUpdatedInfo(data = {}, isFresh = false) {
+    const el = document.getElementById('lastUpdatedInfo');
+    if (!el) return;
+    const ts = isFresh
+        ? new Date()
+        : (data.realtimeReceivedAt || data.serverReceivedAt || data.lastMqttUpdate || data.lastUpdated || data.timestamp);
+    const formatted = formatLastUpdatedTimestamp(ts);
+    el.innerText = isFresh ? `Realtime • ${formatted}` : `Disconnected • ${formatted}`;
+}
+
+function handleEngineData(data = {}, explicitFresh = null) {
+    const lastTs = data?.lastUpdated || data?.lastMqttUpdate || data?.realtimeReceivedAt || data?.timestamp;
+    const ts = Date.parse(lastTs || '');
+    const isFresh = explicitFresh !== null
+        ? explicitFresh
+        : data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
+
+    updateDashboard(data, isFresh);
+    setEspConnectionStatus(isFresh);
+    updateLastUpdatedInfo(data, isFresh);
+}
+
 // === DATA FETCHING ===
 async function loadThresholds() {
     try {
@@ -91,16 +123,14 @@ async function fetchData() {
         const json = await res.json();
         
         if (json.success) {
-            const lastTs = json.data?.lastUpdated || json.data?.lastMqttUpdate || json.data?.timestamp;
-            const ts = Date.parse(lastTs || '');
-            const isFresh = json.data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
-            updateDashboard(json.data, isFresh);
-            setEspConnectionStatus(isFresh);
+            handleEngineData(json.data);
         } else {
             setEspConnectionStatus(false);
+            updateLastUpdatedInfo({}, false);
         }
     } catch (err) {
         setEspConnectionStatus(false);
+        updateLastUpdatedInfo({}, false);
     }
 }
 
@@ -138,7 +168,7 @@ function updateDashboard(data, isEspConnected = true) {
     setVal('amp', data.amp, 1);
     setVal('freq', data.freq, 2);
     setVal('power', data.power, 2);
-    const phaseDiff = isEspConnected ? getPhaseDifference(data) : 0;
+    const phaseDiff = getPhaseDifference(data);
     setVal('phase', phaseDiff, 1, '0.0');
     setVal('coolant', data.coolant || data.temp, 0);
     setVal('iat', data.iat, 0);
@@ -287,6 +317,32 @@ window.removeThreshold = async () => {
     closeModal();
 };
 
+
+function startRealtimeEngineStream() {
+    if (!('EventSource' in window)) return false;
+
+    try {
+        const source = new EventSource(`${API_URL}/engine-data/stream`);
+        source.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload?.success && payload.data) handleEngineData(payload.data);
+            } catch (error) {
+                console.error('Engine stream parse error:', error);
+            }
+        };
+        source.onerror = () => {
+            // Keep EventSource auto-reconnect enabled, and let polling remain as fallback.
+            setEspConnectionStatus(false);
+        };
+        window.addEventListener('beforeunload', () => source.close());
+        return true;
+    } catch (error) {
+        console.error('Engine stream error:', error);
+        return false;
+    }
+}
+
 // === INIT ===
 document.addEventListener('DOMContentLoaded', () => {
     // Sidebar dimuat dan dikontrol oleh public/js/sidebar.js agar konsisten
@@ -297,8 +353,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setEspConnectionStatus(false);
     loadThresholds();
+    const streamStarted = startRealtimeEngineStream();
     fetchData();
     fetchAlerts();
-    setInterval(fetchData, 1000); 
+    setInterval(fetchData, 1000);
     setInterval(fetchAlerts, 1000); 
 });

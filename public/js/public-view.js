@@ -15,10 +15,31 @@ let lastFuelCostSignature = '';
 let isDashboardFetching = false;
 let lastHealthSnapshot = null;
 let lastHeavyFetchAt = 0;
-const DASHBOARD_REFRESH_MS = 10000;
+const DASHBOARD_REFRESH_MS = 1000;
 const HEAVY_ENDPOINT_REFRESH_MS = 30000;
-const DATA_LIVE_THRESHOLD_MS = 30000;
+const DATA_LIVE_THRESHOLD_MS = 3000;
 const LAST_PUBLIC_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
+
+
+function setCanvasLoading(canvasId, isLoading, message = 'Loading data...') {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const box = canvas.parentElement;
+    if (!box) return;
+    let loader = box.querySelector('.chart-loading-state');
+    if (isLoading) {
+        if (!loader) {
+            loader = document.createElement('div');
+            loader.className = 'chart-loading-state loading-state';
+            box.appendChild(loader);
+        }
+        loader.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> ${message}`;
+        canvas.style.display = 'none';
+    } else {
+        if (loader) loader.remove();
+        canvas.style.display = '';
+    }
+}
 
 // ── Live clock ───────────────────────────────────────────────────────────────
 function updateClock() {
@@ -138,6 +159,9 @@ async function fetchDashboardData() {
     if (isDashboardFetching) return;
     isDashboardFetching = true;
     setDashboardLoading(true);
+    if (!activeChart) setCanvasLoading('chartActive', true);
+    if (!fuelWeeklyChart) setCanvasLoading('chartFuelWeekly', true);
+    if (!maintenanceCostChart) setCanvasLoading('chartMaintCostMonthly', true);
     try {
         const nowTs = Date.now();
         const allowHeavyFetch = (nowTs - lastHeavyFetchAt) >= HEAVY_ENDPOINT_REFRESH_MS;
@@ -709,7 +733,7 @@ function calculateDailyEcuConnectedHours(engineRows = []) {
     const maxGapMs = 5 * 60 * 1000;
 
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
+        const d = new Date(now.getTime() - i * 86400000);
         const key = toWibDateKey(d);
         dayMap[key] = 0;
     }
@@ -741,7 +765,7 @@ function calculateDailySessionHours(historyRows = []) {
     const now = new Date();
 
     for (let i = 6; i >= 0; i--) {
-        const d = new Date(now.getTime() + WIB_OFFSET - i * 86400000);
+        const d = new Date(now.getTime() - i * 86400000);
         const key = toWibDateKey(d);
         dayMap[key] = 0;
     }
@@ -767,21 +791,36 @@ function updateActiveTimeChartFromDaily(dailyRows = []) {
     if (!ctx) return;
 
     const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
-    const labels = [];
-    const dataPoints = [];
-    const todayKey = toWibDateKey(new Date());
-    let todayHours = 0;
+    const dayMap = {};
+    const now = new Date();
+
+    for (let i = 6; i >= 0; i--) {
+        const key = toWibDateKey(new Date(now.getTime() - i * 86400000));
+        dayMap[key] = 0;
+    }
 
     (dailyRows || []).forEach((row) => {
         const key = row.date || row.dateKey;
+        if (Object.prototype.hasOwnProperty.call(dayMap, key)) {
+            dayMap[key] = Number(row.hours) || 0;
+        }
+    });
+
+    const labels = [];
+    const dataPoints = [];
+    const todayKey = toWibDateKey(now);
+    let todayHours = 0;
+
+    Object.keys(dayMap).sort().forEach((key) => {
         const d = new Date(`${key}T12:00:00+07:00`);
-        labels.push(row.label || days[d.getDay()] || key);
-        const val = parseFloat(Math.min(24, Number(row.hours) || 0).toFixed(2));
+        labels.push(days[d.getDay()] || key);
+        const val = parseFloat(Math.min(24, dayMap[key]).toFixed(2));
         dataPoints.push(val);
         if (key === todayKey) todayHours = val;
     });
 
     if (activeChart) activeChart.destroy();
+    setCanvasLoading('chartActive', false);
     activeChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -844,6 +883,7 @@ function updateActiveTimeChart(historyRows, options = {}) {
     });
 
     if (activeChart) activeChart.destroy();
+    setCanvasLoading('chartActive', false);
 
     activeChart = new Chart(ctx, {
         type: 'bar',
@@ -913,6 +953,7 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
     for (let i = 0; i < weeklyFuel.length; i++) weeklyFuel[i] = Number(weeklyFuel[i].toFixed(2));
 
     if (fuelWeeklyChart) fuelWeeklyChart.destroy();
+    setCanvasLoading('chartFuelWeekly', false);
     fuelWeeklyChart = new Chart(fuelCtx, {
         type: 'line',
         data: { labels: weeklyLabels, datasets: [{ label: 'BBM (L)', data: weeklyFuel, borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.2)', tension: 0.35, fill: true }] },
@@ -937,6 +978,7 @@ function updateFuelAndCostCharts(historyRows = [], maintenanceRows = []) {
 
     const detailBox = document.getElementById('maintenanceCostDetail');
     if (detailBox) detailBox.classList.remove('expanded');
+    setCanvasLoading('chartMaintCostMonthly', false);
     maintenanceCostChart = new Chart(costCtx, {
         type: 'bar',
         data: { labels: monthNames, datasets: [{ label: 'Biaya (Rp)', data: monthlyCost, backgroundColor: 'rgba(23,69,165,0.82)', borderRadius: 8 }] },

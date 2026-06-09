@@ -86,6 +86,7 @@
                     <option value="amp">Current (A)</option>
                     <option value="power">Power (kW)</option>
                     <option value="freq">Frequency (Hz)</option>
+                    <option value="coolant">Coolant Temp (°C)</option>
                     <option value="fuel">Fuel Level (%)</option>
                     <option value="phase">Phase Difference (°)</option>
                     <option value="iat">Intake Air Temp (°C)</option>
@@ -120,19 +121,12 @@
           </div>
         </div>
 
-        <table id="historyTable">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Generator</th>
-              <th>Parameter</th>
-              <th>Value</th>
-              <th>Unit</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="historyTableBody"></tbody>
-        </table>
+        <div class="history-table-scroll">
+          <table id="historyTable">
+            <thead id="historyTableHead"></thead>
+            <tbody id="historyTableBody"></tbody>
+          </table>
+        </div>
 
         <div id="loading" style="display:none; text-align:center; padding:20px; color:#666;">
           <i class="fas fa-spinner fa-spin fa-2x"></i><br>Loading data...
