@@ -145,7 +145,6 @@ const generatorDataSchema = new mongoose.Schema({
     afr: Number,
     tps: Number,
     phaseAngle: Number,
-    espSentAtMs: Number,
     serverReceivedAt: Date,
     transportLatencyMs: Number
 }, { versionKey: false });
@@ -699,7 +698,7 @@ app.use('/api', async (req, res, next) => {
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: null,
     rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
-    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'GENSET', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
+    fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'OFF', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
 const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '30000', 10);
@@ -711,9 +710,7 @@ function buildEngineRealtimeStreamPayload() {
     const lastDataAt = getValidDate(latestData?.realtimeReceivedAt || latestData?.lastMqttUpdate)
         || getValidDate(latestData?.timestamp)
         || getValidDate(latestRealtimeReceivedAt);
-    const freshByReceiveTime = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
-    const payloadEcuConnected = toBooleanOrUndefined(latestData?.ecuConnected);
-    const ecuConnected = freshByReceiveTime && payloadEcuConnected !== false;
+    const ecuConnected = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
 
     return {
         success: true,
@@ -891,7 +888,7 @@ async function finalizeOpenActiveSession(deviceId, startedAt, endedAt, reason = 
             endedAt: end,
             durationMs,
             closeReason: reason,
-            calc: { rpmThreshold: 0, rule: 'ECU connected', sampledAt: end }
+            calc: { rpmThreshold: 0, rule: 'Genset active via MQTT', sampledAt: end }
         },
         { sort: { createdAt: -1 }, new: true }
     );
@@ -965,10 +962,9 @@ async function closeStaleActiveSessions(requestedDeviceId = null) {
 
 async function syncActiveTimeHistory(data) {
     const rpmThreshold = 0;
-    const eventTime = safeEventTime(data?.timestamp);
-    const dataAgeMs = Math.abs(Date.now() - eventTime.getTime());
-    const isEcuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
-    const isRunning = isEcuConnected;
+    const eventTime = safeEventTime(data?.realtimeReceivedAt || data?.serverReceivedAt || latestRealtimeReceivedAt || new Date());
+    const isEcuConnected = Boolean(latestRealtimeReceivedAt && (Date.now() - latestRealtimeReceivedAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+    const isRunning = isEcuConnected && isPowerSourceGensetActive(data);
     const deviceId = data?.deviceId || latestData.deviceId || 'GENERATOR #1';
     const key = `${deviceId}`;
     let session = activeSessions.get(key);
@@ -993,7 +989,7 @@ async function syncActiveTimeHistory(data) {
             deviceId,
             startedAt: eventTime,
             source: 'mqtt',
-            calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
+            calc: { rpmThreshold, rule: 'Genset active via MQTT', sampledAt: eventTime }
         });
         return;
     }
@@ -1008,7 +1004,7 @@ async function syncActiveTimeHistory(data) {
                 deviceId,
                 startedAt: eventTime,
                 source: 'mqtt',
-                calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime }
+                calc: { rpmThreshold, rule: 'Genset active via MQTT', sampledAt: eventTime }
             });
             return;
         }
@@ -1016,7 +1012,7 @@ async function syncActiveTimeHistory(data) {
         session.lastSeenAt = eventTime;
         await ActiveTimeHistory.findOneAndUpdate(
             { deviceId, startedAt: session.startedAt, endedAt: null },
-            { calc: { rpmThreshold, rule: 'ECU connected', sampledAt: eventTime } },
+            { calc: { rpmThreshold, rule: 'Genset active via MQTT', sampledAt: eventTime } },
             { sort: { createdAt: -1 } }
         );
         return;
@@ -1091,9 +1087,11 @@ let isFlushingGeneratorBatch = false;
 
 function buildGeneratorDbDocument(data) {
     const snapshot = { ...data };
+    const powerSource = normalizePowerSourceStatus(snapshot, snapshot.powerSource || 'OFF');
+    const sync = snapshot.sync || getSyncStatusFromPowerSource(powerSource);
 
     if (snapshot.rpm > 0) {
-        snapshot.status = snapshot.sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
+        snapshot.status = sync === 'ON-GRID' ? 'ON-GRID' : 'RUNNING';
     } else {
         snapshot.status = 'STOPPED';
     }
@@ -1117,9 +1115,9 @@ function buildGeneratorDbDocument(data) {
         temp: toNumber(snapshot.temp, 0),
         coolant: toNumber(snapshot.coolant ?? snapshot.clt, 0),
         fuel: toNumber(snapshot.fuel, 0),
-        sync: snapshot.sync || 'OFF-GRID',
-        synced: snapshot.sync === 'ON-GRID' || snapshot.synced === true,
-        powerSource: snapshot.powerSource || (snapshot.sync === 'ON-GRID' || snapshot.synced === true ? 'GRID' : 'GENSET'),
+        sync,
+        synced: powerSource === 'SYNC',
+        powerSource,
         status: snapshot.status,
         iat: toNumber(snapshot.iat, 0),
         map: toNumber(snapshot.map, 0),
@@ -1127,7 +1125,6 @@ function buildGeneratorDbDocument(data) {
         afr: toNumber(snapshot.afr, 0),
         tps: toNumber(snapshot.tps, 0),
         phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0),
-        espSentAtMs: snapshot.espSentAtMs !== undefined ? toNumber(snapshot.espSentAtMs, 0) : undefined,
         serverReceivedAt: snapshot.serverReceivedAt ? new Date(snapshot.serverReceivedAt) : undefined,
         transportLatencyMs: snapshot.transportLatencyMs !== undefined ? toNumber(snapshot.transportLatencyMs, 0) : undefined
     };
@@ -1429,6 +1426,38 @@ function normalizeSyncStatus(payload = {}, fallbackSync = 'OFF-GRID') {
     return key || 'OFF-GRID';
 }
 
+function normalizePowerSourceStatus(payload = {}, fallbackSource = 'OFF') {
+    const rawSource = firstDefined(
+        payload.powerSource,
+        payload.power_source,
+        payload.supplySource,
+        payload.sourceState,
+        fallbackSource,
+        'OFF'
+    );
+    const key = String(rawSource).trim().toUpperCase().replace(/[\s_-]+/g, '-');
+
+    if (['OFF', 'ECU-OFF', 'ECU-DISCONNECTED', 'DISCONNECTED', 'OFFLINE', 'NO-DATA'].includes(key)) return 'OFF';
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(key)) return 'SYNC';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(key)) return 'GRID';
+    if (['GENSET', 'GENERATOR', 'GEN', 'OFF-GRID', 'OFFGRID'].includes(key)) return 'GENSET';
+    return 'OFF';
+}
+
+function getSyncStatusFromPowerSource(powerSource) {
+    return powerSource === 'SYNC' ? 'ON-GRID' : 'OFF-GRID';
+}
+
+function isPowerSourceGensetActive(data = {}) {
+    const source = normalizePowerSourceStatus(data, data.powerSource || latestData.powerSource || 'OFF');
+    const status = String(data?.status || '').toUpperCase();
+    const rpm = toNumber(data?.rpm, 0);
+    const volt = toNumber(data?.volt, 0);
+    const freq = toNumber(data?.freq, 0);
+    const hasGeneratorOutput = rpm > 0 || volt > 20 || freq > 5 || ['RUNNING', 'ON', 'ACTIVE', 'ON-GRID'].includes(status);
+    return (source === 'GENSET' || source === 'SYNC') && hasGeneratorOutput;
+}
+
 function pickEffectivePayload(rawPayload) {
     const payload = typeof rawPayload === 'object' && rawPayload !== null ? rawPayload : {};
     const records = Array.isArray(payload.records) ? payload.records : [];
@@ -1448,7 +1477,8 @@ function normalizeGeneratorPayload(rawPayload) {
     const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
     const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
 
-    const syncStatus = normalizeSyncStatus(payload, latestData.sync);
+    const powerSource = normalizePowerSourceStatus(payload, latestData.powerSource);
+    const syncStatus = normalizeSyncStatus(payload, getSyncStatusFromPowerSource(powerSource));
 
     const snapshot = {
         ...latestData,
@@ -1463,8 +1493,8 @@ function normalizeGeneratorPayload(rawPayload) {
         coolant: toNumber(readCoolantValue(payload), latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
         sync: syncStatus,
-        synced: syncStatus === 'ON-GRID',
-        powerSource: String(payload.powerSource || payload.power_source || (syncStatus === 'ON-GRID' ? 'GRID' : 'GENSET')).toUpperCase(),
+        synced: powerSource === 'SYNC',
+        powerSource,
         status: String(payload.status || latestData.status || 'STOPPED'),
         oil: toNumber(payload.oil, latestData.oil),
         iat: toNumber(payload.iat, latestData.iat),
@@ -1473,8 +1503,7 @@ function normalizeGeneratorPayload(rawPayload) {
         afr: toNumber(payload.afr, latestData.afr),
         tps: toNumber(payload.tps, latestData.tps),
         phaseAngle: toNumber(payload.phaseAngle ?? payload.phase_angle ?? payload.phase_diff, latestData.phaseAngle ?? 0),
-        ecuConnected: toBooleanOrUndefined(payload.ecuConnected) ?? latestData.ecuConnected,
-        espSentAtMs: toNumber(payload.espSentAtMs ?? payload.timestampMs, latestData.espSentAtMs),
+        ecuConnected: latestRealtimeReceivedAt ? (Date.now() - latestRealtimeReceivedAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS : latestData.ecuConnected,
         recordId: payload.recordId || latestData.recordId,
         localSeq: payload.localSeq ?? latestData.localSeq,
         _realtime: true
@@ -1573,7 +1602,7 @@ app.get('/api/ingest/batch', (req, res) => {
                     currentA: 10,
                     powerKW: 2.2,
                     phase_diff: 0,
-                    synced: false
+                    powerSource: 'GENSET'
                 }
             ]
         }
@@ -1892,11 +1921,10 @@ app.get('/api/engine-data/latest', async (req, res) => {
             const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
                 || getValidDate(realtimeData.timestamp)
                 || new Date();
-            const payloadEcuConnected = toBooleanOrUndefined(realtimeData.ecuConnected);
             const enrichedRealtime = {
                 ...realtimeData,
                 timestamp: lastDataAt,
-                ecuConnected: payloadEcuConnected !== false,
+                ecuConnected: true,
                 engineHours: 0,
                 lastMqttUpdate: lastDataAt,
                 lastUpdated: lastDataAt,
