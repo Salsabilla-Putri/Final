@@ -1244,10 +1244,10 @@ async function checkAndSaveAlerts(data) {
     const alertsToSave = [];
     const T = ACTIVE_THRESHOLDS;
 
-    const thresholdBand = (limit) => Math.abs(Number(limit) || 0) * 0.2;
+    const thresholdBand = (limit) => Math.abs(Number(limit) || 0) * 0.05;
 
     // Critical selalu mengikuti batas threshold yang disimpan dari halaman engine.
-    // Warning aktif saat nilai masih di dalam batas, tetapi sudah masuk area ±20% dari batas tersebut.
+    // Warning aktif saat nilai masih di dalam batas, tetapi sudah masuk area ±5% dari batas tersebut.
     const check = (param, rawVal) => {
         const th = T[param];
         const val = Number(rawVal);
@@ -1267,7 +1267,7 @@ async function checkAndSaveAlerts(data) {
                 alertsToSave.push({
                     parameter: param,
                     value: val,
-                    message: `${param.toUpperCase()} Warning High (within 20% of ${max})`,
+                    message: `${param.toUpperCase()} Warning High (within 5% of ${max})`,
                     severity: 'warning'
                 });
             }
@@ -1287,7 +1287,7 @@ async function checkAndSaveAlerts(data) {
                 alertsToSave.push({
                     parameter: param,
                     value: val,
-                    message: `${param.toUpperCase()} Warning Low (within 20% of ${min})`,
+                    message: `${param.toUpperCase()} Warning Low (within 5% of ${min})`,
                     severity: 'warning'
                 });
             }

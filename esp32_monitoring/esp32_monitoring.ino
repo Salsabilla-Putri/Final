@@ -1758,6 +1758,14 @@ void finalizeFastAggregate() {
       needFullRedraw = true;
     }
 
+    // Aggregate baru harus segera muncul di LCD dan server. Jangan tunggu sisa
+    // interval publish/draw sebelumnya; loop utama akan menjalankan publish
+    // realtime MQTT, simpan lokal, dan redraw pada siklus berikutnya.
+    lastPublish = millis() - publishInterval;
+    lastLocalSave = millis() - localSaveInterval;
+    lastDraw = millis() - drawInterval;
+    needFullRedraw = true;
+
     fastAggCompleted++;
     lastFastAggSamples = out.samples;
     lastAggReadyMs = nowMs;
@@ -3641,14 +3649,32 @@ void applyMqttStabilityConfig() {
 
 const char* wifiStatusText(wl_status_t st);
 
+int scanWiFiNetworksReliable(const __FlashStringHelper* label) {
+  // ESP32 hanya 2.4 GHz. Pastikan country/channel 1-13 aktif dan lakukan
+  // scan sinkron aktif dengan hidden SSID agar daftar di WiFiManager tidak kosong
+  // karena channel 12/13, SSID hidden, atau sisa state WPA2-Enterprise.
+  WiFi.scanDelete();
+  WiFi.mode(WIFI_STA);
+  applyWiFiCountryConfig();
+  delay(250);
+
+  int networkCount = WiFi.scanNetworks(false, true);
+  if (networkCount == WIFI_SCAN_FAILED || networkCount < 0) {
+    Serial.print(label);
+    Serial.print(F(" first scan failed, retry result="));
+    Serial.println(networkCount);
+    WiFi.scanDelete();
+    delay(500);
+    networkCount = WiFi.scanNetworks(false, true);
+  }
+  return networkCount;
+}
+
 void debugScanWiFiBeforePortal() {
 #if WIFI_MANAGER_SCAN_DEBUG
   Serial.println(F("[WIFI MANAGER] Pre-scan visible 2.4GHz networks..."));
 
-  WiFi.mode(WIFI_STA);
-  delay(200);
-
-  int networkCount = WiFi.scanNetworks(false, true);
+  int networkCount = scanWiFiNetworksReliable(F("[WIFI MANAGER]"));
   if (networkCount < 0) {
     Serial.print(F("[WIFI MANAGER] Pre-scan failed, result="));
     Serial.println(networkCount);
@@ -3896,11 +3922,20 @@ bool connectWiFiManagerFallback() {
 
   debugScanWiFiBeforePortal();
 
+  // Portal memakai AP+STA agar halaman konfigurasi tetap aktif sambil ESP32
+  // melakukan scan jaringan sekitar. Ini membantu WiFiManager mendeteksi SSID
+  // dengan benar setelah fallback dari eduroam/EAP.
+  WiFi.mode(WIFI_AP_STA);
+  applyWiFiCountryConfig();
+  delay(300);
+
   static WiFiManager wm;
   wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
   wm.setConnectTimeout(30);
-  wm.setConnectRetries(1);
+  wm.setConnectRetries(2);
+  wm.setMinimumSignalQuality(0);
+  wm.setRemoveDuplicateAPs(false);
 
 #if FORCE_WIFI_PORTAL
   wm.resetSettings();
