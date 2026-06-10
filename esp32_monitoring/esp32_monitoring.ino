@@ -187,7 +187,7 @@
 
 #define MQTT_BUFFER_SIZE_BYTES       2048
 #define MQTT_KEEPALIVE_SEC           120
-#define MQTT_SOCKET_TIMEOUT_SEC      10
+#define MQTT_SOCKET_TIMEOUT_SEC      1   // Batasi blocking mqtt.connect agar TFT tidak freeze lama
 
 #define MQTT_RECONNECT_MIN_MS        10000UL
 #define MQTT_RECONNECT_MAX_MS        60000UL
@@ -290,6 +290,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 
 #define SD_SPI_FREQ_INIT 400000UL
 #define SD_SPI_FREQ_FAST 1000000UL
+#define SD_AUTO_RETRY_INTERVAL_MS 30000UL
 
 SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
@@ -886,6 +887,8 @@ void applyWiFiStabilityConfig();
 void applyMqttStabilityConfig();
 void reconnectMQTT();
 void checkWiFiStatus();
+bool retrySDCardOnceFast();
+void serviceDisplayAndTouch();
 bool publishMongoBufferBatchToMqtt(const String &batchPayload);
 
 
@@ -3423,6 +3426,48 @@ String buildFftCsvLine(const StorageRecord &r) {
   line += csvEscapeField(buildFftBinsCsvField(f));
 
   return line;
+}
+
+
+bool retrySDCardOnceFast() {
+  if (sdOK) return true;
+
+  // Retry runtime dibuat cepat/non-spam agar kegagalan SD tidak membekukan
+  // display 7 detik seperti init penuh 10x attempt. Init penuh tetap dipakai saat
+  // boot/command manual; loop runtime hanya mencoba 1 kali lalu kembali ke UI.
+  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return false;
+  }
+
+  deselectAllSPI();
+  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  delay(20);
+
+  bool ok = false;
+  if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
+    File testFile = SD.open("/sd_retry_test.txt", FILE_WRITE);
+    if (testFile) {
+      testFile.println(F("SD retry OK"));
+      testFile.close();
+      sdOK = true;
+      sdConsecutiveOpenFail = 0;
+      sdLastFileOkMs = millis();
+      ensureDatabaseCsvHeader();
+      ok = true;
+      Serial.println(F("[SD] Runtime retry OK; database.csv siap."));
+    }
+  }
+
+  if (!ok) {
+    sdOK = false;
+    sdLastFileErrorMs = millis();
+    SD.end();
+  }
+
+  if (sdMutex != NULL) xSemaphoreGive(sdMutex);
+
+  if (ok) updateStorageCache();
+  return ok;
 }
 
 
@@ -5988,9 +6033,37 @@ void setup() {
   Serial.println(LINK_BAUD);
 }
 
+
+void serviceDisplayAndTouch() {
+  // Display/touch diservis sebelum pekerjaan WiFi/MQTT/SD yang bisa blocking.
+  // Dengan ini data lokal dari agregasi 1 detik tidak menunggu reconnect MQTT
+  // atau retry SD runtime.
+  handleTouchNavigation();
+
+  bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
+  if (needFullRedraw || doPartialUpdate) {
+    lastDraw = millis();
+
+    drawCurrentPage(needFullRedraw);
+    needFullRedraw = false;
+    displayUpdateNow = false;
+
+    if (testOnceMode && testOnceAggDone && !testOnceDisplayDone) {
+      testOnceDisplayDone = true;
+      Serial.println();
+      Serial.println(F("╔════════════ TEST-ONCE TFT MONITORING ════════════╗"));
+      Serial.println(F("[TEST] Satu tampilan monitoring telah dirender ke TFT."));
+      Serial.println(F("[TEST] Data dibekukan, tetapi HMI/touch navigation tetap aktif."));
+      Serial.println(F("╚═══════════════════════════════════════════════════╝"));
+      updateTestOnceCompletion();
+    }
+  }
+}
+
 void loop() {
   handleSerialCommandConsole();
   handlePeriodicSerialLog();
+  serviceDisplayAndTouch();
 
   if (paperTickerEnabled && millis() - lastPaperTickerMs >= paperTickerIntervalMs) {
     lastPaperTickerMs = millis();
@@ -6022,10 +6095,10 @@ void loop() {
     }
   }
 
-  if (!sdOK && millis() - lastSDRetry >= 5000) {
+  if (!sdOK && millis() - lastSDRetry >= SD_AUTO_RETRY_INTERVAL_MS) {
     lastSDRetry = millis();
-    Serial.println("[SD] Retry init otomatis...");
-    initSDCard();
+    Serial.println("[SD] Runtime retry cepat (1 attempt, non-blocking panjang)...");
+    retrySDCardOnceFast();
     displayUpdateNow = true;
   }
 
@@ -6046,33 +6119,7 @@ void loop() {
   // Kirim buffer RAM MongoDB sesesuai interval batch; SD tetap hanya arsip lokal.
  
 
-  // WAJIB tetap aktif meskipun test-once sudah selesai.
-  // Yang dibekukan hanya data RX/agregasi/database, bukan UI.
-  handleTouchNavigation();
-
-  // Render normal tidak boleh menggambar ulang satu halaman penuh.
-  // Full redraw hanya untuk boot pertama, ganti page, atau command "redraw".
-  // Data/agregasi/status runtime cukup memaksa partial update nilai yang berubah.
-  bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
-  if (needFullRedraw || doPartialUpdate) {
-    lastDraw = millis();
-
-    drawCurrentPage(needFullRedraw);
-    needFullRedraw = false;
-    displayUpdateNow = false;
-
-    // Status test-once display hanya ditandai sekali.
-    // Setelah itu display tetap boleh dirender untuk navigasi page.
-    if (testOnceMode && testOnceAggDone && !testOnceDisplayDone) {
-      testOnceDisplayDone = true;
-      Serial.println();
-      Serial.println(F("╔════════════ TEST-ONCE TFT MONITORING ════════════╗"));
-      Serial.println(F("[TEST] Satu tampilan monitoring telah dirender ke TFT."));
-      Serial.println(F("[TEST] Data dibekukan, tetapi HMI/touch navigation tetap aktif."));
-      Serial.println(F("╚═══════════════════════════════════════════════════╝"));
-      updateTestOnceCompletion();
-    }
-  }
+  serviceDisplayAndTouch();
 
   delay(5);
 }
