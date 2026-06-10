@@ -139,12 +139,11 @@
 // ============================================================
 // MQTT
 // ============================================================
-// Default broker RabbitMQ MQTT SmartSystem.
-// Catatan: PubSubClient membutuhkan host polos tanpa skema, jadi gunakan
-// rmq230.smartsystem.id di MQTT_HOST. Jika build flag masih memberi URI
-// seperti mqtt://rmq230.smartsystem.id, kode akan menormalisasi saat runtime.
+// Default broker Shiftr.io untuk dashboard realtime.
+// PubSubClient membutuhkan host polos tanpa skema; jika build flag memberi URI
+// seperti mqtt://generatorta20.cloud.shiftr.io, kode akan menormalisasi saat runtime.
 #ifndef MQTT_HOST
-#define MQTT_HOST  "rmq230.smartsystem.id"
+#define MQTT_HOST  "mqtt://generatorta20.cloud.shiftr.io"
 #endif
 
 #ifndef MQTT_PORT
@@ -152,20 +151,25 @@
 #endif
 
 #ifndef MQTT_USER
-#define MQTT_USER  "smartgen_sec8AePh"
+#define MQTT_USER  "generatorta20"
 #endif
 
 #ifndef MQTT_PASS
-#define MQTT_PASS  "rai2Oi1U"
+#define MQTT_PASS  "TA252601020"
 #endif
 
 #ifndef MQTT_VHOST
-#define MQTT_VHOST "/smartgen"
+#define MQTT_VHOST ""
 #endif
 
-// RabbitMQ MQTT memakai format username "vhost:username".
+// Shiftr.io memakai username langsung. MQTT_AUTH_USERNAME/build flag tetap bisa override
+// jika suatu saat broker membutuhkan format lain.
+#ifndef MQTT_AUTH_USERNAME
+#define MQTT_AUTH_USERNAME MQTT_USER
+#endif
+
 #ifndef MQTT_LOGIN_USER
-#define MQTT_LOGIN_USER MQTT_VHOST ":" MQTT_USER
+#define MQTT_LOGIN_USER MQTT_AUTH_USERNAME
 #endif
 
 #ifndef MQTT_TOPIC
@@ -189,12 +193,12 @@
 #define MQTT_KEEPALIVE_SEC           120
 #define MQTT_SOCKET_TIMEOUT_SEC      1   // Batasi blocking mqtt.connect agar TFT tidak freeze lama
 
-#define MQTT_RECONNECT_MIN_MS        10000UL
-#define MQTT_RECONNECT_MAX_MS        60000UL
+#define MQTT_RECONNECT_MIN_MS        1000UL
+#define MQTT_RECONNECT_MAX_MS        10000UL
 
-#define WIFI_RUNTIME_CHECK_MS        3000UL
-#define WIFI_RECONNECT_MIN_MS        10000UL
-#define WIFI_RECONNECT_MAX_MS        60000UL
+#define WIFI_RUNTIME_CHECK_MS        1000UL
+#define WIFI_RECONNECT_MIN_MS        1000UL
+#define WIFI_RECONNECT_MAX_MS        10000UL
 #define WIFI_CONNECT_POLL_MS         500UL
 #define WIFI_EDUROAM_MAX_ATTEMPTS    1
 
@@ -290,7 +294,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 
 #define SD_SPI_FREQ_INIT 400000UL
 #define SD_SPI_FREQ_FAST 1000000UL
-#define SD_AUTO_RETRY_INTERVAL_MS 30000UL
+#define SD_AUTO_RETRY_INTERVAL_MS 1000UL
 
 SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
@@ -2468,7 +2472,7 @@ void publishRealtimeData() {
   uint32_t pubStart = micros();
   bool realtimeOk = false;
   bool historyOk = false;
-  if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+  if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
     mqtt.loop();
     historyOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
@@ -2932,7 +2936,7 @@ void sendMongoDbBufferToMongoDB() {
     }
 
     if (mongoBufferMutex != NULL) {
-      if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+      if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         clearMongoDbBufferNoLock(recordsCount);
         xSemaphoreGive(mongoBufferMutex);
       } else {
@@ -3094,36 +3098,43 @@ void updateStorageCache() {
 
 
 bool createFreshCsvFile(const char* path, const char* header, const char* label) {
-  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
+  // Jangan re-init SPI/SD berkali-kali dari loop 1 detik: itu yang membuat LCD dan
+  // publish MQTT terasa mundur beberapa detik saat CSV gagal dibuat. Karena test write
+  // sudah membuktikan kartu bisa ditulis, gunakan create/truncate langsung dan retry
+  // singkat saja.
+  const char* altPath = (path[0] == '/') ? path + 1 : path;
+
+  for (uint8_t attempt = 1; attempt <= 2; attempt++) {
     deselectAllSPI();
-    delay(80);
+    delay(10);
 
     if (SD.exists(path)) {
       Serial.print(F("[SD] "));
       Serial.print(path);
       Serial.println(F(" sudah ada tetapi akan dibuat ulang/truncate."));
-      SD.remove(path);
-      delay(80);
+      if (!SD.remove(path)) {
+        Serial.print(F("[SD] WARNING: remove "));
+        Serial.print(path);
+        Serial.println(F(" gagal; coba truncate dengan mode w."));
+      }
+      delay(10);
     }
 
-    // Coba beberapa mode open. Beberapa versi FS/SD ESP32 berbeda perilaku:
-    // FILE_WRITE paling kompatibel, mode "w" memaksa truncate/create, dan
-    // path tanpa slash membantu library lama yang sensitif terhadap root path.
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) f = SD.open(path, "w");
-    if (!f && path[0] == '/') f = SD.open(path + 1, FILE_WRITE);
-    if (!f && path[0] == '/') f = SD.open(path + 1, "w");
+    File f = SD.open(path, "w");
+    if (!f) f = SD.open(path, FILE_WRITE);
+    if (!f && altPath != path) f = SD.open(altPath, "w");
+    if (!f && altPath != path) f = SD.open(altPath, FILE_WRITE);
 
     if (f) {
       size_t written = f.println(header);
       f.flush();
       f.close();
 
-      delay(80);
+      delay(10);
       deselectAllSPI();
       File verify = SD.open(path, FILE_READ);
-      if (!verify && path[0] == '/') verify = SD.open(path + 1, FILE_READ);
-      bool verified = verify && verify.size() > 0;
+      if (!verify && altPath != path) verify = SD.open(altPath, FILE_READ);
+      bool verified = verify && verify.size() >= strlen(header);
       if (verify) verify.close();
 
       if (written > 0 && verified) {
@@ -3144,29 +3155,28 @@ bool createFreshCsvFile(const char* path, const char* header, const char* label)
     } else {
       Serial.print(F("[SD] "));
       Serial.print(path);
-      Serial.println(F(" gagal dibuka untuk create; mencoba re-init SPI/SD."));
+      Serial.println(F(" gagal dibuka untuk create/truncate."));
     }
 
-    if (attempt < 5) {
-      Serial.print(F("[SD] Retry membuat "));
+    if (attempt < 2) {
+      Serial.print(F("[SD] Retry cepat membuat "));
       Serial.print(path);
       Serial.print(F(" attempt="));
       Serial.println(attempt + 1);
+      SD.end();
+      delay(30);
+      deselectAllSPI();
+      sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+      delay(10);
+      SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
     }
-
-    SD.end();
-    delay(200);
-    deselectAllSPI();
-    sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-    delay(50);
-    SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
   }
 
   sdDatabaseCreateFailCount++;
   sdLastFileErrorMs = millis();
   Serial.print(F("[SD] GAGAL membuat "));
   Serial.print(path);
-  Serial.println(F(". Test write OK tetapi create CSV gagal; cek FAT32, lock/adaptor SD, kabel pendek, supply 3.3V stabil, dan pin MISO=12 MOSI=13 SCK=14 CS=26."));
+  Serial.println(F(". Penyebab paling mungkin: filesystem/root directory bermasalah atau korup meski test write kecil OK. Backup isi kartu, format ulang FAT32 (MBR, allocation 32 KB), lalu coba lagi; pastikan lock/adaptor SD, kabel pendek, supply 3.3V stabil, dan pin MISO=12 MOSI=13 SCK=14 CS=26."));
   return false;
 }
 
@@ -3176,6 +3186,15 @@ bool createFreshDatabaseCsv() {
 
 bool createFreshFftCsv() {
   return createFreshCsvFile(FFT_FILE, FFT_CSV_HEADER, "CSV FFT");
+}
+
+bool canAppendExistingCsvNoLock(const char* path) {
+  File appendTest = SD.open(path, FILE_APPEND);
+  if (!appendTest) appendTest = SD.open(path, FILE_WRITE);
+  if (!appendTest) return false;
+
+  appendTest.close();
+  return true;
 }
 
 bool ensureCsvFileExistsNoLock(const char* path,
@@ -3210,13 +3229,39 @@ bool ensureCsvFileExistsNoLock(const char* path,
     Serial.print(F("[SD] Header "));
     Serial.print(path);
     Serial.println(F(" lama/tidak sesuai. Backup file lama dan buat header baru..."));
-    if (SD.exists(backupPath)) SD.remove(backupPath);
+
+    if (SD.exists(backupPath) && !SD.remove(backupPath)) {
+      Serial.print(F("[SD] WARNING: backup lama "));
+      Serial.print(backupPath);
+      Serial.println(F(" gagal dihapus."));
+    }
+
     bool backupOk = SD.rename(path, backupPath);
-    bool createOk = createFreshFn();
-    Serial.println(backupOk
-      ? F("[SD] File lama berhasil dibackup.")
-      : F("[SD] Backup gagal. File baru tetap dibuat jika memungkinkan."));
-    return createOk;
+    if (backupOk) {
+      bool createOk = createFreshFn();
+      if (createOk) {
+        Serial.println(F("[SD] File lama berhasil dibackup."));
+        return true;
+      }
+
+      Serial.println(F("[SD] File baru gagal dibuat setelah backup; mencoba restore file database.csv lama."));
+      if (!SD.exists(path) && SD.exists(backupPath) && SD.rename(backupPath, path)) {
+        Serial.println(F("[SD] Restore database.csv lama OK; append akan dilanjutkan dengan header lama."));
+        return canAppendExistingCsvNoLock(path);
+      }
+      return false;
+    }
+
+    Serial.println(F("[SD] Backup gagal. database.csv sudah ada, jadi file lama tidak dihapus agar data tidak hilang."));
+    if (canAppendExistingCsvNoLock(path)) {
+      Serial.println(F("[SD] database.csv lama masih bisa di-append; lanjut pakai file lama. Backup data dan reset CSV saat sempat."));
+      sdLastFileOkMs = millis();
+      return true;
+    }
+
+    Serial.println(F("[SD] database.csv lama juga tidak bisa di-append. Kemungkinan file/directory FAT korup atau kartu write-protected."));
+    sdLastFileErrorMs = millis();
+    return false;
   }
 
   sdLastFileOkMs = millis();
@@ -5768,7 +5813,7 @@ void reinitSdFromCommand() {
 
 void resetSDDatabase() {
   if (!sdOK) { Serial.println(F("[DB] SD not ready.")); return; }
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     deselectAllSPI();
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
     if (SD.exists(FFT_FILE)) SD.remove(FFT_FILE);
@@ -6121,5 +6166,5 @@ void loop() {
 
   serviceDisplayAndTouch();
 
-  delay(5);
+  delay(1);
 }
