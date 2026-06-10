@@ -25,6 +25,8 @@ const STATUS_MAP = {
 const COST_PER_KWH = 13150;
 
 function normalizePowerSource(latestDoc = {}) {
+    if (latestDoc?.ecuConnected === false) return POWER_SOURCE_MAP.OFF;
+
     const rawSource = String(latestDoc?.powerSource || latestDoc?.power_source || '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
     if (POWER_SOURCE_MAP[rawSource]) return POWER_SOURCE_MAP[rawSource];
 
