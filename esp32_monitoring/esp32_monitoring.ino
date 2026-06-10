@@ -186,11 +186,11 @@
 // - Mengurangi risiko heap fragmentation akibat String JSON.
 
 #define MQTT_BUFFER_SIZE_BYTES       2048
-#define MQTT_KEEPALIVE_SEC           60
-#define MQTT_SOCKET_TIMEOUT_SEC      15
+#define MQTT_KEEPALIVE_SEC           120
+#define MQTT_SOCKET_TIMEOUT_SEC      30
 
-#define MQTT_RECONNECT_MIN_MS        3000UL
-#define MQTT_RECONNECT_MAX_MS        30000UL
+#define MQTT_RECONNECT_MIN_MS        5000UL
+#define MQTT_RECONNECT_MAX_MS        60000UL
 
 #define WIFI_RUNTIME_CHECK_MS        3000UL
 #define WIFI_RECONNECT_MIN_MS        10000UL
@@ -642,6 +642,7 @@ WiFiConnectionMode wifiConnectionMode = WIFI_MODE_OFFLINE;
 bool sdOK = false;
 bool linkOK = false;
 bool needFullRedraw = true;
+bool displayUpdateNow = false;
 bool touchDetected = false;
 
 enum DisplayPage {
@@ -1564,12 +1565,12 @@ void startTestOnceMode() {
     xSemaphoreGive(dataMutex);
   }
 
-  // Paksa siklus berikutnya segera mencoba publish, save, dan redraw
-  // setelah aggregate pertama tersedia.
+  // Paksa siklus berikutnya segera mencoba publish, save, dan update nilai TFT
+  // setelah aggregate pertama tersedia tanpa full redraw halaman.
   lastPublish = 0;
   lastLocalSave = 0;
   lastDraw = 0;
-  needFullRedraw = true;
+  displayUpdateNow = true;
 
   Serial.println();
   Serial.println(F("╔════════════ TEST-ONCE STARTED ════════════╗"));
@@ -1615,7 +1616,7 @@ void resetTestOnceMode() {
   lastPublish = 0;
   lastLocalSave = 0;
   lastDraw = 0;
-  needFullRedraw = true;
+  displayUpdateNow = true;
 
   Serial.println();
   Serial.println(F("╔════════════ TEST-ONCE RESET ════════════╗"));
@@ -1635,7 +1636,7 @@ void stopTestOnceMode() {
   testOnceMqttDone = false;
   testOnceDisplayDone = false;
   linkRxBuffer = "";
-  needFullRedraw = true;
+  displayUpdateNow = true;
   Serial.println(F("[TEST] once off. Mode monitoring kembali continuous."));
 }
 
@@ -1750,21 +1751,21 @@ void finalizeFastAggregate() {
       Serial.println(F("╚════════════════════════════════════════════════╝"));
       printAggregatedParameterReport(out);
 
-      // Paksa loop utama segera menjalankan SD save, MQTT publish, dan TFT draw
-      // tanpa menunggu sisa interval sebelumnya.
+      // Paksa loop utama segera menjalankan SD save, MQTT publish, dan update nilai TFT
+      // tanpa menunggu sisa interval sebelumnya dan tanpa full redraw halaman.
       lastLocalSave = 0;
       lastPublish = 0;
       lastDraw = 0;
-      needFullRedraw = true;
+      displayUpdateNow = true;
     }
 
     // Aggregate baru harus segera muncul di LCD dan server. Jangan tunggu sisa
     // interval publish/draw sebelumnya; loop utama akan menjalankan publish
-    // realtime MQTT, simpan lokal, dan redraw pada siklus berikutnya.
+    // realtime MQTT, simpan lokal, dan update nilai berubah pada siklus berikutnya.
     lastPublish = millis() - publishInterval;
     lastLocalSave = millis() - localSaveInterval;
     lastDraw = millis() - drawInterval;
-    needFullRedraw = true;
+    displayUpdateNow = true;
 
     fastAggCompleted++;
     lastFastAggSamples = out.samples;
@@ -3569,11 +3570,11 @@ void applyWiFiCountryConfig() {
   wifiCountry.nchan = WIFI_COUNTRY_CHANNELS;
   wifiCountry.policy = WIFI_COUNTRY_POLICY_MANUAL;
 
-  esp_err_t err = esp_wifi_set_country(&wifiCountry);
-  if (err != ESP_OK) {
-    Serial.print(F("[WIFI] Warning: failed to set WiFi country/channel range, err="));
-    Serial.println((int)err);
-  }
+  // Beberapa core ESP32 mengembalikan err=258 saat driver WiFi belum siap
+  // atau ketika mode AP/STA sedang berpindah. Kondisi ini tidak fatal; scan
+  // dan koneksi tetap dapat berjalan, jadi jangan penuhi Serial Monitor dengan
+  // warning yang membuat operator mengira ada error kritis.
+  (void)esp_wifi_set_country(&wifiCountry);
 }
 
 bool isWiFiUsableForMongoUpload() {
@@ -4601,29 +4602,43 @@ void drawEnginePage(bool full) {
     lastMap = d.mapAvg;
   }
 
-  bool leftPanel = changedFloat(lastTps, d.tpsAvg, 0.5f) || changedFloat(lastFuel, d.fuelAvg, 0.5f);
-  if (leftPanel) {
+  // Panel frame dibuat hanya pada full redraw/first draw. Setelah itu,
+  // update hanya bar/card yang nilainya berubah agar TFT tidak menggambar ulang
+  // satu panel penuh untuk perubahan kecil.
+  if (full || isnan(lastTps) || isnan(lastFuel)) {
     drawPanel(14, 172, 220, 102, "FUEL & THROTTLE");
+  }
+
+  if (changedFloat(lastTps, d.tpsAvg, 0.5f)) {
     drawLineBar(28, 214, 145, 12, d.tpsAvg, 0.0f, 100.0f, C_GREEN, "TPS");
+    lastTps = d.tpsAvg;
+  }
+
+  if (changedFloat(lastFuel, d.fuelAvg, 0.5f)) {
     drawLineBar(28, 253, 145, 12, d.fuelAvg, 0.0f, 100.0f,
                 d.fuelAvg > 30 ? C_GREEN : d.fuelAvg > 15 ? C_ORANGE : C_RED, "Fuel");
-    lastTps = d.tpsAvg;
     lastFuel = d.fuelAvg;
   }
 
-  bool rightPanel = changedFloat(lastBatt, d.battAvg, 0.05f) ||
-                    changedFloat(lastIat, d.iatAvg, 0.5f) ||
-                    changedFloat(lastClt, d.cltAvg, 0.5f);
-  if (rightPanel) {
+  if (full || isnan(lastBatt) || isnan(lastIat) || isnan(lastClt)) {
     drawPanel(246, 172, 220, 102, "THERMAL & POWER");
+  }
+
+  if (changedFloat(lastBatt, d.battAvg, 0.05f)) {
     drawValueCard(256, 205, 62, 58, "Battery", fmtF(d.battAvg, 1), "V",
                   valColor(d.battAvg, 14.5, 15.5, 11.5, 10.5));
+    lastBatt = d.battAvg;
+  }
+
+  if (changedFloat(lastIat, d.iatAvg, 0.5f)) {
     drawValueCard(326, 205, 62, 58, "IAT", fmtF(d.iatAvg, 0), "C",
                   valColor(d.iatAvg, 55, 70, -1e9, -1e9));
+    lastIat = d.iatAvg;
+  }
+
+  if (changedFloat(lastClt, d.cltAvg, 0.5f)) {
     drawValueCard(396, 205, 62, 58, "Coolant", fmtF(d.cltAvg, 0), "C",
                   valColor(d.cltAvg, 90, 105, -1e9, -1e9));
-    lastBatt = d.battAvg;
-    lastIat = d.iatAvg;
     lastClt = d.cltAvg;
   }
 }
@@ -5603,7 +5618,7 @@ void reinitSdFromCommand() {
   sdOK = false;
   sdConsecutiveOpenFail = 0;
   initSDCard();
-  needFullRedraw = true;
+  displayUpdateNow = true;
 }
 
 void resetSDDatabase() {
@@ -5674,8 +5689,8 @@ void processSerialCommand(String cmd) {
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "aggregation" || cmd == "agg" || cmd == "aggregate") { AggregatedData a; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { a = aggData; xSemaphoreGive(dataMutex); } printAggregatedParameterReport(a); }
   else if (cmd == "fft" || cmd.startsWith("fft ")) { Serial.println(F("[FFT] disabled: payload dan display ESP32 tidak memakai FFT.")); }
-  else if (cmd == "page generator") { activePage = PAGE_GENERATOR; needFullRedraw = true; Serial.println(F("[DISPLAY] generator")); }
-  else if (cmd == "page engine") { activePage = PAGE_ENGINE; needFullRedraw = true; Serial.println(F("[DISPLAY] engine")); }
+  else if (cmd == "page generator") { if (activePage != PAGE_GENERATOR) { activePage = PAGE_GENERATOR; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] generator")); }
+  else if (cmd == "page engine") { if (activePage != PAGE_ENGINE) { activePage = PAGE_ENGINE; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] engine")); }
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
   else if (cmd == "rx raw on") { runtimeDebugRxRaw = true; Serial.println(F("[RX] raw on")); }
   else if (cmd == "rx raw off") { runtimeDebugRxRaw = false; Serial.println(F("[RX] raw off")); }
@@ -5910,7 +5925,7 @@ void loop() {
     lastSDRetry = millis();
     Serial.println("[SD] Retry init otomatis...");
     initSDCard();
-    needFullRedraw = true;
+    displayUpdateNow = true;
   }
 
   // Test-once tetap aman karena publishRealtimeData()
@@ -5934,14 +5949,16 @@ void loop() {
   // Yang dibekukan hanya data RX/agregasi/database, bukan UI.
   handleTouchNavigation();
 
-  // Render tetap jalan agar page bisa berpindah.
-  // Jika needFullRedraw=true karena tap page, redraw dilakukan langsung
-  // tanpa menunggu drawInterval.
-  if (needFullRedraw || millis() - lastDraw >= drawInterval) {
+  // Render normal tidak boleh menggambar ulang satu halaman penuh.
+  // Full redraw hanya untuk boot pertama, ganti page, atau command "redraw".
+  // Data/agregasi/status runtime cukup memaksa partial update nilai yang berubah.
+  bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
+  if (needFullRedraw || doPartialUpdate) {
     lastDraw = millis();
 
     drawCurrentPage(needFullRedraw);
     needFullRedraw = false;
+    displayUpdateNow = false;
 
     // Status test-once display hanya ditandai sekali.
     // Setelah itu display tetap boleh dirender untuk navigasi page.

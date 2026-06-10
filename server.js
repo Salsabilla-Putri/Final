@@ -607,9 +607,11 @@ const mqttClient = mqtt && shouldStartMqtt
         clientId: 'server-' + Math.random().toString(16).slice(2, 8),
         username: MQTT_AUTH_USERNAME,
         password: MQTT_PASSWORD,
-        keepalive: 60,
-        reconnectPeriod: 5000,
-        connectTimeout: 15000,
+        keepalive: parseInt(process.env.MQTT_KEEPALIVE_SEC || '120', 10),
+        reconnectPeriod: parseInt(process.env.MQTT_RECONNECT_PERIOD_MS || '10000', 10),
+        connectTimeout: parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || '30000', 10),
+        reschedulePings: true,
+        reconnectOnConnackError: true,
         clean: true
     })
     : createDisabledMqttClient(
