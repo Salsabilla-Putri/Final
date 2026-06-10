@@ -4,7 +4,7 @@
 // CSV UART + 1s Aggregation Record + SD CSV + MQTT realtime
 //
 // RX CSV dari ESP32-1 setelah penambahan MAP:
-// $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid
+// $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid,syncStatus
 //
 // Wiring UART:
 // ESP32-1 TX GPIO25  ---> ESP32-2 RX GPIO16
@@ -304,7 +304,7 @@ const char* FFT_BACKUP_FILE = "/fft_old.csv";
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
 const char* DB_CSV_HEADER =
   "recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,"
-  "freq,volt,currentA,powerKW,phase_diff,sync,powerSource,synced";
+  "freq,volt,currentA,powerKW,phase_diff,sync,powerSource,synced,syncStatus";
 
 // Header CSV FFT lokal. Format fft_bins_xy: freqHz:magnitude|freqHz:magnitude|...
 const char* FFT_CSV_HEADER =
@@ -342,7 +342,7 @@ const char* FFT_CSV_HEADER =
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
-const unsigned long drawInterval      = 500;
+const unsigned long drawInterval      = 1000;  // LCD partial update tiap 1 detik mengikuti agregasi
 
 // ============================================================
 // FFT EDGE
@@ -392,7 +392,8 @@ struct RawData {
   bool gridSync = false;
   bool valid = false;
 
-  char syncText[12] = "OFF-GRID";
+  char syncText[12] = "off";       // sync/genset/grid/off dari ESP32-1
+  char syncStatus[12] = "off";     // field ke-21 payload UART
   char statusText[12] = "NO-DATA";
 };
 
@@ -418,6 +419,7 @@ struct AggregatedData {
   float phaseAngleAvg = 0; float phaseAngleMin = 0; float phaseAngleMax = 0;
 
   bool synced = false;
+  char syncStatus[12] = "off";
   bool valid = false;
 };
 
@@ -443,6 +445,10 @@ struct AggAccumulator {
   float phaseAngleSum = 0; float phaseAngleMin = 999999; float phaseAngleMax = -999999;
 
   uint16_t syncedCount = 0;
+  uint16_t statusSyncCount = 0;
+  uint16_t statusGensetCount = 0;
+  uint16_t statusGridCount = 0;
+  uint16_t statusOffCount = 0;
 };
 
 struct FFTData {
@@ -1067,28 +1073,52 @@ const char* getFFTSourceName() {
   return getFFTSourceNameById(fftSelectedSource);
 }
 
+const char* normalizeSyncStatusText(const char *status) {
+  if (status == NULL) return "off";
+  if (strcasecmp(status, "sync") == 0) return "sync";
+  if (strcasecmp(status, "genset") == 0) return "genset";
+  if (strcasecmp(status, "grid") == 0) return "grid";
+  return "off";
+}
+
+const char* deriveSyncStatusFromRaw(const RawData &d) {
+  if (!d.valid) return "off";
+
+  bool gensetOn = d.speeduinoSync || d.rpm > 0 || d.volt > 20.0f || d.freq > 5.0f;
+  bool gridOn = d.gridSync || d.voltGrid > 20.0f || d.freqGrid > 5.0f;
+
+  if (gensetOn && gridOn) return "sync";
+  if (gensetOn && !gridOn) return "genset";
+  if (!gensetOn && gridOn) return "grid";
+  return "off";
+}
+
+const char* getDisplaySyncStatus(const char *status) {
+  status = normalizeSyncStatusText(status);
+  if (strcmp(status, "sync") == 0) return "SYNC";
+  if (strcmp(status, "genset") == 0) return "GENSET";
+  if (strcmp(status, "grid") == 0) return "GRID";
+  return "OFF";
+}
+
 const char* getPowerSourceFromSynced(bool synced) {
-  return synced ? "SYNC" : "GENSET";
+  return synced ? "sync" : "genset";
 }
 
 const char* getSyncTextFromSynced(bool synced) {
-  return synced ? "SYNC" : "GENSET";
+  return synced ? "sync" : "genset";
 }
 
 const char* getPowerSourceFromAggregate(const AggregatedData &a) {
-  if (!linkOK) return "OFF";
-  if (a.synced) return "SYNC";
-
-  const bool gridAvailable = (a.voltGridAvg >= 180.0f && a.voltGridAvg <= 260.0f)
-                          || (a.freqGridAvg >= 45.0f && a.freqGridAvg <= 55.0f);
-  const bool gensetAvailable = (a.rpmAvg > 0.0f) || (a.voltAvg > 20.0f) || (a.freqAvg > 5.0f);
-
-  if (gridAvailable && !gensetAvailable) return "GRID";
-  return "GENSET";
+  return normalizeSyncStatusText(a.syncStatus);
 }
 
 const char* getSyncTextFromAggregate(const AggregatedData &a) {
-  return getPowerSourceFromAggregate(a);
+  return normalizeSyncStatusText(a.syncStatus);
+}
+
+const char* getDisplaySyncTextFromAggregate(const AggregatedData &a) {
+  return getDisplaySyncStatus(a.syncStatus);
 }
 
 // ============================================================
@@ -1100,20 +1130,20 @@ bool parseBridgeCsv(const String &line, RawData &out) {
   String data = line.substring(1);
 
   // Format baru dari ESP32-1 sinkronisasi setelah penambahan MAP:
-  // 20 field baru:
+  // 21 field baru:
   // $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,
-  // freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid
+  // freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid,syncStatus
   //
   // Backward compatibility:
   // 18 field lama dengan MAP tetapi tanpa arus/power tetap diterima.
   // 17 field lama tanpa MAP tetap diterima, tetapi MAP/arus/power diisi estimasi.
-  String fields[20];
+  String fields[21];
   int fieldIndex = 0;
   int start = 0;
 
   for (int i = 0; i <= data.length(); i++) {
     if (i == data.length() || data[i] == ',') {
-      if (fieldIndex < 20) {
+      if (fieldIndex < 21) {
         fields[fieldIndex] = data.substring(start, i);
         fields[fieldIndex].trim();
         fieldIndex++;
@@ -1152,6 +1182,12 @@ bool parseBridgeCsv(const String &line, RawData &out) {
     out.speeduinoSync = fields[17].toInt() == 1;
     out.gridSync = fields[18].toInt() == 1;
     out.valid = fields[19].toInt() == 1;
+
+    if (fieldIndex >= 21) {
+      strlcpy(out.syncStatus, normalizeSyncStatusText(fields[20].c_str()), sizeof(out.syncStatus));
+    } else {
+      strlcpy(out.syncStatus, deriveSyncStatusFromRaw(out), sizeof(out.syncStatus));
+    }
   } else if (fieldIndex >= 18) {
     // Format lama dengan MAP, tetapi belum ada arus/power.
     out.map = fields[4].toInt();
@@ -1198,12 +1234,17 @@ bool parseBridgeCsv(const String &line, RawData &out) {
     out.valid = fields[16].toInt() == 1;
   }
 
-  if (!out.valid && (out.rpm != 0 || out.freq != 0.0f || out.volt != 0.0f)) {
+  if (!out.valid && (out.rpm != 0 || out.freq != 0.0f || out.volt != 0.0f || out.voltGrid != 0.0f)) {
     out.valid = true;
   }
 
-  strlcpy(out.syncText, out.gridSync ? "ON-GRID" : "OFF-GRID", sizeof(out.syncText));
-  strlcpy(out.statusText, (out.rpm <= 0) ? "STOPPED" : (out.gridSync ? "ON-GRID" : "RUNNING"), sizeof(out.statusText));
+  // Untuk frame lama 17/18/20 field, syncStatus diturunkan dari status generator/grid.
+  if (fieldIndex < 21) {
+    strlcpy(out.syncStatus, deriveSyncStatusFromRaw(out), sizeof(out.syncStatus));
+  }
+
+  strlcpy(out.syncText, out.syncStatus, sizeof(out.syncText));
+  strlcpy(out.statusText, getDisplaySyncStatus(out.syncStatus), sizeof(out.statusText));
   return true;
 }
 
@@ -1251,6 +1292,7 @@ void printRxParameterReport(const String &rawLine, const RawData &d, bool parseO
   Serial.printf("║ %-14s: %d\n", "gridSync", d.gridSync ? 1 : 0);
   Serial.printf("║ %-14s: %d\n", "valid", d.valid ? 1 : 0);
   Serial.printf("║ %-14s: %s\n", "syncText", d.syncText);
+  Serial.printf("║ %-14s: %s\n", "syncStatus", d.syncStatus);
   Serial.printf("║ %-14s: %s\n", "statusText", d.statusText);
 
   Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
@@ -1560,7 +1602,8 @@ void startTestOnceMode() {
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     latestRaw = RawData();
     aggData = AggregatedData();
-    strlcpy(latestRaw.syncText, "OFF-GRID", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.syncText, "off", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.syncStatus, "off", sizeof(latestRaw.syncStatus));
     strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
     xSemaphoreGive(dataMutex);
   }
@@ -1608,7 +1651,8 @@ void resetTestOnceMode() {
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     latestRaw = RawData();
     aggData = AggregatedData();
-    strlcpy(latestRaw.syncText, "OFF-GRID", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.syncText, "off", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.syncStatus, "off", sizeof(latestRaw.syncStatus));
     strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
     xSemaphoreGive(dataMutex);
   }
@@ -1665,6 +1709,12 @@ void addSampleToAccumulator(const RawData &d) {
   acc.phaseAngleSum += d.phaseAngle; acc.phaseAngleMin = min(acc.phaseAngleMin, d.phaseAngle); acc.phaseAngleMax = max(acc.phaseAngleMax, d.phaseAngle);
 
   if (d.gridSync) acc.syncedCount++;
+
+  const char *st = normalizeSyncStatusText(d.syncStatus);
+  if (strcmp(st, "sync") == 0) acc.statusSyncCount++;
+  else if (strcmp(st, "genset") == 0) acc.statusGensetCount++;
+  else if (strcmp(st, "grid") == 0) acc.statusGridCount++;
+  else acc.statusOffCount++;
 }
 
 AggregatedData makeAggregateFromAccumulator() {
@@ -1695,6 +1745,15 @@ AggregatedData makeAggregateFromAccumulator() {
   out.phaseAngleAvg = acc.phaseAngleSum / acc.count; out.phaseAngleMin = acc.phaseAngleMin; out.phaseAngleMax = acc.phaseAngleMax;
 
   out.synced = acc.syncedCount > (acc.count / 2);
+
+  // Ambil status mayoritas selama window agregasi 1 detik.
+  uint16_t bestCount = acc.statusOffCount;
+  const char *bestStatus = "off";
+  if (acc.statusGridCount > bestCount) { bestCount = acc.statusGridCount; bestStatus = "grid"; }
+  if (acc.statusGensetCount > bestCount) { bestCount = acc.statusGensetCount; bestStatus = "genset"; }
+  if (acc.statusSyncCount > bestCount) { bestCount = acc.statusSyncCount; bestStatus = "sync"; }
+  strlcpy(out.syncStatus, bestStatus, sizeof(out.syncStatus));
+
   out.valid = true;
   return out;
 }
@@ -2009,7 +2068,10 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
+  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
+  json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
+  json += "\"syncStatus\":\"" + String(getSyncTextFromAggregate(a)) + "\"";
   json += "}";
   return json;
 }
@@ -2070,7 +2132,10 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
+  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
+  json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
+  json += "\"syncStatus\":\"" + String(getSyncTextFromAggregate(a)) + "\"";
 
   json += "}";
 
@@ -3318,7 +3383,8 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.phaseAngleAvg, 2); line += ",";
   line += getSyncTextFromAggregate(a); line += ",";
   line += getPowerSourceFromAggregate(a); line += ",";
-  line += String(a.synced ? 1 : 0);
+  line += String(a.synced ? 1 : 0); line += ",";
+  line += getSyncTextFromAggregate(a);
 
   return line;
 }
@@ -4561,9 +4627,9 @@ void drawGeneratorPage(bool full) {
     lastCurrentA = d.currentAvg;
   }
 
-  const char* syncStatus = getSyncTextFromAggregate(d);
-  if (full || d.synced != lastSynced || lastSyncStatus != syncStatus) {
-    uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_ORANGE : C_GREEN);
+  const char* syncStatus = getDisplaySyncTextFromAggregate(d);
+  if (full || d.synced != lastSynced || lastSyncStatus != String(syncStatus)) {
+    uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_ORANGE : (strcmp(syncStatus, "GRID") == 0 ? C_BLUE2 : C_GREEN));
     drawValueBox(326, 218, 140, 56, "SYNC STATUS", syncStatus, "", syncColor);
     lastSynced = d.synced;
     lastSyncStatus = syncStatus;
@@ -5764,7 +5830,8 @@ void setup() {
   memset(&fftMultiData, 0, sizeof(fftMultiData));
   memset(&fftBuffers, 0, sizeof(fftBuffers));
   resetAcquisitionMonitorStats();
-  strlcpy(latestRaw.syncText, "OFF-GRID", sizeof(latestRaw.syncText));
+  strlcpy(latestRaw.syncText, "off", sizeof(latestRaw.syncText));
+    strlcpy(latestRaw.syncStatus, "off", sizeof(latestRaw.syncStatus));
   strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
 
   dataMutex = xSemaphoreCreateMutex();
