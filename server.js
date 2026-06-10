@@ -9,8 +9,47 @@ const tls = require('tls');
 const { EventEmitter } = require('events');
 require('dotenv').config();
 
+function cleanEnvValue(value) {
+    if (value === undefined || value === null) return '';
+    let cleaned = String(value).trim();
+
+    while (cleaned.length >= 2) {
+        const first = cleaned[0];
+        const last = cleaned[cleaned.length - 1];
+        if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+            cleaned = cleaned.slice(1, -1).trim();
+        } else {
+            break;
+        }
+    }
+
+    return cleaned;
+}
+
+function envValue(name, fallback = '') {
+    const cleaned = cleanEnvValue(process.env[name]);
+    return cleaned || fallback;
+}
+
+function firstEnvValue(...names) {
+    for (const name of names) {
+        const value = envValue(name);
+        if (value) return value;
+    }
+    return '';
+}
+
+function firstEmailEnvValue(...names) {
+    for (const name of names) {
+        const value = envValue(name);
+        if (value && value.includes('@')) return value;
+    }
+    return '';
+}
+
 const sgMail = require('@sendgrid/mail');
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const sendGridApiKey = envValue('SENDGRID_API_KEY');
+if (sendGridApiKey) sgMail.setApiKey(sendGridApiKey);
 const {
     transformPublicStatus,
     generateAlerts,
@@ -67,6 +106,62 @@ function isDbReady() {
 
 let dbConnectPromise = null;
 
+function buildMongoUri(uri) {
+    const normalizedUri = /^mongodb(\+srv)?:\/\//i.test(uri) ? uri : `mongodb://${uri}`;
+    const isSrvUri = /^mongodb\+srv:\/\//i.test(normalizedUri);
+
+    if (isSrvUri && /[?&]directConnection=/i.test(normalizedUri)) {
+        const parsedUri = new URL(normalizedUri);
+        parsedUri.searchParams.delete('directConnection');
+        return parsedUri.toString();
+    }
+
+    return normalizedUri;
+}
+
+function getMongoUriDiagnostics(uri) {
+    try {
+        const parsedUri = new URL(uri);
+        return {
+            protocol: parsedUri.protocol.replace(':', ''),
+            host: parsedUri.host,
+            database: parsedUri.pathname.replace(/^\//, '') || '(default)',
+            authSource: parsedUri.searchParams.get('authSource') || '(not set)',
+            directConnection: parsedUri.searchParams.get('directConnection') || '(not set)'
+        };
+    } catch (error) {
+        return { protocol: '(invalid)', host: '(invalid)', database: '(invalid)', authSource: '(unknown)', directConnection: '(unknown)' };
+    }
+}
+
+function getMongoConnectionHint(error) {
+    const message = error?.message || String(error);
+
+    if (/ECONNREFUSED/i.test(message)) {
+        return 'TCP connection was refused by the MongoDB host/port. Check that mongod is listening on the public interface, port 27017 is open, and Render outbound IPs are allowed by the database firewall/allowlist.';
+    }
+
+    if (/SRV URI does not support directConnection/i.test(message)) {
+        return 'Remove directConnection=true from mongodb+srv:// URIs, or use a standard mongodb:// host URI when directConnection is required.';
+    }
+
+    if (/authentication failed|auth failed/i.test(message)) {
+        return 'MongoDB reached the server but authentication failed. Check username, password, database name, and authSource.';
+    }
+
+    if (/ENOTFOUND|querySrv|ETIMEOUT|server selection/i.test(message)) {
+        return 'MongoDB driver could not select/reach a server. Check DNS, firewall, database availability, and network access from Render.';
+    }
+
+    return null;
+}
+
+function logMongoConnectionError(context, error, includeStack = false) {
+    const hint = getMongoConnectionHint(error);
+    console.error(context, includeStack ? error : error?.message || error);
+    if (hint) console.error('MongoDB connection hint:', hint);
+}
+
 async function ensureDbReady() {
     if (isDbReady()) return true;
 
@@ -75,30 +170,24 @@ async function ensureDbReady() {
         return isDbReady();
     }
 
-    // Normalisasi URI MongoDB: pastikan ada protokol
-    const rawMongoUri = (process.env.MONGODB_URI || '').trim();
-    // Tambahkan directConnection=true otomatis jika belum ada
-    // Ini mencegah Mongoose mengikuti hostname replica set internal (mis. 'nappa:27017')
-    function addDirectConnection(uri) {
-        if (!uri || uri.includes('directConnection')) return uri;
-        const sep = uri.includes('?') ? '&' : '?';
-        return `${uri}${sep}directConnection=true`;
-    }
+    // Normalisasi URI MongoDB: pastikan ada protokol tanpa mengubah opsi koneksi
+    // yang sudah diset di environment Render/local. Satu-satunya opsi yang dihapus
+    // adalah directConnection pada URI mongodb+srv:// karena driver MongoDB menolaknya.
+    const rawMongoUri = envValue('MONGODB_URI');
 
     if (!rawMongoUri) {
         throw new Error('MONGODB_URI is required. Set it in .env or environment variables.');
     }
 
-    const mongoUri = addDirectConnection(
-        /^mongodb(\+srv)?:\/\//i.test(rawMongoUri) ? rawMongoUri : `mongodb://${rawMongoUri}`
-    );
+    const mongoUri = buildMongoUri(rawMongoUri);
+    console.info('MongoDB connection target:', getMongoUriDiagnostics(mongoUri));
 
     dbConnectPromise = mongoose.connect(mongoUri, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
-        serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '30000', 10),
-        socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '45000', 10),
-        connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || '30000', 10),
+        serverSelectionTimeoutMS: parseInt(envValue('MONGODB_SERVER_SELECTION_TIMEOUT_MS', '30000'), 10),
+        socketTimeoutMS: parseInt(envValue('MONGODB_SOCKET_TIMEOUT_MS', '45000'), 10),
+        connectTimeoutMS: parseInt(envValue('MONGODB_CONNECT_TIMEOUT_MS', '30000'), 10),
         heartbeatFrequencyMS: 10000
     })
     .then(async () => {
@@ -107,7 +196,7 @@ async function ensureDbReady() {
         await cleanupGeneratorDataFieldsFromDB();
     })
     .catch((err) => {
-        console.error('❌ MongoDB Connection Error:', err);
+        logMongoConnectionError('❌ MongoDB Connection Error:', err, true);
         throw err;
     })
     .finally(() => {
@@ -335,10 +424,10 @@ function normalizeHttpUrl(raw) {
     return `https://${url}`.replace(/\/+$/, '');
 }
 
-const BACKEND_URL = normalizeHttpUrl(process.env.BACKEND_URL || process.env.APP_BASE_URL || process.env.PUBLIC_BASE_URL);
-const EMAIL_NOTIF_FROM = process.env.ALERT_EMAIL_FROM || 'onboarding@resend.dev';
-const ALERT_EMAIL_COOLDOWN_MS = parseInt(process.env.ALERT_EMAIL_COOLDOWN_MS || '60000', 10);
-const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const BACKEND_URL = normalizeHttpUrl(firstEnvValue('BACKEND_URL', 'APP_BASE_URL', 'PUBLIC_BASE_URL'));
+const EMAIL_NOTIF_FROM = firstEmailEnvValue('ALERT_EMAIL_FROM', 'SENDER_EMAIL', 'EMAIL_USER') || 'onboarding@resend.dev';
+const ALERT_EMAIL_COOLDOWN_MS = parseInt(envValue('ALERT_EMAIL_COOLDOWN_MS', '60000'), 10);
+const RESEND_API_KEY = envValue('RESEND_API_KEY');
 let lastCriticalEmailAt = 0;
 
 async function sendViaResend({ from, to, subject, html }) {
@@ -463,11 +552,16 @@ async function sendViaSmtp({ host, port, user, pass, from, toList, subject, html
 
 // Tambahkan parameter targetEmail
 async function sendCriticalAlertEmail(alertItems, latestSnapshot, targetEmail) {
-    const apiKey = process.env.SENDGRID_API_KEY;
-    const senderEmail = process.env.SENDER_EMAIL;
+    const apiKey = envValue('SENDGRID_API_KEY');
+    const senderEmail = firstEmailEnvValue('SENDER_EMAIL', 'EMAIL_USER', 'ALERT_EMAIL_FROM');
 
     if (!apiKey) {
         console.warn('⚠️ SENDGRID_API_KEY tidak ditemukan.');
+        return;
+    }
+
+    if (!senderEmail) {
+        console.warn('⚠️ Sender email tidak ditemukan. Set SENDER_EMAIL atau EMAIL_USER.');
         return;
     }
 
@@ -589,10 +683,10 @@ function normalizeBrokerUrl(raw, defaultProtocol = 'mqtt') {
 }
 
 // RabbitMQ MQTT credentials: wajib diatur melalui .env / environment variables
-const MQTT_BROKER_URL = normalizeBrokerUrl(process.env.MQTT_BROKER);
-const MQTT_VHOST = process.env.MQTT_VHOST || '';
-const MQTT_USERNAME = process.env.MQTT_USERNAME || '';
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
+const MQTT_BROKER_URL = normalizeBrokerUrl(envValue('MQTT_BROKER'));
+const MQTT_VHOST = envValue('MQTT_VHOST');
+const MQTT_USERNAME = envValue('MQTT_USERNAME');
+const MQTT_PASSWORD = envValue('MQTT_PASSWORD');
 const isMqttConfigured = Boolean(MQTT_BROKER_URL && MQTT_USERNAME && MQTT_PASSWORD);
 
 if (!isMqttConfigured) {
@@ -601,7 +695,7 @@ if (!isMqttConfigured) {
 }
 
 // RabbitMQ MQTT plugin: set MQTT_AUTH_USERNAME jika broker membutuhkan format username khusus.
-const MQTT_AUTH_USERNAME = process.env.MQTT_AUTH_USERNAME
+const MQTT_AUTH_USERNAME = envValue('MQTT_AUTH_USERNAME')
     || (MQTT_VHOST ? `${MQTT_VHOST}:${MQTT_USERNAME}` : MQTT_USERNAME);
 
 const mqttClient = mqtt && shouldStartMqtt
@@ -609,9 +703,9 @@ const mqttClient = mqtt && shouldStartMqtt
         clientId: 'server-' + Math.random().toString(16).slice(2, 8),
         username: MQTT_AUTH_USERNAME,
         password: MQTT_PASSWORD,
-        keepalive: parseInt(process.env.MQTT_KEEPALIVE_SEC || '120', 10),
-        reconnectPeriod: parseInt(process.env.MQTT_RECONNECT_PERIOD_MS || '10000', 10),
-        connectTimeout: parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || '10000', 10),
+        keepalive: parseInt(envValue('MQTT_KEEPALIVE_SEC', '120'), 10),
+        reconnectPeriod: parseInt(envValue('MQTT_RECONNECT_PERIOD_MS', '10000'), 10),
+        connectTimeout: parseInt(envValue('MQTT_CONNECT_TIMEOUT_MS', '10000'), 10),
         reschedulePings: true,
         reconnectOnConnackError: true,
         clean: true
@@ -690,7 +784,7 @@ app.use('/api', async (req, res, next) => {
         await ensureDbReady();
         next();
     } catch (error) {
-        console.error('API DB connection error:', error.message);
+        logMongoConnectionError('API DB connection error:', error);
         res.status(503).json({
             success: false,
             error: 'Database connection unavailable',
@@ -1925,7 +2019,11 @@ mqttClient.on('message', async (topic, message) => {
 
     } catch (error) {
         updateMqttIngestError(error);
-        console.error('❌ MQTT Message Error:', error);
+        if (error?.name === 'MongooseServerSelectionError' || /Mongo|ECONNREFUSED|server selection/i.test(error?.message || '')) {
+            logMongoConnectionError('❌ MQTT data persistence DB error:', error, true);
+        } else {
+            console.error('❌ MQTT Message Error:', error);
+        }
     }
 });
 
@@ -3291,7 +3389,7 @@ function startBackgroundWorkers() {
 }
 
 function readHttpServerPort() {
-    let rawPort = process.env.SERVER_PORT || process.env.WEB_PORT || process.env.HTTP_PORT || process.env.PORT || '3023';
+    let rawPort = envValue('SERVER_PORT') || envValue('WEB_PORT') || envValue('HTTP_PORT') || envValue('PORT') || '3023';
     let port = Number.parseInt(rawPort, 10);
 
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -3309,7 +3407,7 @@ function readHttpServerPort() {
 }
 
 function getDashboardUrl(port) {
-    const rawUrl = String(process.env.BACKEND_URL || process.env.APP_BASE_URL || process.env.PUBLIC_BASE_URL || '').trim();
+    const rawUrl = firstEnvValue('BACKEND_URL', 'APP_BASE_URL', 'PUBLIC_BASE_URL');
 
     // Kalau BACKEND_URL salah diarahkan ke MQTT port, jangan dipakai
     if (rawUrl && !rawUrl.includes(':1883') && !rawUrl.includes(':8883')) {
@@ -3324,7 +3422,7 @@ function getDashboardUrl(port) {
 }
 
 const PORT = readHttpServerPort();
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = envValue('HOST', '0.0.0.0');
 const DASHBOARD_URL = getDashboardUrl(PORT);
 
 if (require.main === module) {
