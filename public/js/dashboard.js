@@ -251,7 +251,7 @@ function updatePowerSourceIndicator(id, data) {
 let _lastSensorOkAt = null;
 let _lastDisplayData = readLastSensorSnapshot();
 // Jika selama DISCONNECT_THRESHOLD_MS tidak ada data masuk → anggap mesin mati
-const DISCONNECT_THRESHOLD_MS = 3_000; // 3 detik tanpa MQTT = ECU disconnected
+const DISCONNECT_THRESHOLD_MS = 10_000; // 10 detik tanpa MQTT = ECU disconnected
 
 async function updateSensorData() {
     const requestSeq = ++sensorRequestSeq;

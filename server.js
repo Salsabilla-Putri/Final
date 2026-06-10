@@ -609,7 +609,7 @@ const mqttClient = mqtt && shouldStartMqtt
         password: MQTT_PASSWORD,
         keepalive: parseInt(process.env.MQTT_KEEPALIVE_SEC || '120', 10),
         reconnectPeriod: parseInt(process.env.MQTT_RECONNECT_PERIOD_MS || '10000', 10),
-        connectTimeout: parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || '30000', 10),
+        connectTimeout: parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS || '10000', 10),
         reschedulePings: true,
         reconnectOnConnackError: true,
         clean: true
@@ -703,7 +703,7 @@ let latestData = {
     fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'OFF', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
-const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '3000', 10);
+const ECU_DISCONNECT_THRESHOLD_MS = parseInt(process.env.ECU_DISCONNECT_THRESHOLD_MS || '10000', 10);
 const ACTIVE_TIME_INACTIVE_THRESHOLD_MS = parseInt(process.env.ACTIVE_TIME_INACTIVE_THRESHOLD_MS || String(2.5 * 60 * 1000), 10);
 const ACTIVE_TIME_INCREMENT_MS = parseInt(process.env.ACTIVE_TIME_INCREMENT_MS || String(2 * 60 * 1000), 10);
 const ACTIVE_SESSION_TIMEOUT_MS = Math.max(ACTIVE_TIME_INACTIVE_THRESHOLD_MS, parseInt(process.env.ACTIVE_SESSION_TIMEOUT_MS || String(ACTIVE_TIME_INACTIVE_THRESHOLD_MS), 10));

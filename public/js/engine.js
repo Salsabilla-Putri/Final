@@ -1,7 +1,7 @@
 // === CONFIGURATION ===
 const API_URL = '/api';
 const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps','phase'];
-const ESP_FRESHNESS_MS = 3000;
+const ESP_FRESHNESS_MS = 10000;
 const WARN_THRESHOLD_RATIO = 0.05;
 const WARN_THRESHOLD_ABSOLUTE = {
     freq: 0.1,

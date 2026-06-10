@@ -187,9 +187,9 @@
 
 #define MQTT_BUFFER_SIZE_BYTES       2048
 #define MQTT_KEEPALIVE_SEC           120
-#define MQTT_SOCKET_TIMEOUT_SEC      30
+#define MQTT_SOCKET_TIMEOUT_SEC      10
 
-#define MQTT_RECONNECT_MIN_MS        5000UL
+#define MQTT_RECONNECT_MIN_MS        10000UL
 #define MQTT_RECONNECT_MAX_MS        60000UL
 
 #define WIFI_RUNTIME_CHECK_MS        3000UL
@@ -215,9 +215,9 @@
 
 // Cloud/MongoDB path:
 // Tidak memakai HTTP POST /api/ingest/batch.
-// Record parameter-only dikumpulkan di RAM dan dikirim sebagai batch/chunk
-// melalui MQTT_TOPIC = gen/data setiap 10 menit.
-// Backend harus subscribe topic gen/data dan melakukan bulkWrite(payload.records) ke MongoDB.
+// Record parameter-only dikirim live melalui MQTT_TOPIC = gen/data setiap 1 detik.
+// RAM buffer tetap dipakai sebagai fallback batch/chunk saat publish live gagal.
+// Backend harus subscribe topic gen/data dan melakukan bulkWrite/updateOne ke MongoDB.
 
 // NTP WIB.
 const char* NTP_SERVER_1 = "pool.ntp.org";
@@ -323,12 +323,11 @@ const char* FFT_CSV_HEADER =
 // ============================================================
 // Realtime dashboard dan MongoDB/history dikirim tiap 1 detik tanpa batch di ESP32.
 
-#define MONGODB_BATCH_INTERVAL_MS 600000UL  // kirim history/cloud ke MongoDB per 10 menit
-#define MONGODB_BATCH_RECORDS     600        // 1 record/detik x 10 menit
+#define MONGODB_BATCH_INTERVAL_MS 600000UL  // fallback buffer dikirim per 10 menit jika publish live tertahan
+#define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
-// MQTT broker/cloud sering menolak payload besar. Agar data benar-benar masuk
-// ke server.js + MongoDB, 600 record per 10 menit dikirim sebagai 60 publish
-// kecil berisi 10 record. Total data tetap 600 record per siklus batch.
+// MQTT broker/cloud sering menolak payload besar. Untuk fallback, buffer 600 record
+// dipecah menjadi 60 publish kecil berisi 10 record agar tetap diterima broker/cloud.
 #define MONGODB_UPLOAD_CHUNK_RECORDS 10
 #define MONGODB_UPLOAD_CHUNK_DELAY_MS 20UL
 
@@ -337,9 +336,9 @@ const char* FFT_CSV_HEADER =
 #define SD_SAVE_ONLINE_FOR_DB_TEST 1
 
 // SAFE MODE NOTE:
-// Dipilih 10 menit/600 record untuk pengujian pengiriman database jangka panjang.
+// Dipilih 10 menit/600 record untuk fallback pengiriman database jangka panjang.
 // Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
-// saat EAP handshake dan MQTT batch publish.
+// saat EAP handshake dan MQTT fallback batch publish.
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
@@ -702,6 +701,7 @@ uint8_t storageBatchCount = 0;
 uint32_t localRecordSeq = 0;
 uint32_t lastSdSavedLocalSeq = 0;
 uint32_t lastMongoBufferedLocalSeq = 0;
+uint32_t lastMqttHistoryPublishedLocalSeq = 0;
 
 unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
@@ -2362,17 +2362,18 @@ void publishRealtimeData() {
 
   bool hasData = false;
   uint32_t recordsInPayload = 0;
+  uint32_t latestPayloadSeq = 0;
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (storageBatch[i].valid) {
       hasData = true;
       recordsInPayload++;
+      if (storageBatch[i].localSeq > latestPayloadSeq) latestPayloadSeq = storageBatch[i].localSeq;
     }
   }
   if (!hasData) return;
 
-  // MQTT publish langsung hanya untuk realtime dashboard/web setiap 1 detik.
-  // History/cloud MongoDB TIDAK dikirim di sini; record history masuk RAM buffer
-  // dari saveSnapshotToSD() dan dikirim batch ke MQTT_TOPIC/gen/data tiap 10 menit.
+  // MQTT publish langsung untuk dashboard dan history/cloud MongoDB setiap 1 detik.
+  // Buffer RAM/SD tetap menjadi fallback saat koneksi atau publish gen/data gagal.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
@@ -2385,12 +2386,14 @@ void publishRealtimeData() {
   bool historyOk = false;
   if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
-    historyOk = true;
+    mqtt.loop();
+    historyOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
     mqtt.loop();
     xSemaphoreGive(mqttMutex);
   } else if (mqttMutex == NULL) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
-    historyOk = true;
+    mqtt.loop();
+    historyOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
     mqtt.loop();
   }
   bool ok = realtimeOk && historyOk;
@@ -2441,6 +2444,9 @@ void publishRealtimeData() {
 
   if (ok) {
     lastMqttPublishMs = millis();
+    if (historyOk && latestPayloadSeq > lastMqttHistoryPublishedLocalSeq) {
+      lastMqttHistoryPublishedLocalSeq = latestPayloadSeq;
+    }
     mqttPublishSuccessCount++;
     mqttTotalPayloadBytes += mqttLastPayloadBytes;
     mqttTotalParameterPayloadBytes += mqttLastParameterPayloadBytes;
@@ -2454,7 +2460,7 @@ void publishRealtimeData() {
                     MQTT_REALTIME_TOPIC,
                     (unsigned long)mqttLastPayloadBytes,
                     (unsigned long)mqttLastRecordsSent);
-      Serial.println(F("[TEST] Realtime terkirim tiap 1 detik; MongoDB/history dikirim batch 10 menit via gen/data."));
+      Serial.println(F("[TEST] Realtime dan MongoDB/history terkirim tiap 1 detik via MQTT."));
       Serial.println(F("╚══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -2484,7 +2490,7 @@ bool addRecordToMongoDbBuffer(const StorageRecord &r) {
     accepted = true;
   } else {
     // Buffer MongoDB penuh. Kondisi ini biasanya terjadi saat jaringan/MQTT/server
-    // bermasalah sehingga batch 10 menit belum berhasil dikirim. Record berikutnya
+    // bermasalah sehingga fallback batch belum berhasil dikirim. Record berikutnya
     // harus dicadangkan ke SD agar tidak hilang.
     mongoDbBufferOverflowCount++;
     accepted = false;
@@ -2711,7 +2717,7 @@ bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
 void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi:
-  // - mengirim total 600 record setiap 10 menit,
+  // - mengirim fallback buffer sampai 600 record setiap 10 menit atau saat diminta,
   // - default MQTT dipecah 10 record/publish agar tidak ditolak broker/cloud,
   // - tiap publish berisi payload.records[],
   // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
@@ -2893,10 +2899,10 @@ void sendMongoDbBufferToMongoDB() {
 // ============================================================
 // Fungsi:
 // - Mengirim buffer RAM MongoDB ke MQTT_TOPIC = gen/data.
-// - Pengiriman dilakukan setiap MONGODB_BATCH_INTERVAL_MS.
-// - Buffer juga dikirim lebih cepat jika penuh.
-// - Realtime dashboard tetap dikirim oleh publishRealtimeData()
-//   ke MQTT_REALTIME_TOPIC = gen/realtime setiap 1 detik.
+// - Pengiriman fallback dilakukan setiap MONGODB_BATCH_INTERVAL_MS.
+// - Buffer juga dikirim lebih cepat jika penuh/manual.
+// - Realtime dashboard dan history live tetap dikirim oleh publishRealtimeData()
+//   ke MQTT_REALTIME_TOPIC/gen/realtime dan MQTT_TOPIC/gen/data setiap 1 detik.
 
 void MongoBufferTask(void *pvParameters) {
   (void) pvParameters;
@@ -3341,8 +3347,8 @@ String buildFftCsvLine(const StorageRecord &r) {
 void saveSnapshotToSD() {
   // Fungsi ini tetap dipanggil setiap 1 detik. Untuk pengujian database,
   // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke database.csv/fft.csv
-  // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap dikirim ke server.js
-  // lewat gen/data setiap 10 menit.
+  // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap menjadi fallback
+  // jika publish live gen/data 1 detik tertahan atau gagal.
   //
   // Untuk operasi harian, set SD_SAVE_ONLINE_FOR_DB_TEST=0 agar SD hanya ditulis jika:
   // 1) WiFi/MQTT/server bermasalah,
@@ -3360,10 +3366,12 @@ void saveSnapshotToSD() {
   uint32_t saveStart = micros();
 
   // Buffer MongoDB/history diisi setiap ada record baru (1 record/detik).
-  // Upload ke server/MongoDB dilakukan terpisah oleh MongoBufferTask setiap 10 menit.
+  // Upload live ke server/MongoDB dilakukan oleh publishRealtimeData() setiap 1 detik.
+  // MongoBufferTask tetap menyimpan fallback untuk retry batch jika koneksi gagal.
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
     if (storageBatch[i].localSeq <= lastMongoBufferedLocalSeq) continue;
+    if (storageBatch[i].localSeq <= lastMqttHistoryPublishedLocalSeq) continue;
 
     bool mongoAccepted = addRecordToMongoDbBuffer(storageBatch[i]);
     if (mongoAccepted) {

@@ -18,7 +18,7 @@ let dashboardTotalActiveHours = 0;
 let lastHeavyFetchAt = 0;
 const DASHBOARD_REFRESH_MS = 1000;
 const HEAVY_ENDPOINT_REFRESH_MS = 30000;
-const DATA_LIVE_THRESHOLD_MS = 3000;
+const DATA_LIVE_THRESHOLD_MS = 10000;
 const LAST_PUBLIC_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
 
 
