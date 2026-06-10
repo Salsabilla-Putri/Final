@@ -164,8 +164,8 @@ table.alert-table th { background: #f7fbff; font-weight: 700; color: #123; }
 
 /* === STATES === */
 .normal { color: #0f172a !important; }
-.warning { color: #0f172a !important;}
-.alert { color: #0f172a !important; }
+.warning { color: #d97706 !important;}
+.alert { color: #dc2626 !important; }
 .box-ok { box-shadow: 0 2px 6px rgba(2,6,23,0.04); border: 1px solid transparent; }
 .box-warn { box-shadow: 0 0 0 3px rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.12); }
 .box-alert { box-shadow: 0 0 0 3px rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.12); }

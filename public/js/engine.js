@@ -12,16 +12,19 @@ const SYNC_THRESHOLDS = {
 let serverThresholds = {}; 
 let activeModalParam = null;
 
-function setEspConnectionStatus(isConnected) {
+function setEspConnectionStatus(isConnected, data = {}) {
     const el = document.getElementById('espConnection');
     if (!el) return;
 
+    const formatted = formatLastUpdatedTimestamp(data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate);
+    const comment = formatted !== '--' ? `<small style="display:block;font-weight:600;opacity:.8;line-height:1.2">Server: ${formatted}</small>` : '';
+
     if (isConnected) {
         el.className = 'indicator ind-on';
-        el.innerHTML = 'Connected';
+        el.innerHTML = `Connected${comment}`;
     } else {
         el.className = 'indicator ind-off';
-        el.innerHTML = 'Disconnected';
+        el.innerHTML = `Disconnected${comment}`;
     }
 }
 
@@ -108,9 +111,9 @@ function updateLastUpdatedInfo(data = {}, isFresh = false) {
         return;
     }
     if (wrapper) wrapper.style.display = '';
-    const ts = data.lastUpdated || data.lastMqttUpdate || data.realtimeReceivedAt || data.serverReceivedAt || data.timestamp;
+    const ts = data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate;
     const formatted = formatLastUpdatedTimestamp(ts);
-    el.innerText = `Disconnected • ${formatted}`;
+    el.innerText = `Server • ${formatted}`;
 }
 
 function isEcuFresh(data = {}, explicitFresh = null) {
@@ -123,7 +126,7 @@ function isEcuFresh(data = {}, explicitFresh = null) {
 
 function updateEngineConnectionIndicators(data = {}, explicitFresh = null, { updateTimestamp = true } = {}) {
     const isFresh = isEcuFresh(data, explicitFresh);
-    setEspConnectionStatus(isFresh);
+    setEspConnectionStatus(isFresh, data);
     if (updateTimestamp) updateLastUpdatedInfo(data, isFresh);
 
     const sourceEl = document.getElementById('powerSourceIndicator');
@@ -164,11 +167,11 @@ async function fetchData() {
         if (json.success) {
             handleEngineData(json.data);
         } else {
-            setEspConnectionStatus(false);
-            updateLastUpdatedInfo({}, false);
+            setEspConnectionStatus(false, json.data || {});
+            updateLastUpdatedInfo(json.data || {}, false);
         }
     } catch (err) {
-        setEspConnectionStatus(false);
+        setEspConnectionStatus(false, {});
         updateLastUpdatedInfo({}, false);
     }
 }
@@ -247,21 +250,31 @@ function applyVisual(param, value, opts) {
     const th = serverThresholds[param] || {};
     let status = 'normal';
 
-    // Cek Threshold (Warna Box & Text)
-    if (th.max && val > th.max) status = 'alert';
-    else if (th.min && val < th.min) status = 'alert';
+    const warnBand = (limit) => Math.abs(Number(limit) || 0) * 0.2;
+    const max = Number(th.max);
+    const min = Number(th.min);
+
+    if (Number.isFinite(max)) {
+        if (val > max) status = 'alert';
+        else if (val >= max - warnBand(max)) status = 'warning';
+    }
+    if (Number.isFinite(min)) {
+        if (val < min) status = 'alert';
+        else if (status === 'normal' && val <= min + warnBand(min)) status = 'warning';
+    }
     
     const box = document.getElementById('box_' + param);
-    if (box) box.className = `param-box ${status === 'alert' ? 'box-alert' : 'box-ok'}`;
+    if (box) box.className = `param-box ${status === 'alert' ? 'box-alert' : status === 'warning' ? 'box-warn' : 'box-ok'}`;
     
     const text = document.getElementById(param + 'Val');
     if(text) text.className = `param-val ${opts.type==='text'?'numeric':''} ${status}`;
 
-    // Tentukan Warna Fill (Merah jika alert, Hijau jika normal)
-    const color = status === 'alert' ? '#ef4444' : '#10b981'; 
-    const gradient = status === 'alert' 
-        ? 'linear-gradient(180deg, #ef4444, #b91c1c)' 
-        : 'linear-gradient(180deg, #34d399, #10b981)';
+    const color = status === 'alert' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#10b981';
+    const gradient = status === 'alert'
+        ? 'linear-gradient(180deg, #ef4444, #b91c1c)'
+        : status === 'warning'
+            ? 'linear-gradient(180deg, #fbbf24, #f59e0b)'
+            : 'linear-gradient(180deg, #34d399, #10b981)';
 
     if (opts.type === 'gauge') {
         const el = document.getElementById('gauge-' + param);

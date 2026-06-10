@@ -29,12 +29,6 @@ function numberOrZero(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function getEngineRunning(data = {}) {
-    const statusText = String(data.status || '').toUpperCase();
-    const rpmValue = numberOrZero(data.rpm);
-    return ['RUNNING', 'ON', 'ACTIVE'].includes(statusText) || rpmValue > 0;
-}
-
 function formatLastUpdated(date = new Date()) {
     return date.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
 }
@@ -93,8 +87,6 @@ function formatEstimatedRuntime(fuelPct) {
 
 function renderSensorSnapshot(data = {}, { live = false } = {}) {
     const snapshot = data && typeof data === 'object' ? data : {};
-    const isRun = getEngineRunning(snapshot);
-
     setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm)).toLocaleString('id-ID')} RPM`);
     setVal('val-volt', `${numberOrZero(snapshot.volt).toFixed(1)} V`);
 
@@ -103,15 +95,12 @@ function renderSensorSnapshot(data = {}, { live = false } = {}) {
 
     const stateEl = document.getElementById('engStat');
     if (stateEl) {
-        if (live && isRun) {
-            stateEl.innerText = 'Live';
+        if (snapshot.ecuConnected === true) {
+            stateEl.innerText = 'ECU Connected';
             stateEl.className = 'st-ok';
-        } else if (isRun) {
-            stateEl.innerText = 'Terakhir hidup';
-            stateEl.className = 'st-warn';
         } else {
-            stateEl.innerText = 'Sementara mati';
-            stateEl.className = live ? 'st-err' : 'st-warn';
+            stateEl.innerText = 'ECU Disconnected';
+            stateEl.className = 'st-err';
         }
     }
 
@@ -176,7 +165,7 @@ function normalizeSyncStatus(data = {}) {
 
 function isEcuDisconnected(data = {}) {
     if (data.ecuConnected === false) return true;
-    const ts = data.realtimeReceivedAt || data.lastMqttUpdate || data.lastUpdated || data.timestamp;
+    const ts = data.realtimeReceivedAt || data.lastMqttUpdate;
     const time = ts ? new Date(ts).getTime() : NaN;
     return Number.isFinite(time) && Date.now() - time > DISCONNECT_THRESHOLD_MS;
 }
@@ -231,7 +220,7 @@ async function updateSensorData() {
             const data = json.data;
 
             // Cek apakah data dari ESP32 masih fresh (bukan stale data dari cache server)
-            const lastTs = data.lastUpdated || data.lastMqttUpdate || data.timestamp || data.createdAt;
+            const lastTs = data.realtimeReceivedAt || data.lastMqttUpdate;
             const dataAge = Date.now() - new Date(lastTs || 0).getTime();
             if (data.ecuConnected === false || dataAge > DISCONNECT_THRESHOLD_MS) {
                 _handleDisconnect(data);
@@ -258,7 +247,7 @@ let _disconnectReported = false;
 async function _handleDisconnect(fallbackData = null) {
     const snapshot = fallbackData || _lastDisplayData || readLastSensorSnapshot();
     if (snapshot) {
-        renderSensorSnapshot(snapshot, { live: false });
+        renderSensorSnapshot({ ...snapshot, ecuConnected: false, powerSource: 'OFF' }, { live: false });
         setDataStatus({ live: false, timestamp: snapshot.lastUpdated || snapshot.lastMqttUpdate || snapshot.timestamp });
     } else {
         setDataStatus({ live: false });

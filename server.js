@@ -199,7 +199,7 @@ const alertSchema = new mongoose.Schema({
     parameter: String,
     value: Number,
     message: String,
-    severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+    severity: { type: String, enum: ['low', 'medium', 'high', 'warning', 'critical'], default: 'medium' },
     acknowledged: { type: Boolean, default: false },
     acknowledgedAt: Date,
     confirmedAt: Date,
@@ -822,7 +822,7 @@ function getSessionSampledAt(row) {
 function getEffectiveSessionEnd(row, referenceTime = new Date()) {
     const endedAt = row?.endedAt ? new Date(row.endedAt) : null;
     if (endedAt && !Number.isNaN(endedAt.getTime())) {
-        return new Date(endedAt.getTime() + ACTIVE_TIME_INCREMENT_MS);
+        return endedAt;
     }
 
     const sampledAt = getSessionSampledAt(row);
@@ -1242,33 +1242,55 @@ setInterval(() => {
 // --- LOGIC ALARM DINAMIS (DIPERBAIKI) ---
 async function checkAndSaveAlerts(data) {
     const alertsToSave = [];
-    const T = ACTIVE_THRESHOLDS; 
-    const criticalOnMinViolation = new Set(['volt', 'batt', 'freq']);
-    const criticalOnMaxViolation = new Set(['amp', 'volt', 'batt', 'temp', 'coolant']);
+    const T = ACTIVE_THRESHOLDS;
 
-    // Helper check function
-    const check = (param, val) => {
-        if (!T[param]) return; // Skip jika tidak ada threshold
-        
-        // Cek Batas Atas
-        if (T[param].max !== undefined && val > T[param].max) {
-            const severity = criticalOnMaxViolation.has(param) ? 'critical' : 'high';
-            alertsToSave.push({ 
-                parameter: param, 
-                value: val, 
-                message: `${param.toUpperCase()} Too High (> ${T[param].max})`, 
-                severity
-            });
+    const thresholdBand = (limit) => Math.abs(Number(limit) || 0) * 0.2;
+
+    // Critical selalu mengikuti batas threshold yang disimpan dari halaman engine.
+    // Warning aktif saat nilai masih di dalam batas, tetapi sudah masuk area ±20% dari batas tersebut.
+    const check = (param, rawVal) => {
+        const th = T[param];
+        const val = Number(rawVal);
+        if (!th || !Number.isFinite(val)) return;
+
+        if (th.max !== undefined && Number.isFinite(Number(th.max))) {
+            const max = Number(th.max);
+            const warnFloor = max - thresholdBand(max);
+            if (val > max) {
+                alertsToSave.push({
+                    parameter: param,
+                    value: val,
+                    message: `${param.toUpperCase()} Critical High (> ${max})`,
+                    severity: 'critical'
+                });
+            } else if (val >= warnFloor) {
+                alertsToSave.push({
+                    parameter: param,
+                    value: val,
+                    message: `${param.toUpperCase()} Warning High (within 20% of ${max})`,
+                    severity: 'warning'
+                });
+            }
         }
-        // Cek Batas Bawah
-        if (T[param].min !== undefined && val < T[param].min) {
-            const severity = criticalOnMinViolation.has(param) ? 'critical' : 'medium';
-            alertsToSave.push({ 
-                parameter: param, 
-                value: val, 
-                message: `${param.toUpperCase()} Too Low (< ${T[param].min})`, 
-                severity
-            });
+
+        if (th.min !== undefined && Number.isFinite(Number(th.min))) {
+            const min = Number(th.min);
+            const warnCeil = min + thresholdBand(min);
+            if (val < min) {
+                alertsToSave.push({
+                    parameter: param,
+                    value: val,
+                    message: `${param.toUpperCase()} Critical Low (< ${min})`,
+                    severity: 'critical'
+                });
+            } else if (val <= warnCeil) {
+                alertsToSave.push({
+                    parameter: param,
+                    value: val,
+                    message: `${param.toUpperCase()} Warning Low (within 20% of ${min})`,
+                    severity: 'warning'
+                });
+            }
         }
     };
 
@@ -1967,13 +1989,24 @@ app.get('/api/engine-data/latest', async (req, res) => {
             const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
                 || getValidDate(realtimeData.timestamp)
                 || new Date();
+            const serverLastUpdated = getValidDate(realtimeData.serverReceivedAt)
+                || getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
+                || new Date();
+            let totalEngineHours = 0;
+            try {
+                if (!isDbReady()) await ensureDbReady();
+                totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
+            } catch (hoursError) {
+                console.warn('Failed to load active time hours for realtime snapshot:', hoursError.message);
+            }
             const realtimeSnapshot = applyDisconnectedPowerSource({
                 ...realtimeData,
                 timestamp: lastDataAt,
                 ecuConnected: true,
-                engineHours: 0,
+                engineHours: totalEngineHours,
                 lastMqttUpdate: lastDataAt,
-                lastUpdated: lastDataAt
+                serverReceivedAt: serverLastUpdated,
+                lastUpdated: serverLastUpdated
             }, true);
             const enrichedRealtime = {
                 ...realtimeSnapshot,
@@ -1999,6 +2032,11 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const realtimeReceivedAt = realtimeDeviceMatches ? getRealtimeLastSeenAt(realtimeData, latestRealtimeReceivedAt) : null;
         const baseIsRealtime = baseData?._realtime === true;
         const lastDataAt = (baseIsRealtime && !preferDatabase ? realtimeReceivedAt : null) || baseTimestamp || getValidDate(dbData?.timestamp) || null;
+        const serverLastUpdated = getValidDate(baseData.serverReceivedAt)
+            || getValidDate(dbData?.serverReceivedAt)
+            || getValidDate(baseData.createdAt)
+            || lastDataAt
+            || null;
         // Status koneksi ECU hanya boleh berasal dari pesan MQTT realtime yang benar-benar baru.
         // Dokumen MongoDB adalah data historis, sehingga timestamp database tidak boleh membuat UI terlihat Live.
         const ecuConnected = Boolean(realtimeDeviceMatches && isFreshRealtimeConnection(realtimeData, latestRealtimeReceivedAt));
@@ -2015,7 +2053,8 @@ app.get('/api/engine-data/latest', async (req, res) => {
             engineHours: totalEngineHours,
             lastMqttUpdate: realtimeReceivedAt || null,
             realtimeReceivedAt: realtimeReceivedAt || null,
-            lastUpdated: lastDataAt || baseData.timestamp
+            serverReceivedAt: serverLastUpdated,
+            lastUpdated: serverLastUpdated
         }, ecuConnected);
         const enrichedData = {
             ...responseSnapshot,
@@ -2325,7 +2364,8 @@ app.get('/api/generator-active-time/history', async (req, res) => {
         const now = new Date();
         const rows = await ActiveTimeHistory.find(query).sort({ startedAt: -1 }).limit(parseInt(limit, 10)).lean();
         const data = rows.map((row) => decorateActiveTimeRow(row, now));
-        res.json({ success: true, count: data.length, data });
+        const totalHours = await getTotalOperatingHours(effectiveDeviceId);
+        res.json({ success: true, count: data.length, data, totalHours: +totalHours.toFixed(2) });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -3084,12 +3124,11 @@ async function getTotalOperatingHours(deviceId) {
     const match = {};
     if (deviceId) match.deviceId = deviceId;
 
-    const [summary] = await ActiveTimeHistory.aggregate([
-        { $match: match },
-        { $group: { _id: null, totalMs: { $sum: '$durationMs' } } }
-    ]);
+    const rows = await ActiveTimeHistory.find(match).lean();
+    const now = new Date();
+    const totalMs = rows.reduce((sum, row) => sum + decorateActiveTimeRow(row, now).effectiveDurationMs, 0);
 
-    return ((summary?.totalMs || 0) / 3600000);
+    return totalMs / 3600000;
 }
 
 async function createCbmAnalysisPayload(options = {}) {
