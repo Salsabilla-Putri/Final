@@ -1957,11 +1957,13 @@ app.get('/api/engine-data/latest', async (req, res) => {
     try {
         const requestedDeviceId = req.query.deviceId;
         const effectiveDeviceId = requestedDeviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'ESP32_GENERATOR_01';
+        const preferDatabase = ['database', 'db', '1', 'true'].includes(String(req.query.preferDatabase || req.query.prefer || '').toLowerCase());
         const realtimeData = getLatestRealtimeSnapshot();
 
-        // Untuk Render/live dashboard: jangan tunggu MongoDB bila MQTT baru saja masuk.
-        // Page engine polling endpoint ini tiap detik, sehingga snapshot memory harus langsung dikirim.
-        if (realtimeData && (!effectiveDeviceId || realtimeData.deviceId === effectiveDeviceId)) {
+        // Untuk dashboard live: jangan tunggu MongoDB bila MQTT baru saja masuk.
+        // Engine page bisa meminta preferDatabase agar parameter tetap dari record database terakhir
+        // dan hanya status ECU/power yang mengikuti koneksi realtime.
+        if (!preferDatabase && realtimeData && (!effectiveDeviceId || realtimeData.deviceId === effectiveDeviceId)) {
             const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
                 || getValidDate(realtimeData.timestamp)
                 || new Date();
@@ -1993,20 +1995,26 @@ app.get('/api/engine-data/latest', async (req, res) => {
         }
 
         const baseTimestamp = getValidDate(baseData.timestamp);
-        const realtimeReceivedAt = getRealtimeLastSeenAt(baseData, latestRealtimeReceivedAt);
+        const realtimeDeviceMatches = realtimeData && (!effectiveDeviceId || realtimeData.deviceId === effectiveDeviceId);
+        const realtimeReceivedAt = realtimeDeviceMatches ? getRealtimeLastSeenAt(realtimeData, latestRealtimeReceivedAt) : null;
         const baseIsRealtime = baseData?._realtime === true;
-        const lastDataAt = (baseIsRealtime ? realtimeReceivedAt : null) || baseTimestamp || getValidDate(dbData?.timestamp) || null;
+        const lastDataAt = (baseIsRealtime && !preferDatabase ? realtimeReceivedAt : null) || baseTimestamp || getValidDate(dbData?.timestamp) || null;
         // Status koneksi ECU hanya boleh berasal dari pesan MQTT realtime yang benar-benar baru.
         // Dokumen MongoDB adalah data historis, sehingga timestamp database tidak boleh membuat UI terlihat Live.
-        const ecuConnected = baseIsRealtime && isFreshRealtimeConnection(baseData, latestRealtimeReceivedAt);
+        const ecuConnected = Boolean(realtimeDeviceMatches && isFreshRealtimeConnection(realtimeData, latestRealtimeReceivedAt));
+        const powerState = ecuConnected ? realtimeData : null;
         const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
         const responseSnapshot = applyDisconnectedPowerSource({
             ...baseData,
+            powerSource: powerState?.powerSource ?? baseData.powerSource,
+            sync: powerState?.sync ?? baseData.sync,
+            synced: powerState?.synced ?? baseData.synced,
             timestamp: lastDataAt || baseData.timestamp,
             ecuConnected,
             engineHours: totalEngineHours,
-            lastMqttUpdate: lastDataAt || baseData.timestamp,
+            lastMqttUpdate: realtimeReceivedAt || null,
+            realtimeReceivedAt: realtimeReceivedAt || null,
             lastUpdated: lastDataAt || baseData.timestamp
         }, ecuConnected);
         const enrichedData = {

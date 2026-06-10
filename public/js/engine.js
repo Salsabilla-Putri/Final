@@ -113,16 +113,35 @@ function updateLastUpdatedInfo(data = {}, isFresh = false) {
     el.innerText = `Disconnected • ${formatted}`;
 }
 
-function handleEngineData(data = {}, explicitFresh = null) {
-    const lastTs = data?.lastUpdated || data?.lastMqttUpdate || data?.realtimeReceivedAt || data?.timestamp;
-    const ts = Date.parse(lastTs || '');
-    const isFresh = explicitFresh !== null
-        ? explicitFresh
-        : data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
+function isEcuFresh(data = {}, explicitFresh = null) {
+    if (explicitFresh !== null) return explicitFresh;
 
-    updateDashboard(data, isFresh);
+    const lastRealtimeTs = data?.realtimeReceivedAt || data?.lastMqttUpdate;
+    const ts = Date.parse(lastRealtimeTs || '');
+    return data?.ecuConnected !== false && Number.isFinite(ts) && (Date.now() - ts <= ESP_FRESHNESS_MS);
+}
+
+function updateEngineConnectionIndicators(data = {}, explicitFresh = null, { updateTimestamp = true } = {}) {
+    const isFresh = isEcuFresh(data, explicitFresh);
     setEspConnectionStatus(isFresh);
-    updateLastUpdatedInfo(data, isFresh);
+    if (updateTimestamp) updateLastUpdatedInfo(data, isFresh);
+
+    const sourceEl = document.getElementById('powerSourceIndicator');
+    const sourceStatus = getPowerSourceStatus({ ...data, ecuConnected: isFresh });
+    if (sourceEl) {
+        sourceEl.innerText = sourceStatus.label;
+        sourceEl.className = sourceStatus.cls;
+    }
+}
+
+function handleEngineData(data = {}, explicitFresh = null) {
+    const isFresh = isEcuFresh(data, explicitFresh);
+
+    // Parameter di engine page sengaja dirender dari payload polling database terakhir.
+    // Status ECU/power dihitung terpisah dari timestamp MQTT realtime agar tidak glitch
+    // antara data database dan heartbeat SSE.
+    updateDashboard(data, isFresh);
+    updateEngineConnectionIndicators(data, isFresh);
 }
 
 // === DATA FETCHING ===
@@ -139,7 +158,7 @@ async function loadThresholds() {
 
 async function fetchData() {
     try {
-        const res = await fetch(`${API_URL}/engine-data/latest?_=${Date.now()}`, { cache: 'no-store' });
+        const res = await fetch(`${API_URL}/engine-data/latest?preferDatabase=1&_=${Date.now()}`, { cache: 'no-store' });
         const json = await res.json();
         
         if (json.success) {
@@ -348,7 +367,7 @@ function startRealtimeEngineStream() {
         source.onmessage = (event) => {
             try {
                 const payload = JSON.parse(event.data);
-                if (payload?.success && payload.data) handleEngineData(payload.data);
+                if (payload?.success && payload.data) updateEngineConnectionIndicators(payload.data, null, { updateTimestamp: false });
             } catch (error) {
                 console.error('Engine stream parse error:', error);
             }
