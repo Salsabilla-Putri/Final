@@ -2,7 +2,7 @@ const API_URL = '/api';
 let activeChart = null;
 let activeChartLoading = false;
 let auxDashboardLoading = false;
-const SENSOR_REFRESH_MS = 1000;
+const SENSOR_REFRESH_MS = 500;
 const AUX_REFRESH_MS = 15000;
 const CHART_REFRESH_MS = 15000;
 const LAST_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
@@ -367,7 +367,7 @@ function startEngineRealtimeStream() {
     };
 
     engineStream.onerror = () => {
-        // EventSource auto-reconnect. Polling 1 detik tetap berjalan sebagai fallback.
+        // EventSource auto-reconnect. Polling 0,5 detik tetap berjalan sebagai fallback.
         if (Date.now() - lastStreamMessageAt > DISCONNECT_THRESHOLD_MS) _handleDisconnect();
     };
 }

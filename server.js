@@ -1213,7 +1213,7 @@ mqttClient.on('error', (error) => {
 // gen/data menyimpan record history realtime dari ESP32 ke MongoDB.
 // ============================================================
 // MONGODB BATCH SAVE
-// Realtime data tetap diterima setiap 1 detik dari MQTT,
+// Realtime data tetap diterima setiap 0,5 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
 // Buffer server internal tetap dipakai untuk sumber realtime lain, tetapi gen/data ESP32 disimpan langsung.
 // ============================================================
@@ -1936,7 +1936,7 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis/database. ESP32 sekarang mengirim 1 record realtime tiap 1 detik.
+        // gen/data: jalur historis/database. ESP32 sekarang mengirim record realtime tiap 0,5 detik.
         // Bentuk lama { records: [...] } tetap diterima untuk kompatibilitas.
         if (topic === 'gen/data') {
             const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
@@ -2095,7 +2095,7 @@ app.get('/api/engine-data/stream', (req, res) => {
             clearInterval(heartbeat);
             engineStreamClients.delete(res);
         }
-    }, 1000);
+    }, 500);
 
     req.on('close', () => {
         clearInterval(heartbeat);
