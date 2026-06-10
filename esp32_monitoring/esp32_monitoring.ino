@@ -300,12 +300,13 @@ SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
 SemaphoreHandle_t dataMutex = NULL;
 
-const char* DB_FILE = "/database.csv";
-const char* DB_BACKUP_FILE = "/database_old.csv";
+const char* DB_FILE = "/sdDatabase.csv";
+const char* DB_LEGACY_FILE = "/database.csv";  // File lama tidak dipakai lagi agar mulai bersih dengan sdDatabase.csv.
+const char* DB_BACKUP_FILE = "/sdDatabase_old.csv";
 const char* FFT_FILE = "/fft.csv";
 const char* FFT_BACKUP_FILE = "/fft_old.csv";
 
-// Header CSV lokal. database.csv hanya berisi parameter agregasi utama.
+// Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
 const char* DB_CSV_HEADER =
   "recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,"
@@ -336,7 +337,7 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_UPLOAD_CHUNK_RECORDS 10
 #define MONGODB_UPLOAD_CHUNK_DELAY_MS 20UL
 
-// TEST DATABASE: tetap tulis database.csv di SD walaupun WiFi/MQTT normal.
+// TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
 #define SD_SAVE_ONLINE_FOR_DB_TEST 1
 
@@ -3197,12 +3198,19 @@ bool canAppendExistingCsvNoLock(const char* path) {
   return true;
 }
 
+void printLegacyDatabaseCsvNoticeNoLock(const char* path) {
+  if (strcmp(path, DB_FILE) == 0 && SD.exists(DB_LEGACY_FILE) && !SD.exists(DB_FILE)) {
+    Serial.println(F("[SD] INFO: /database.csv lama ditemukan tetapi tidak dipakai; sketch sekarang membuat /sdDatabase.csv baru."));
+  }
+}
+
 bool ensureCsvFileExistsNoLock(const char* path,
                                const char* backupPath,
                                const char* header,
                                const char* requiredHeaderToken,
                                bool (*createFreshFn)()) {
   deselectAllSPI();
+  printLegacyDatabaseCsvNoticeNoLock(path);
 
   if (!SD.exists(path)) {
     Serial.print(F("[SD] "));
@@ -3244,22 +3252,22 @@ bool ensureCsvFileExistsNoLock(const char* path,
         return true;
       }
 
-      Serial.println(F("[SD] File baru gagal dibuat setelah backup; mencoba restore file database.csv lama."));
+      Serial.println(F("[SD] File baru gagal dibuat setelah backup; mencoba restore file sdDatabase.csv lama."));
       if (!SD.exists(path) && SD.exists(backupPath) && SD.rename(backupPath, path)) {
-        Serial.println(F("[SD] Restore database.csv lama OK; append akan dilanjutkan dengan header lama."));
+        Serial.println(F("[SD] Restore sdDatabase.csv lama OK; append akan dilanjutkan dengan header lama."));
         return canAppendExistingCsvNoLock(path);
       }
       return false;
     }
 
-    Serial.println(F("[SD] Backup gagal. database.csv sudah ada, jadi file lama tidak dihapus agar data tidak hilang."));
+    Serial.println(F("[SD] Backup gagal. sdDatabase.csv sudah ada, jadi file lama tidak dihapus agar data tidak hilang."));
     if (canAppendExistingCsvNoLock(path)) {
-      Serial.println(F("[SD] database.csv lama masih bisa di-append; lanjut pakai file lama. Backup data dan reset CSV saat sempat."));
+      Serial.println(F("[SD] sdDatabase.csv lama masih bisa di-append; lanjut pakai file lama. Backup data dan reset CSV saat sempat."));
       sdLastFileOkMs = millis();
       return true;
     }
 
-    Serial.println(F("[SD] database.csv lama juga tidak bisa di-append. Kemungkinan file/directory FAT korup atau kartu write-protected."));
+    Serial.println(F("[SD] sdDatabase.csv lama juga tidak bisa di-append. Kemungkinan file/directory FAT korup atau kartu write-protected."));
     sdLastFileErrorMs = millis();
     return false;
   }
@@ -3300,7 +3308,7 @@ bool ensureDatabaseCsvExists() {
 
 void ensureDatabaseCsvHeader() {
   if (!ensureSdCsvFilesExistNoLock()) {
-    Serial.println(F("[SD] WARNING: SD init OK, tetapi /database.csv atau /fft.csv belum berhasil dibuat."));
+    Serial.println(F("[SD] WARNING: SD init OK, tetapi /sdDatabase.csv atau /fft.csv belum berhasil dibuat."));
   }
 }
 
@@ -3499,7 +3507,7 @@ bool retrySDCardOnceFast() {
       sdLastFileOkMs = millis();
       ensureDatabaseCsvHeader();
       ok = true;
-      Serial.println(F("[SD] Runtime retry OK; database.csv siap."));
+      Serial.println(F("[SD] Runtime retry OK; sdDatabase.csv siap."));
     }
   }
 
@@ -3518,7 +3526,7 @@ bool retrySDCardOnceFast() {
 
 void saveSnapshotToSD() {
   // Fungsi ini tetap dipanggil setiap 1 detik. Untuk pengujian database,
-  // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke database.csv/fft.csv
+  // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke sdDatabase.csv/fft.csv
   // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap menjadi fallback
   // jika publish live gen/data 1 detik tertahan atau gagal.
   //
@@ -3554,7 +3562,7 @@ void saveSnapshotToSD() {
     }
   }
 
-  bool backupNeeded = true; // User requirement: database.csv ditulis tiap 1 detik walaupun online.
+  bool backupNeeded = true; // User requirement: sdDatabase.csv ditulis tiap 1 detik walaupun online.
   uint8_t validRecords = 0;
   uint8_t unsavedSdRecords = 0;
 
@@ -5747,13 +5755,13 @@ void printSdFileCheck() {
 
   bool dbExists = SD.exists(DB_FILE);
   bool fftExists = SD.exists(FFT_FILE);
-  Serial.print  (F("║ database.csv exist           : ")); Serial.println(dbExists ? F("YES") : F("NO"));
+  Serial.print  (F("║ sdDatabase.csv exist           : ")); Serial.println(dbExists ? F("YES") : F("NO"));
   Serial.print  (F("║ fft.csv exist                : ")); Serial.println(fftExists ? F("YES") : F("NO"));
 
   if (dbExists) {
     File f = SD.open(DB_FILE, FILE_READ);
     if (f) {
-      Serial.print(F("║ database.csv size            : "));
+      Serial.print(F("║ sdDatabase.csv size            : "));
       Serial.print(f.size());
       Serial.println(F(" bytes"));
       String header = f.readStringUntil('\n');
@@ -5762,7 +5770,7 @@ void printSdFileCheck() {
       Serial.println(header.indexOf("fft_bins_xy") < 0 ? F("YES") : F("NO"));
       f.close();
     } else {
-      Serial.println(F("║ database.csv open            : FAILED"));
+      Serial.println(F("║ sdDatabase.csv open            : FAILED"));
     }
   }
 
@@ -5797,9 +5805,9 @@ void createDatabaseCsvFromCommand() {
     sdConsecutiveOpenFail = 0;
     sdOK = true;
     updateStorageCache();
-    Serial.println(F("[DB] /database.csv dan /fft.csv siap."));
+    Serial.println(F("[DB] /sdDatabase.csv dan /fft.csv siap."));
   } else {
-    Serial.println(F("[DB] Gagal membuat/mengecek /database.csv."));
+    Serial.println(F("[DB] Gagal membuat/mengecek /sdDatabase.csv."));
   }
 }
 
@@ -5819,7 +5827,7 @@ void resetSDDatabase() {
     if (SD.exists(FFT_FILE)) SD.remove(FFT_FILE);
     if (createFreshDatabaseCsv() && createFreshFftCsv()) {
       dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; mongoUploadSuccessRecords = 0; mongoUploadFailCount = 0; mongoUploadLastHttpCode = 0; mongoUploadLastAckedRecords = 0; mongoUploadLastAttemptMs = 0; mongoUploadLastBatchRecords = 0; mongoUploadLastPayloadBytes = 0; mongoUploadLastRunChunks = 0; mongoUploadLastRunRecords = 0; mongoUploadLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; lastMongoBufferedLocalSeq = 0; lastSdSavedLocalSeq = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
-      Serial.println(F("[DB] database.csv dan fft.csv reset OK."));
+      Serial.println(F("[DB] sdDatabase.csv dan fft.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
     }
