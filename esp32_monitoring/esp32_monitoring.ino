@@ -302,9 +302,7 @@ SemaphoreHandle_t dataMutex = NULL;
 
 const char* DB_FILE = "/sdDatabase.csv";
 const char* DB_LEGACY_FILE = "/database.csv";  // File lama tidak dipakai lagi agar mulai bersih dengan sdDatabase.csv.
-const char* DB_BACKUP_FILE = "/sdDatabase_old.csv";
 const char* FFT_FILE = "/fft.csv";
-const char* FFT_BACKUP_FILE = "/fft_old.csv";
 
 // Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
@@ -3205,7 +3203,6 @@ void printLegacyDatabaseCsvNoticeNoLock(const char* path) {
 }
 
 bool ensureCsvFileExistsNoLock(const char* path,
-                               const char* backupPath,
                                const char* header,
                                const char* requiredHeaderToken,
                                bool (*createFreshFn)()) {
@@ -3236,38 +3233,15 @@ bool ensureCsvFileExistsNoLock(const char* path,
   if (existingHeader != String(header) || existingHeader.indexOf(requiredHeaderToken) < 0) {
     Serial.print(F("[SD] Header "));
     Serial.print(path);
-    Serial.println(F(" lama/tidak sesuai. Backup file lama dan buat header baru..."));
+    Serial.println(F(" lama/tidak sesuai. Tidak membuat sdDatabase_old.csv; hanya pakai sdDatabase.csv sesuai request."));
 
-    if (SD.exists(backupPath) && !SD.remove(backupPath)) {
-      Serial.print(F("[SD] WARNING: backup lama "));
-      Serial.print(backupPath);
-      Serial.println(F(" gagal dihapus."));
-    }
-
-    bool backupOk = SD.rename(path, backupPath);
-    if (backupOk) {
-      bool createOk = createFreshFn();
-      if (createOk) {
-        Serial.println(F("[SD] File lama berhasil dibackup."));
-        return true;
-      }
-
-      Serial.println(F("[SD] File baru gagal dibuat setelah backup; mencoba restore file sdDatabase.csv lama."));
-      if (!SD.exists(path) && SD.exists(backupPath) && SD.rename(backupPath, path)) {
-        Serial.println(F("[SD] Restore sdDatabase.csv lama OK; append akan dilanjutkan dengan header lama."));
-        return canAppendExistingCsvNoLock(path);
-      }
-      return false;
-    }
-
-    Serial.println(F("[SD] Backup gagal. sdDatabase.csv sudah ada, jadi file lama tidak dihapus agar data tidak hilang."));
     if (canAppendExistingCsvNoLock(path)) {
-      Serial.println(F("[SD] sdDatabase.csv lama masih bisa di-append; lanjut pakai file lama. Backup data dan reset CSV saat sempat."));
+      Serial.println(F("[SD] sdDatabase.csv lama masih bisa di-append; lanjut pakai file yang sama tanpa backup."));
       sdLastFileOkMs = millis();
       return true;
     }
 
-    Serial.println(F("[SD] sdDatabase.csv lama juga tidak bisa di-append. Kemungkinan file/directory FAT korup atau kartu write-protected."));
+    Serial.println(F("[SD] sdDatabase.csv ada tetapi tidak bisa di-append. Hapus file secara manual atau format ulang FAT32 jika ingin dibuat ulang."));
     sdLastFileErrorMs = millis();
     return false;
   }
@@ -3277,11 +3251,11 @@ bool ensureCsvFileExistsNoLock(const char* path,
 }
 
 bool ensureDatabaseCsvExistsNoLock() {
-  return ensureCsvFileExistsNoLock(DB_FILE, DB_BACKUP_FILE, DB_CSV_HEADER, "phase_diff", createFreshDatabaseCsv);
+  return ensureCsvFileExistsNoLock(DB_FILE, DB_CSV_HEADER, "phase_diff", createFreshDatabaseCsv);
 }
 
 bool ensureFftCsvExistsNoLock() {
-  return ensureCsvFileExistsNoLock(FFT_FILE, FFT_BACKUP_FILE, FFT_CSV_HEADER, "fft_bins_xy", createFreshFftCsv);
+  return ensureCsvFileExistsNoLock(FFT_FILE, FFT_CSV_HEADER, "fft_bins_xy", createFreshFftCsv);
 }
 
 bool ensureSdCsvFilesExistNoLock() {
