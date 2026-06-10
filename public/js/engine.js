@@ -2,6 +2,7 @@
 const API_URL = '/api';
 const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps','phase'];
 const ESP_FRESHNESS_MS = 3000;
+const WARN_THRESHOLD_RATIO = 0.05;
 const SYNC_THRESHOLDS = {
     voltDeltaMax: 10,
     freqDeltaMax: 0.5,
@@ -16,8 +17,8 @@ function setEspConnectionStatus(isConnected, data = {}) {
     const el = document.getElementById('espConnection');
     if (!el) return;
 
-    const formatted = formatLastUpdatedTimestamp(data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate);
-    const comment = formatted !== '--' ? `<small style="display:block;font-weight:600;opacity:.8;line-height:1.2">Server: ${formatted}</small>` : '';
+    const formatted = formatLastUpdatedTimestamp(getLastDataTimestamp(data));
+    const comment = formatted !== '--' ? `<small style="display:block;font-weight:600;opacity:.8;line-height:1.2">Data terakhir: ${formatted}</small>` : '';
 
     if (isConnected) {
         el.className = 'indicator ind-on';
@@ -92,28 +93,29 @@ function getPowerSourceStatus(data = {}) {
     return { label: 'UNKNOWN', cls: 'indicator ind-neutral' };
 }
 
+function getLastDataTimestamp(data = {}) {
+    // Prioritaskan timestamp record data terakhir dari ESP32/database, bukan waktu polling UI.
+    return data.timestamp || data.lastDataAt || data.deviceTimestamp || data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate;
+}
+
 function formatLastUpdatedTimestamp(input) {
     const dateObj = input instanceof Date ? input : new Date(input);
     if (Number.isNaN(dateObj.getTime())) return '--';
     return dateObj.toLocaleString('id-ID', {
+        timeZone: 'Asia/Jakarta',
         day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-    });
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    }) + ' WIB';
 }
 
 function updateLastUpdatedInfo(data = {}, isFresh = false) {
     const el = document.getElementById('lastUpdatedInfo');
     if (!el) return;
     const wrapper = el.closest('.timestamp-pill');
-    if (isFresh) {
-        el.innerText = '--';
-        if (wrapper) wrapper.style.display = 'none';
-        return;
-    }
     if (wrapper) wrapper.style.display = '';
-    const ts = data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate;
-    const formatted = formatLastUpdatedTimestamp(ts);
-    el.innerText = `Server • ${formatted}`;
+    const formatted = formatLastUpdatedTimestamp(getLastDataTimestamp(data));
+    el.innerText = `Data terakhir • ${formatted}`;
 }
 
 function isEcuFresh(data = {}, explicitFresh = null) {
@@ -250,7 +252,7 @@ function applyVisual(param, value, opts) {
     const th = serverThresholds[param] || {};
     let status = 'normal';
 
-    const warnBand = (limit) => Math.abs(Number(limit) || 0) * 0.2;
+    const warnBand = (limit) => Math.abs(Number(limit) || 0) * WARN_THRESHOLD_RATIO;
     const max = Number(th.max);
     const min = Number(th.min);
 
