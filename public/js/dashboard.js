@@ -46,6 +46,22 @@ function getSaneDate(value) {
     return (tooOld || tooFuture || absurdYear) ? null : dateObj;
 }
 
+
+function isGridOnlySnapshot(data = {}) {
+    const source = String(data.powerSource || data.power_source || data.syncStatus || data.sync || '').trim().toUpperCase();
+    return source === 'GRID' || source === 'PLN' || source === 'UTILITY';
+}
+
+function getDisplayVolt(data = {}) {
+    if (isGridOnlySnapshot(data)) return numberOrZero(data.voltGrid ?? data.volt_grid ?? data.gridVolt ?? data.grid_voltage ?? data.volt);
+    return numberOrZero(data.volt);
+}
+
+function getDisplayFreq(data = {}) {
+    if (isGridOnlySnapshot(data)) return numberOrZero(data.freqGrid ?? data.freq_grid ?? data.gridFreq ?? data.grid_frequency ?? data.freq);
+    return numberOrZero(data.freq);
+}
+
 function getLastDataTimestamp(data = {}) {
     const candidates = [
         data.timestamp,
@@ -133,8 +149,11 @@ function formatEstimatedRuntime(fuelPct) {
 
 function renderSensorSnapshot(data = {}, { live = false } = {}) {
     const snapshot = data && typeof data === 'object' ? data : {};
+    const displayVolt = getDisplayVolt(snapshot);
+    const displayFreq = getDisplayFreq(snapshot);
+
     setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm)).toLocaleString('id-ID')} RPM`);
-    setVal('val-volt', `${numberOrZero(snapshot.volt).toFixed(1)} V`);
+    setVal('val-volt', `${displayVolt.toFixed(1)} V`);
 
     updatePowerSourceIndicator('engSync', snapshot);
     updatePowerSourceStatus(snapshot);
@@ -163,9 +182,9 @@ function renderSensorSnapshot(data = {}, { live = false } = {}) {
         runtimeEl.className = fuel >= 25 ? 'st-ok' : fuel >= 12 ? 'st-warn' : 'st-err';
     }
 
-    checkLimit('st-volt', numberOrZero(snapshot.volt), 200, 240);
+    checkLimit('st-volt', displayVolt,                200, 240);
     checkLimit('st-amp',  numberOrZero(snapshot.amp),  0,   100);
-    checkLimit('st-freq', numberOrZero(snapshot.freq), 48,  52);
+    checkLimit('st-freq', displayFreq,                48,  52);
     checkLimit('st-fuel', fuel,                        20,  100);
     checkLimit('st-map',  numberOrZero(snapshot.map),  20,  250);
     checkLimit('st-afr',  numberOrZero(snapshot.afr),  10,  18);

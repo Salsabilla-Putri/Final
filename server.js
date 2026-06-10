@@ -129,9 +129,11 @@ const generatorDataSchema = new mongoose.Schema({
     deviceId: { type: String, required: true },
     rpm: Number,
     volt: Number,
+    voltGrid: Number,
     amp: Number,
     power: Number,
     freq: Number,
+    freqGrid: Number,
     temp: Number,
     coolant: Number,
     fuel: Number,
@@ -699,7 +701,7 @@ app.use('/api', async (req, res, next) => {
 
 let latestData = {
     deviceId: 'ESP32_GENERATOR_01', timestamp: null,
-    rpm: 0, volt: 0, amp: 0, power: 0, freq: 0, temp: 0, coolant: 0,
+    rpm: 0, volt: 0, voltGrid: 0, amp: 0, power: 0, freq: 0, freqGrid: 0, temp: 0, coolant: 0,
     fuel: 0, sync: 'OFF-GRID', synced: false, powerSource: 'OFF', status: 'STOPPED', oil: 0, iat: 0, map: 0, batt: 0, afr: 0, tps: 0, ecuConnected: undefined
 };
 let activeSessions = new Map();
@@ -1562,9 +1564,11 @@ function normalizeGeneratorPayload(rawPayload) {
         timestamp,
         rpm: toNumber(payload.rpm, latestData.rpm),
         volt: toNumber(payload.volt, latestData.volt),
+        voltGrid: toNumber(payload.voltGrid ?? payload.volt_grid ?? payload.gridVolt ?? payload.grid_voltage, latestData.voltGrid),
         amp: toNumber(readAmpValue(payload), latestData.amp),
         power: toNumber(readPowerValue(payload), latestData.power),
         freq: toNumber(payload.freq, latestData.freq),
+        freqGrid: toNumber(payload.freqGrid ?? payload.freq_grid ?? payload.gridFreq ?? payload.grid_frequency, latestData.freqGrid),
         temp: toNumber(firstDefined(payload.temp, payload.temperature), latestData.temp),
         coolant: toNumber(readCoolantValue(payload), latestData.coolant),
         fuel: toNumber(payload.fuel, latestData.fuel),
