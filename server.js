@@ -717,23 +717,39 @@ function isFreshRealtimeConnection(data = latestData, receivedAt = latestRealtim
     return Boolean(lastSeenAt && (Date.now() - lastSeenAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
 }
 
+
+function applyDisconnectedPowerSource(data = {}, ecuConnected = data?.ecuConnected) {
+    if (ecuConnected !== false) return data;
+
+    return {
+        ...data,
+        ecuConnected: false,
+        powerSource: 'OFF',
+        sync: 'OFF',
+        synced: false
+    };
+}
+
 function buildEngineRealtimeStreamPayload() {
     const realtimeLastSeenAt = getRealtimeLastSeenAt();
     const displayTimestamp = realtimeLastSeenAt || getValidDate(latestData?.timestamp) || null;
     const ecuConnected = isFreshRealtimeConnection();
+    const streamData = applyDisconnectedPowerSource({
+        ...latestData,
+        timestamp: displayTimestamp || latestData?.timestamp,
+        lastUpdated: displayTimestamp || latestData?.timestamp,
+        lastMqttUpdate: realtimeLastSeenAt,
+        realtimeReceivedAt: realtimeLastSeenAt,
+        ecuConnected
+    }, ecuConnected);
 
     return {
         success: true,
         source: 'realtime-stream',
         data: {
-            ...latestData,
-            timestamp: displayTimestamp || latestData?.timestamp,
-            lastUpdated: displayTimestamp || latestData?.timestamp,
-            lastMqttUpdate: realtimeLastSeenAt,
-            realtimeReceivedAt: realtimeLastSeenAt,
-            ecuConnected,
-            alerts: generateAlerts(latestData, null),
-            ...getPublicLabels({ ...latestData, ecuConnected })
+            ...streamData,
+            alerts: generateAlerts(streamData, null),
+            ...getPublicLabels(streamData)
         }
     };
 }
@@ -1949,16 +1965,19 @@ app.get('/api/engine-data/latest', async (req, res) => {
             const lastDataAt = getValidDate(realtimeData.realtimeReceivedAt || realtimeData.lastMqttUpdate)
                 || getValidDate(realtimeData.timestamp)
                 || new Date();
-            const enrichedRealtime = {
+            const realtimeSnapshot = applyDisconnectedPowerSource({
                 ...realtimeData,
                 timestamp: lastDataAt,
                 ecuConnected: true,
                 engineHours: 0,
                 lastMqttUpdate: lastDataAt,
-                lastUpdated: lastDataAt,
-                alerts: generateAlerts(realtimeData, null),
-                maintenance: getMaintenanceStatus(realtimeData, []),
-                ...getPublicLabels({ ...realtimeData, ecuConnected: true })
+                lastUpdated: lastDataAt
+            }, true);
+            const enrichedRealtime = {
+                ...realtimeSnapshot,
+                alerts: generateAlerts(realtimeSnapshot, null),
+                maintenance: getMaintenanceStatus(realtimeSnapshot, []),
+                ...getPublicLabels(realtimeSnapshot)
             };
             return res.json({ success: true, data: enrichedRealtime, source: 'realtime-memory' });
         }
@@ -1982,16 +2001,19 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const ecuConnected = baseIsRealtime && isFreshRealtimeConnection(baseData, latestRealtimeReceivedAt);
         const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
-        const enrichedData = {
+        const responseSnapshot = applyDisconnectedPowerSource({
             ...baseData,
             timestamp: lastDataAt || baseData.timestamp,
             ecuConnected,
             engineHours: totalEngineHours,
             lastMqttUpdate: lastDataAt || baseData.timestamp,
-            lastUpdated: lastDataAt || baseData.timestamp,
-            alerts: generateAlerts(baseData, previousDoc),
-            maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
-            ...getPublicLabels({ ...baseData, ecuConnected })
+            lastUpdated: lastDataAt || baseData.timestamp
+        }, ecuConnected);
+        const enrichedData = {
+            ...responseSnapshot,
+            alerts: generateAlerts(responseSnapshot, previousDoc),
+            maintenance: getMaintenanceStatus(responseSnapshot, latestDocs.slice(1)),
+            ...getPublicLabels(responseSnapshot)
         };
         const source = baseData._realtime ? 'realtime-memory' : 'database';
         res.json({ success: true, data: enrichedData, source });
@@ -2016,7 +2038,12 @@ app.get('/api/public-status', async (req, res) => {
         }
 
         const [latestDoc, previousDoc] = latestDocs;
-        const payload = transformPublicStatus(latestDoc, previousDoc || null);
+        const realtimeData = getLatestRealtimeSnapshot();
+        const useRealtime = realtimeData && (!deviceId || realtimeData.deviceId === deviceId);
+        const publicSnapshot = useRealtime
+            ? applyDisconnectedPowerSource({ ...realtimeData, ecuConnected: true }, true)
+            : applyDisconnectedPowerSource({ ...latestDoc, ecuConnected: false }, false);
+        const payload = transformPublicStatus(publicSnapshot, previousDoc || null);
 
         res.json({ success: true, data: payload });
     } catch (error) {

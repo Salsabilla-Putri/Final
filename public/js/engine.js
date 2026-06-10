@@ -76,6 +76,8 @@ function getSyncByThreshold(data) {
 
 
 function getPowerSourceStatus(data = {}) {
+    if (data.ecuConnected === false) return { label: 'OFF', cls: 'indicator ind-off' };
+
     const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return { label: 'GRID', cls: 'indicator ind-on' };
     if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return { label: 'GENSET', cls: 'indicator ind-warn' };
