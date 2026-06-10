@@ -6,10 +6,12 @@ const SENSOR_REFRESH_MS = 1000;
 const AUX_REFRESH_MS = 15000;
 const CHART_REFRESH_MS = 15000;
 const LAST_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
+const WIB_TIME_ZONE = 'Asia/Jakarta';
+let sensorRequestSeq = 0;
 
 // --- UTILS ---
-const formatTime = (d) => new Date(d).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
-const formatDate = (d) => new Date(d).toLocaleDateString('id-ID', {day:'numeric', month:'short'});
+const formatTime = (d) => new Date(d).toLocaleTimeString('id-ID', { timeZone: WIB_TIME_ZONE, hour:'2-digit', minute:'2-digit' });
+const formatDate = (d) => new Date(d).toLocaleDateString('id-ID', { timeZone: WIB_TIME_ZONE, day:'numeric', month:'short' });
 
 
 function readLastSensorSnapshot() {
@@ -29,8 +31,45 @@ function numberOrZero(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function getSaneDate(value) {
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value === 'string' && value.trim().toLowerCase().startsWith('millis:')) return null;
+
+    const dateObj = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(dateObj.getTime())) return null;
+
+    const now = Date.now();
+    const year = dateObj.getUTCFullYear();
+    const tooOld = year < 2020;
+    const tooFuture = dateObj.getTime() - now > 24 * 60 * 60 * 1000;
+    const absurdYear = year > 2100;
+    return (tooOld || tooFuture || absurdYear) ? null : dateObj;
+}
+
+function getLastDataTimestamp(data = {}) {
+    const candidates = [
+        data.timestamp,
+        data.lastDataAt,
+        data.deviceTimestamp,
+        data.lastUpdated,
+        data.serverReceivedAt,
+        data.realtimeReceivedAt,
+        data.lastMqttUpdate
+    ];
+    for (const candidate of candidates) {
+        const saneDate = getSaneDate(candidate);
+        if (saneDate) return saneDate;
+    }
+    return null;
+}
+
 function formatLastUpdated(date = new Date()) {
-    return date.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
+    return date.toLocaleString('id-ID', {
+        timeZone: WIB_TIME_ZONE,
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    }) + ' WIB';
 }
 
 function setDataStatus({ live = false, timestamp = null } = {}) {
@@ -38,14 +77,21 @@ function setDataStatus({ live = false, timestamp = null } = {}) {
     const lastEl = document.getElementById('lastUpdated');
     const dt = timestamp ? new Date(timestamp) : null;
     const safeDate = dt && Number.isFinite(dt.getTime()) ? dt : null;
+    const label = live ? 'Live' : 'Data terakhir';
+    const timestampText = safeDate ? ` • ${formatLastUpdated(safeDate)}` : '';
 
     if (statusEl) {
         statusEl.className = `conn-badge ${live ? 'conn-online' : 'conn-offline'}`;
-        statusEl.innerHTML = live
-            ? '<i class="fas fa-circle"></i> Live'
-            : '<i class="fas fa-circle"></i> Data terakhir';
+        statusEl.innerHTML = `<i class="fas fa-circle"></i> ${label}${timestampText}`;
     }
-    if (lastEl) lastEl.style.display = 'none';
+    if (lastEl) {
+        if (safeDate) {
+            lastEl.style.display = '';
+            lastEl.innerText = `Data terakhir: ${formatLastUpdated(safeDate)}`;
+        } else {
+            lastEl.style.display = 'none';
+        }
+    }
 }
 
 
@@ -208,8 +254,10 @@ let _lastDisplayData = readLastSensorSnapshot();
 const DISCONNECT_THRESHOLD_MS = 3_000; // 3 detik tanpa MQTT = ECU disconnected
 
 async function updateSensorData() {
+    const requestSeq = ++sensorRequestSeq;
     try {
         const res = await fetch(`${API_URL}/engine-data/latest?_=${Date.now()}`, { cache: 'no-store' });
+        if (requestSeq !== sensorRequestSeq) return;
         if (!res.ok) {
             _handleDisconnect();
             return;
@@ -234,7 +282,7 @@ async function updateSensorData() {
             _lastDisplayData = data;
             saveLastSensorSnapshot(data);
             renderSensorSnapshot(data, { live: true });
-            setDataStatus({ live: true, timestamp: data.lastUpdated || data.lastMqttUpdate || data.timestamp });
+            setDataStatus({ live: true, timestamp: getLastDataTimestamp(data) });
         }
     } catch (e) {
         console.warn('Sensor Error', e);
@@ -248,7 +296,7 @@ async function _handleDisconnect(fallbackData = null) {
     const snapshot = fallbackData || _lastDisplayData || readLastSensorSnapshot();
     if (snapshot) {
         renderSensorSnapshot({ ...snapshot, ecuConnected: false, powerSource: 'OFF' }, { live: false });
-        setDataStatus({ live: false, timestamp: snapshot.lastUpdated || snapshot.lastMqttUpdate || snapshot.timestamp });
+        setDataStatus({ live: false, timestamp: getLastDataTimestamp(snapshot) });
     } else {
         setDataStatus({ live: false });
     }
@@ -531,13 +579,16 @@ function _splitSessionByDay(start, end, wibOffset) {
 document.addEventListener('DOMContentLoaded', () => {
     const renderClock = () => {
         const el = document.getElementById('clock');
-        if (el) el.innerText = new Date().toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) + ' WIB';
+        if (el) el.innerText = new Date().toLocaleTimeString('id-ID', { timeZone: WIB_TIME_ZONE, hour:'2-digit', minute:'2-digit' }) + ' WIB';
     };
 
     renderClock();
     setInterval(renderClock, 1000);
 
-    if (_lastDisplayData) renderSensorSnapshot(_lastDisplayData, { live: false });
+    if (_lastDisplayData) {
+        renderSensorSnapshot(_lastDisplayData, { live: false });
+        setDataStatus({ live: false, timestamp: getLastDataTimestamp(_lastDisplayData) });
+    }
     updateSensorData();
     updateAuxiliaryData();
     initChart();

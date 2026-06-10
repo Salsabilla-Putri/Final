@@ -2,10 +2,16 @@
 const API_URL = '/api';
 const PARAMS = ['volt','amp','power','freq','rpm','batt','coolant','iat','map','fuel','afr','tps','phase'];
 const ESP_FRESHNESS_MS = 3000;
+const WARN_THRESHOLD_RATIO = 0.05;
+const WARN_THRESHOLD_ABSOLUTE = {
+    freq: 0.1,
+    volt: 5,
+    phase: 5
+};
 const SYNC_THRESHOLDS = {
-    voltDeltaMax: 10,
-    freqDeltaMax: 0.5,
-    phaseDeltaMax: 15
+    voltDeltaMax: 5,
+    freqDeltaMax: 0.1,
+    phaseDeltaMax: 5
 };
 
 
@@ -16,8 +22,8 @@ function setEspConnectionStatus(isConnected, data = {}) {
     const el = document.getElementById('espConnection');
     if (!el) return;
 
-    const formatted = formatLastUpdatedTimestamp(data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate);
-    const comment = formatted !== '--' ? `<small style="display:block;font-weight:600;opacity:.8;line-height:1.2">Server: ${formatted}</small>` : '';
+    const formatted = formatLastUpdatedTimestamp(getLastDataTimestamp(data));
+    const comment = formatted !== '--' ? `<small style="display:block;font-weight:600;opacity:.8;line-height:1.2">Data terakhir: ${formatted}</small>` : '';
 
     if (isConnected) {
         el.className = 'indicator ind-on';
@@ -92,28 +98,58 @@ function getPowerSourceStatus(data = {}) {
     return { label: 'UNKNOWN', cls: 'indicator ind-neutral' };
 }
 
+function getSaneDate(value) {
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value === 'string' && value.trim().toLowerCase().startsWith('millis:')) return null;
+
+    const dateObj = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(dateObj.getTime())) return null;
+
+    const now = Date.now();
+    const year = dateObj.getUTCFullYear();
+    const tooOld = year < 2020;
+    const tooFuture = dateObj.getTime() - now > 24 * 60 * 60 * 1000;
+    const absurdYear = year > 2100;
+    return (tooOld || tooFuture || absurdYear) ? null : dateObj;
+}
+
+function getLastDataTimestamp(data = {}) {
+    // Prioritaskan timestamp record data terakhir dari ESP32/database, tetapi
+    // abaikan timestamp rusak seperti year 30063 atau fallback "millis:*".
+    const candidates = [
+        data.timestamp,
+        data.lastDataAt,
+        data.deviceTimestamp,
+        data.lastUpdated,
+        data.serverReceivedAt,
+        data.realtimeReceivedAt,
+        data.lastMqttUpdate
+    ];
+    for (const candidate of candidates) {
+        const saneDate = getSaneDate(candidate);
+        if (saneDate) return saneDate;
+    }
+    return null;
+}
+
 function formatLastUpdatedTimestamp(input) {
-    const dateObj = input instanceof Date ? input : new Date(input);
-    if (Number.isNaN(dateObj.getTime())) return '--';
+    const dateObj = getSaneDate(input);
+    if (!dateObj) return '--';
     return dateObj.toLocaleString('id-ID', {
+        timeZone: 'Asia/Jakarta',
         day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-    });
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    }) + ' WIB';
 }
 
 function updateLastUpdatedInfo(data = {}, isFresh = false) {
     const el = document.getElementById('lastUpdatedInfo');
     if (!el) return;
     const wrapper = el.closest('.timestamp-pill');
-    if (isFresh) {
-        el.innerText = '--';
-        if (wrapper) wrapper.style.display = 'none';
-        return;
-    }
     if (wrapper) wrapper.style.display = '';
-    const ts = data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate;
-    const formatted = formatLastUpdatedTimestamp(ts);
-    el.innerText = `Server • ${formatted}`;
+    const formatted = formatLastUpdatedTimestamp(getLastDataTimestamp(data));
+    el.innerText = `Data terakhir • ${formatted}`;
 }
 
 function isEcuFresh(data = {}, explicitFresh = null) {
@@ -250,7 +286,12 @@ function applyVisual(param, value, opts) {
     const th = serverThresholds[param] || {};
     let status = 'normal';
 
-    const warnBand = (limit) => Math.abs(Number(limit) || 0) * 0.2;
+    const warnBand = (limit) => {
+        if (Object.prototype.hasOwnProperty.call(WARN_THRESHOLD_ABSOLUTE, param)) {
+            return WARN_THRESHOLD_ABSOLUTE[param];
+        }
+        return Math.abs(Number(limit) || 0) * WARN_THRESHOLD_RATIO;
+    };
     const max = Number(th.max);
     const min = Number(th.min);
 
