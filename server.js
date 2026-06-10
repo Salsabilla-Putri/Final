@@ -682,11 +682,11 @@ function normalizeBrokerUrl(raw, defaultProtocol = 'mqtt') {
     return `${defaultProtocol}://${url}`;
 }
 
-// RabbitMQ MQTT credentials: wajib diatur melalui .env / environment variables
-const MQTT_BROKER_URL = normalizeBrokerUrl(envValue('MQTT_BROKER'));
+// MQTT credentials: bisa dioverride melalui .env / environment variables
+const MQTT_BROKER_URL = normalizeBrokerUrl(envValue('MQTT_BROKER', 'mqtt://generatorta20.cloud.shiftr.io'));
 const MQTT_VHOST = envValue('MQTT_VHOST');
-const MQTT_USERNAME = envValue('MQTT_USERNAME');
-const MQTT_PASSWORD = envValue('MQTT_PASSWORD');
+const MQTT_USERNAME = envValue('MQTT_USERNAME', 'generatorta20');
+const MQTT_PASSWORD = envValue('MQTT_PASSWORD', 'TA252601020');
 const isMqttConfigured = Boolean(MQTT_BROKER_URL && MQTT_USERNAME && MQTT_PASSWORD);
 
 if (!isMqttConfigured) {
@@ -1191,7 +1191,7 @@ setInterval(async () => {
 
 mqttClient.on('connect', () => {
     mqttIngestStats.connectedAt = new Date();
-    console.log(`✅ Connected to RabbitMQ MQTT | broker: ${MQTT_BROKER_URL} | vhost: ${MQTT_VHOST} | user: ${MQTT_USERNAME}`);
+    console.log(`✅ Connected to MQTT broker | broker: ${MQTT_BROKER_URL} | vhost: ${MQTT_VHOST || '-'} | user: ${MQTT_USERNAME}`);
     mqttClient.subscribe('gen/realtime', (err) => {
         if (err) console.error('❌ Subscribe error (gen/realtime):', err.message);
         else console.log('📡 Subscribed to gen/realtime');
@@ -1213,7 +1213,7 @@ mqttClient.on('error', (error) => {
 // gen/data menyimpan record history realtime dari ESP32 ke MongoDB.
 // ============================================================
 // MONGODB BATCH SAVE
-// Realtime data tetap diterima setiap 1 detik dari MQTT,
+// Realtime data tetap diterima setiap 0,5 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
 // Buffer server internal tetap dipakai untuk sumber realtime lain, tetapi gen/data ESP32 disimpan langsung.
 // ============================================================
@@ -1890,7 +1890,17 @@ mqttClient.on('message', async (topic, message) => {
         }
 
         // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.
-        latestData = normalizeGeneratorPayload(parsed);
+        // Untuk payload batch gen/data, pakai record terakhir agar dashboard tidak tertimpa
+        // wrapper { records: [...] } yang tidak berisi nilai sensor langsung.
+        const realtimeSourcePayload = (topic === 'gen/data' && Array.isArray(parsed.records) && parsed.records.length)
+            ? {
+                ...parsed.records[parsed.records.length - 1],
+                deviceId: parsed.records[parsed.records.length - 1].deviceId || parsed.deviceId,
+                source: parsed.records[parsed.records.length - 1].source || parsed.source,
+                timestamp: parsed.records[parsed.records.length - 1].timestamp || parsed.timestamp
+            }
+            : parsed;
+        latestData = normalizeGeneratorPayload(realtimeSourcePayload);
         latestRealtimeReceivedAt = new Date();
         latestData.lastMqttUpdate = latestRealtimeReceivedAt;
         latestData.realtimeReceivedAt = latestRealtimeReceivedAt;
@@ -1926,7 +1936,7 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur historis/database. ESP32 sekarang mengirim 1 record realtime tiap 1 detik.
+        // gen/data: jalur historis/database. ESP32 sekarang mengirim record realtime tiap 0,5 detik.
         // Bentuk lama { records: [...] } tetap diterima untuk kompatibilitas.
         if (topic === 'gen/data') {
             const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
@@ -2085,7 +2095,7 @@ app.get('/api/engine-data/stream', (req, res) => {
             clearInterval(heartbeat);
             engineStreamClients.delete(res);
         }
-    }, 1000);
+    }, 500);
 
     req.on('close', () => {
         clearInterval(heartbeat);

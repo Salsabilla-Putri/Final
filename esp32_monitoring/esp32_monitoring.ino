@@ -139,12 +139,11 @@
 // ============================================================
 // MQTT
 // ============================================================
-// Default broker RabbitMQ MQTT SmartSystem.
-// Catatan: PubSubClient membutuhkan host polos tanpa skema, jadi gunakan
-// rmq230.smartsystem.id di MQTT_HOST. Jika build flag masih memberi URI
-// seperti mqtt://rmq230.smartsystem.id, kode akan menormalisasi saat runtime.
+// Default broker Shiftr.io untuk dashboard realtime.
+// PubSubClient membutuhkan host polos tanpa skema; jika build flag memberi URI
+// seperti mqtt://generatorta20.cloud.shiftr.io, kode akan menormalisasi saat runtime.
 #ifndef MQTT_HOST
-#define MQTT_HOST  "rmq230.smartsystem.id"
+#define MQTT_HOST  "mqtt://generatorta20.cloud.shiftr.io"
 #endif
 
 #ifndef MQTT_PORT
@@ -152,20 +151,25 @@
 #endif
 
 #ifndef MQTT_USER
-#define MQTT_USER  "smartgen_sec8AePh"
+#define MQTT_USER  "generatorta20"
 #endif
 
 #ifndef MQTT_PASS
-#define MQTT_PASS  "rai2Oi1U"
+#define MQTT_PASS  "TA252601020"
 #endif
 
 #ifndef MQTT_VHOST
-#define MQTT_VHOST "/smartgen"
+#define MQTT_VHOST ""
 #endif
 
-// RabbitMQ MQTT memakai format username "vhost:username".
+// Shiftr.io memakai username langsung. MQTT_AUTH_USERNAME/build flag tetap bisa override
+// jika suatu saat broker membutuhkan format lain.
+#ifndef MQTT_AUTH_USERNAME
+#define MQTT_AUTH_USERNAME MQTT_USER
+#endif
+
 #ifndef MQTT_LOGIN_USER
-#define MQTT_LOGIN_USER MQTT_VHOST ":" MQTT_USER
+#define MQTT_LOGIN_USER MQTT_AUTH_USERNAME
 #endif
 
 #ifndef MQTT_TOPIC
@@ -181,7 +185,7 @@
 // ============================================================
 // Tujuan:
 // - Mencegah MQTT disconnected saat runtime.
-// - Mengirim data MongoDB/history realtime setiap 1 detik.
+// - Mengirim data dashboard realtime setiap 0,5 detik.
 // - Menjaga koneksi WiFi lebih stabil.
 // - Mengurangi risiko heap fragmentation akibat String JSON.
 
@@ -189,12 +193,12 @@
 #define MQTT_KEEPALIVE_SEC           120
 #define MQTT_SOCKET_TIMEOUT_SEC      1   // Batasi blocking mqtt.connect agar TFT tidak freeze lama
 
-#define MQTT_RECONNECT_MIN_MS        10000UL
-#define MQTT_RECONNECT_MAX_MS        60000UL
+#define MQTT_RECONNECT_MIN_MS        1000UL
+#define MQTT_RECONNECT_MAX_MS        10000UL
 
-#define WIFI_RUNTIME_CHECK_MS        3000UL
-#define WIFI_RECONNECT_MIN_MS        10000UL
-#define WIFI_RECONNECT_MAX_MS        60000UL
+#define WIFI_RUNTIME_CHECK_MS        1000UL
+#define WIFI_RECONNECT_MIN_MS        1000UL
+#define WIFI_RECONNECT_MAX_MS        10000UL
 #define WIFI_CONNECT_POLL_MS         500UL
 #define WIFI_EDUROAM_MAX_ATTEMPTS    1
 
@@ -215,7 +219,7 @@
 
 // Cloud/MongoDB path:
 // Tidak memakai HTTP POST /api/ingest/batch.
-// Record parameter-only dikirim live melalui MQTT_TOPIC = gen/data setiap 1 detik.
+// Record parameter-only dikirim live melalui MQTT_TOPIC = gen/data setiap 0,5 detik.
 // RAM buffer tetap dipakai sebagai fallback batch/chunk saat publish live gagal.
 // Backend harus subscribe topic gen/data dan melakukan bulkWrite/updateOne ke MongoDB.
 
@@ -290,18 +294,17 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 
 #define SD_SPI_FREQ_INIT 400000UL
 #define SD_SPI_FREQ_FAST 1000000UL
-#define SD_AUTO_RETRY_INTERVAL_MS 30000UL
+#define SD_AUTO_RETRY_INTERVAL_MS 1000UL
 
 SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
 SemaphoreHandle_t dataMutex = NULL;
 
-const char* DB_FILE = "/database.csv";
-const char* DB_BACKUP_FILE = "/database_old.csv";
+const char* DB_FILE = "/sdDatabase.csv";
+const char* DB_LEGACY_FILE = "/database.csv";  // File lama tidak dipakai lagi agar mulai bersih dengan sdDatabase.csv.
 const char* FFT_FILE = "/fft.csv";
-const char* FFT_BACKUP_FILE = "/fft_old.csv";
 
-// Header CSV lokal. database.csv hanya berisi parameter agregasi utama.
+// Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
 const char* DB_CSV_HEADER =
   "recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,"
@@ -317,12 +320,12 @@ const char* FFT_CSV_HEADER =
 // ============================================================
 #define SENSOR_SAMPLE_HZ          50
 #define SENSOR_SAMPLE_INTERVAL_MS 20
-#define AGGREGATION_INTERVAL_MS   1000
+#define AGGREGATION_INTERVAL_MS   500
 #define STORAGE_BATCH_SIZE        1
 // ============================================================
 // MONGODB BATCH CONFIG
 // ============================================================
-// Realtime dashboard dan MongoDB/history dikirim tiap 1 detik tanpa batch di ESP32.
+// Realtime dashboard dan MongoDB/history dikirim tiap 0,5 detik tanpa batch di ESP32.
 
 #define MONGODB_BATCH_INTERVAL_MS 600000UL  // fallback buffer dikirim per 10 menit jika publish live tertahan
 #define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
@@ -332,7 +335,7 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_UPLOAD_CHUNK_RECORDS 10
 #define MONGODB_UPLOAD_CHUNK_DELAY_MS 20UL
 
-// TEST DATABASE: tetap tulis database.csv di SD walaupun WiFi/MQTT normal.
+// TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
 #define SD_SAVE_ONLINE_FOR_DB_TEST 1
 
@@ -341,9 +344,9 @@ const char* FFT_CSV_HEADER =
 // Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
 // saat EAP handshake dan MQTT fallback batch publish.
 
-const unsigned long publishInterval   = 1000;
+const unsigned long publishInterval   = 500;
 const unsigned long localSaveInterval = 1000;
-const unsigned long drawInterval      = 1000;  // LCD partial update tiap 1 detik mengikuti agregasi
+const unsigned long drawInterval      = 500;   // LCD partial update tiap 0,5 detik mengikuti agregasi cepat
 
 // ============================================================
 // FFT EDGE
@@ -649,7 +652,7 @@ bool sdOK = false;
 bool linkOK = false;
 bool needFullRedraw = true;
 bool displayUpdateNow = false;
-volatile uint32_t displayAggregateSeq = 0;  // naik setiap agregasi 1 detik agar TFT memaksa refresh nilai
+volatile uint32_t displayAggregateSeq = 0;  // naik setiap agregasi agar TFT memaksa refresh nilai
 bool touchDetected = false;
 
 enum DisplayPage {
@@ -1306,7 +1309,7 @@ void printAggregatedParameterReport(const AggregatedData &a) {
   Serial.println();
   Serial.println(F("║----------------AGGREGATED PARAMETER MONITOR----------------║"));
   Serial.println();
-  Serial.println(F("║ RAW UART      : hasil rata-rata agregasi 1 detik"));
+  Serial.println(F("║ RAW UART      : hasil rata-rata agregasi 0,5 detik"));
 
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.print(F("║ Parse Status  : "));
@@ -1692,10 +1695,10 @@ void addSampleToAccumulator(const RawData &d) {
   if (!d.valid) return;
 
   // Terima juga mode GRID-only dari ESP32 sinkronisasi. Sebelumnya sample
-  // dibuang ketika rpm/freq/volt generator = 0, sehingga agregasi 1 detik
+  // dibuang ketika rpm/freq/volt generator = 0, sehingga agregasi 0,5 detik
   // tidak bergerak saat hanya PLN/grid yang hidup. Parameter grid wajib ikut
   // dihitung supaya LCD, MQTT dashboard, dan database tetap berubah tiap
-  // window agregasi 1 detik sesuai status sumber daya aktual.
+  // window agregasi 0,5 detik sesuai status sumber daya aktual.
   bool hasGeneratorData = d.rpm != 0 || d.freq != 0.0f || d.volt != 0.0f;
   bool hasGridData = d.freqGrid != 0.0f || d.voltGrid != 0.0f;
   if (!hasGeneratorData && !hasGridData) return;
@@ -1758,7 +1761,7 @@ AggregatedData makeAggregateFromAccumulator() {
 
   out.synced = acc.syncedCount > (acc.count / 2);
 
-  // Ambil status mayoritas selama window agregasi 1 detik.
+  // Ambil status mayoritas selama window agregasi 0,5 detik.
   uint16_t bestCount = acc.statusOffCount;
   const char *bestStatus = "off";
   if (acc.statusGridCount > bestCount) { bestCount = acc.statusGridCount; bestStatus = "grid"; }
@@ -1835,7 +1838,11 @@ void finalizeFastAggregate() {
     // interval publish/draw sebelumnya; loop utama akan menjalankan publish
     // realtime MQTT, simpan lokal, dan update nilai berubah pada siklus berikutnya.
     lastPublish = millis() - publishInterval;
-    lastLocalSave = millis() - localSaveInterval;
+    // SD tetap mengikuti localSaveInterval agar kartu tidak dipaksa write 2x/detik.
+    // Realtime MQTT dan LCD tetap dipercepat oleh lastPublish/lastDraw.
+    if (millis() - lastLocalSave >= localSaveInterval) {
+      lastLocalSave = millis() - localSaveInterval;
+    }
     lastDraw = millis() - drawInterval;
     displayUpdateNow = true;
 
@@ -1843,7 +1850,7 @@ void finalizeFastAggregate() {
     lastFastAggSamples = out.samples;
     lastAggReadyMs = nowMs;
 
-    if (out.samples < 7) fastAggUnderfilled++;
+    if (out.samples < 3) fastAggUnderfilled++;
 
     if (serialLogAggregationEnabled) {
       printAggregatedParameterReport(out);
@@ -2212,7 +2219,7 @@ void printMqttPayloadReport(const String &payload,
   Serial.println(MQTT_REALTIME_TOPIC);
 
   Serial.print(F("║ History/cloud   : "));
-  Serial.println(F("MQTT topic gen/data realtime every 1 sec"));
+  Serial.println(F("MQTT topic gen/data realtime every 0.5 sec"));
 
   Serial.print(F("║ Realtime status : "));
   Serial.println(realtimeOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
@@ -2240,7 +2247,7 @@ void printLastMqttPayloadCache() {
     Serial.println();
     Serial.println(F("╔════════ MQTT PAYLOAD CACHE ════════╗"));
     Serial.println(F("║ Belum ada payload MQTT terkirim.   ║"));
-    Serial.println(F("║ Tunggu publish 1 detik, atau pakai ║"));
+    Serial.println(F("║ Tunggu publish 0,5 detik, atau pakai ║"));
     Serial.println(F("║ command: mqtt payload now          ║"));
     Serial.println(F("╚════════════════════════════════════╝"));
     return;
@@ -2313,7 +2320,7 @@ void printDatabasePayloadReport(bool fullPayload) {
 
   if (!hasLastDatabasePayloadCache) {
     Serial.println(F("║ Status          : belum ada record agregasi yang disimpan."));
-    Serial.println(F("║ Tunggu minimal 1 detik setelah RX UART valid."));
+    Serial.println(F("║ Tunggu minimal 0,5 detik setelah RX UART valid."));
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return;
   }
@@ -2354,7 +2361,7 @@ void printRealtimeMonitoringPayloadReport(bool fullPayload) {
 
   if (!hasLastMqttPayloadCache) {
     Serial.println(F("║ Status          : belum ada payload realtime terkirim."));
-    Serial.println(F("║ Tunggu publish 1 detik setelah agregasi valid."));
+    Serial.println(F("║ Tunggu publish 0,5 detik setelah agregasi valid."));
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return;
   }
@@ -2363,7 +2370,7 @@ void printRealtimeMonitoringPayloadReport(bool fullPayload) {
   Serial.print(F("║ Last payload    : ")); Serial.print(lastMqttPayloadCache.length()); Serial.println(F(" B"));
   Serial.print(F("║ Records         : ")); Serial.println(lastMqttPayloadRecordsCache);
   Serial.print(F("║ Realtime status : ")); Serial.println(lastMqttRealtimeOkCache ? F("PUBLISH OK") : F("PUBLISH FAIL"));
-  Serial.println(F("║ History/MongoDB : REALTIME MQTT gen/data tiap 1 detik."));
+  Serial.println(F("║ History/MongoDB : REALTIME MQTT gen/data tiap 0,5 detik."));
 
   if (fullPayload) {
     Serial.println(F("╠════════════ LAST REALTIME MQTT JSON PAYLOAD ══════════════╣"));
@@ -2456,7 +2463,7 @@ void publishRealtimeData() {
   }
   if (!hasData) return;
 
-  // MQTT publish langsung untuk dashboard dan history/cloud MongoDB setiap 1 detik.
+  // MQTT publish langsung untuk dashboard dan history/cloud MongoDB setiap 0,5 detik.
   // Buffer RAM/SD tetap menjadi fallback saat koneksi atau publish gen/data gagal.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
@@ -2468,7 +2475,7 @@ void publishRealtimeData() {
   uint32_t pubStart = micros();
   bool realtimeOk = false;
   bool historyOk = false;
-  if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+  if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
     mqtt.loop();
     historyOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
@@ -2932,7 +2939,7 @@ void sendMongoDbBufferToMongoDB() {
     }
 
     if (mongoBufferMutex != NULL) {
-      if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+      if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         clearMongoDbBufferNoLock(recordsCount);
         xSemaphoreGive(mongoBufferMutex);
       } else {
@@ -2986,7 +2993,7 @@ void sendMongoDbBufferToMongoDB() {
 // - Pengiriman fallback dilakukan setiap MONGODB_BATCH_INTERVAL_MS.
 // - Buffer juga dikirim lebih cepat jika penuh/manual.
 // - Realtime dashboard dan history live tetap dikirim oleh publishRealtimeData()
-//   ke MQTT_REALTIME_TOPIC/gen/realtime dan MQTT_TOPIC/gen/data setiap 1 detik.
+//   ke MQTT_REALTIME_TOPIC/gen/realtime dan MQTT_TOPIC/gen/data setiap 0,5 detik.
 
 void MongoBufferTask(void *pvParameters) {
   (void) pvParameters;
@@ -3094,37 +3101,68 @@ void updateStorageCache() {
 
 
 bool createFreshCsvFile(const char* path, const char* header, const char* label) {
-  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
+  // Dibuat sengaja mengikuti sketch SD test yang terbukti berhasil:
+  // 3 attempt, delay 20 ms sebelum create, re-init 100/50 ms, dan verifikasi
+  // dengan membaca baris header pertama. Perbedaan utama sketch besar adalah
+  // ada TFT/WiFi/MQTT/task lain, jadi timing SD dibuat sedikit lebih longgar
+  // agar create file baru tidak kalah oleh kondisi bus/FS yang belum settle.
+  const char* altPath = (path[0] == '/') ? path + 1 : path;
+
+  Serial.println();
+  Serial.print(F("========== CREATE "));
+  Serial.print(path);
+  Serial.println(F(" =========="));
+
+  for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+    Serial.print(F("[SD] Create attempt "));
+    Serial.print(attempt);
+    Serial.println(F("/3"));
+
     deselectAllSPI();
-    delay(80);
+    delay(20);
 
     if (SD.exists(path)) {
       Serial.print(F("[SD] "));
       Serial.print(path);
-      Serial.println(F(" sudah ada tetapi akan dibuat ulang/truncate."));
-      SD.remove(path);
-      delay(80);
+      Serial.println(F(" sudah ada, akan dihapus/truncate."));
+      if (!SD.remove(path)) {
+        Serial.println(F("[SD] WARNING: remove gagal, coba buka mode write."));
+      }
+      delay(20);
     }
 
-    // Coba beberapa mode open. Beberapa versi FS/SD ESP32 berbeda perilaku:
-    // FILE_WRITE paling kompatibel, mode "w" memaksa truncate/create, dan
-    // path tanpa slash membantu library lama yang sensitif terhadap root path.
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) f = SD.open(path, "w");
-    if (!f && path[0] == '/') f = SD.open(path + 1, FILE_WRITE);
-    if (!f && path[0] == '/') f = SD.open(path + 1, "w");
+    File f = SD.open(path, "w");
+    if (!f) f = SD.open(path, FILE_WRITE);
+    if (!f && altPath != path) f = SD.open(altPath, "w");
+    if (!f && altPath != path) f = SD.open(altPath, FILE_WRITE);
 
     if (f) {
       size_t written = f.println(header);
       f.flush();
       f.close();
 
-      delay(80);
+      delay(20);
       deselectAllSPI();
+
       File verify = SD.open(path, FILE_READ);
-      if (!verify && path[0] == '/') verify = SD.open(path + 1, FILE_READ);
-      bool verified = verify && verify.size() > 0;
-      if (verify) verify.close();
+      if (!verify && altPath != path) verify = SD.open(altPath, FILE_READ);
+
+      bool verified = false;
+      if (verify) {
+        String firstLine = verify.readStringUntil('\n');
+        firstLine.trim();
+
+        Serial.print(F("[SD] Verify first line: "));
+        Serial.println(firstLine);
+        Serial.print(F("[SD] File size after header: "));
+        Serial.print(verify.size());
+        Serial.println(F(" bytes"));
+
+        String expectedHeader = String(header);
+        expectedHeader.trim();
+        verified = (firstLine == expectedHeader) && verify.size() > 0;
+        verify.close();
+      }
 
       if (written > 0 && verified) {
         sdDatabaseCreateOkCount++;
@@ -3140,22 +3178,15 @@ bool createFreshCsvFile(const char* path, const char* header, const char* label)
 
       Serial.print(F("[SD] "));
       Serial.print(path);
-      Serial.println(F(" terbuka tetapi verifikasi tulis header gagal."));
+      Serial.println(F(" terbuka tetapi verifikasi header gagal."));
     } else {
-      Serial.print(F("[SD] "));
+      Serial.print(F("[SD] Gagal membuka "));
       Serial.print(path);
-      Serial.println(F(" gagal dibuka untuk create; mencoba re-init SPI/SD."));
-    }
-
-    if (attempt < 5) {
-      Serial.print(F("[SD] Retry membuat "));
-      Serial.print(path);
-      Serial.print(F(" attempt="));
-      Serial.println(attempt + 1);
+      Serial.println(F(" untuk create/truncate."));
     }
 
     SD.end();
-    delay(200);
+    delay(100);
     deselectAllSPI();
     sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     delay(50);
@@ -3166,7 +3197,7 @@ bool createFreshCsvFile(const char* path, const char* header, const char* label)
   sdLastFileErrorMs = millis();
   Serial.print(F("[SD] GAGAL membuat "));
   Serial.print(path);
-  Serial.println(F(". Test write OK tetapi create CSV gagal; cek FAT32, lock/adaptor SD, kabel pendek, supply 3.3V stabil, dan pin MISO=12 MOSI=13 SCK=14 CS=26."));
+  Serial.println(F(". Test sederhana bisa berhasil karena belum ada TFT/WiFi/MQTT/task lain. Di sketch utama, kegagalan biasanya karena bus/FS belum settle, file lama tidak bisa dihapus, root FAT bermasalah, atau supply/adaptor SD tidak stabil. Coba command 'sd reinit' atau format FAT32 MBR allocation 32KB jika masih gagal."));
   return false;
 }
 
@@ -3178,12 +3209,27 @@ bool createFreshFftCsv() {
   return createFreshCsvFile(FFT_FILE, FFT_CSV_HEADER, "CSV FFT");
 }
 
+bool canAppendExistingCsvNoLock(const char* path) {
+  File appendTest = SD.open(path, FILE_APPEND);
+  if (!appendTest) appendTest = SD.open(path, FILE_WRITE);
+  if (!appendTest) return false;
+
+  appendTest.close();
+  return true;
+}
+
+void printLegacyDatabaseCsvNoticeNoLock(const char* path) {
+  if (strcmp(path, DB_FILE) == 0 && SD.exists(DB_LEGACY_FILE) && !SD.exists(DB_FILE)) {
+    Serial.println(F("[SD] INFO: /database.csv lama ditemukan tetapi tidak dipakai; sketch sekarang membuat /sdDatabase.csv baru."));
+  }
+}
+
 bool ensureCsvFileExistsNoLock(const char* path,
-                               const char* backupPath,
                                const char* header,
                                const char* requiredHeaderToken,
                                bool (*createFreshFn)()) {
   deselectAllSPI();
+  printLegacyDatabaseCsvNoticeNoLock(path);
 
   if (!SD.exists(path)) {
     Serial.print(F("[SD] "));
@@ -3209,14 +3255,17 @@ bool ensureCsvFileExistsNoLock(const char* path,
   if (existingHeader != String(header) || existingHeader.indexOf(requiredHeaderToken) < 0) {
     Serial.print(F("[SD] Header "));
     Serial.print(path);
-    Serial.println(F(" lama/tidak sesuai. Backup file lama dan buat header baru..."));
-    if (SD.exists(backupPath)) SD.remove(backupPath);
-    bool backupOk = SD.rename(path, backupPath);
-    bool createOk = createFreshFn();
-    Serial.println(backupOk
-      ? F("[SD] File lama berhasil dibackup.")
-      : F("[SD] Backup gagal. File baru tetap dibuat jika memungkinkan."));
-    return createOk;
+    Serial.println(F(" lama/tidak sesuai. Tidak membuat sdDatabase_old.csv; hanya pakai sdDatabase.csv sesuai request."));
+
+    if (canAppendExistingCsvNoLock(path)) {
+      Serial.println(F("[SD] sdDatabase.csv lama masih bisa di-append; lanjut pakai file yang sama tanpa backup."));
+      sdLastFileOkMs = millis();
+      return true;
+    }
+
+    Serial.println(F("[SD] sdDatabase.csv ada tetapi tidak bisa di-append. Hapus file secara manual atau format ulang FAT32 jika ingin dibuat ulang."));
+    sdLastFileErrorMs = millis();
+    return false;
   }
 
   sdLastFileOkMs = millis();
@@ -3224,11 +3273,11 @@ bool ensureCsvFileExistsNoLock(const char* path,
 }
 
 bool ensureDatabaseCsvExistsNoLock() {
-  return ensureCsvFileExistsNoLock(DB_FILE, DB_BACKUP_FILE, DB_CSV_HEADER, "phase_diff", createFreshDatabaseCsv);
+  return ensureCsvFileExistsNoLock(DB_FILE, DB_CSV_HEADER, "phase_diff", createFreshDatabaseCsv);
 }
 
 bool ensureFftCsvExistsNoLock() {
-  return ensureCsvFileExistsNoLock(FFT_FILE, FFT_BACKUP_FILE, FFT_CSV_HEADER, "fft_bins_xy", createFreshFftCsv);
+  return ensureCsvFileExistsNoLock(FFT_FILE, FFT_CSV_HEADER, "fft_bins_xy", createFreshFftCsv);
 }
 
 bool ensureSdCsvFilesExistNoLock() {
@@ -3255,7 +3304,7 @@ bool ensureDatabaseCsvExists() {
 
 void ensureDatabaseCsvHeader() {
   if (!ensureSdCsvFilesExistNoLock()) {
-    Serial.println(F("[SD] WARNING: SD init OK, tetapi /database.csv atau /fft.csv belum berhasil dibuat."));
+    Serial.println(F("[SD] WARNING: SD init OK, tetapi /sdDatabase.csv atau /fft.csv belum berhasil dibuat."));
   }
 }
 
@@ -3454,7 +3503,7 @@ bool retrySDCardOnceFast() {
       sdLastFileOkMs = millis();
       ensureDatabaseCsvHeader();
       ok = true;
-      Serial.println(F("[SD] Runtime retry OK; database.csv siap."));
+      Serial.println(F("[SD] Runtime retry OK; sdDatabase.csv siap."));
     }
   }
 
@@ -3472,10 +3521,10 @@ bool retrySDCardOnceFast() {
 
 
 void saveSnapshotToSD() {
-  // Fungsi ini tetap dipanggil setiap 1 detik. Untuk pengujian database,
-  // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke database.csv/fft.csv
+  // Fungsi SD tetap dipanggil setiap 1 detik. Untuk pengujian database,
+  // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke sdDatabase.csv/fft.csv
   // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap menjadi fallback
-  // jika publish live gen/data 1 detik tertahan atau gagal.
+  // jika publish live gen/data 0,5 detik tertahan atau gagal.
   //
   // Untuk operasi harian, set SD_SAVE_ONLINE_FOR_DB_TEST=0 agar SD hanya ditulis jika:
   // 1) WiFi/MQTT/server bermasalah,
@@ -3492,8 +3541,8 @@ void saveSnapshotToSD() {
 
   uint32_t saveStart = micros();
 
-  // Buffer MongoDB/history diisi setiap ada record baru (1 record/detik).
-  // Upload live ke server/MongoDB dilakukan oleh publishRealtimeData() setiap 1 detik.
+  // Buffer MongoDB/history diisi setiap ada record agregasi baru (hingga 2 record/detik).
+  // Upload live ke server/MongoDB dilakukan oleh publishRealtimeData() setiap 0,5 detik.
   // MongoBufferTask tetap menyimpan fallback untuk retry batch jika koneksi gagal.
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
@@ -3509,7 +3558,7 @@ void saveSnapshotToSD() {
     }
   }
 
-  bool backupNeeded = true; // User requirement: database.csv ditulis tiap 1 detik walaupun online.
+  bool backupNeeded = true; // User requirement: sdDatabase.csv ditulis tiap 1 detik walaupun online.
   uint8_t validRecords = 0;
   uint8_t unsavedSdRecords = 0;
 
@@ -5165,7 +5214,7 @@ void printPaperValidationReport() {
 
   bool uartIntervalPass = (uartAvgMs > 0.0f && uartAvgMs <= 200.0f);
   bool aggregationPass = (AGGREGATION_INTERVAL_MS >= 100UL && AGGREGATION_INTERVAL_MS <= 1000UL);
-  bool mqttIntervalPass = (publishInterval == 1000UL);
+  bool mqttIntervalPass = (publishInterval <= 1000UL);
   bool sdIntervalPass = (localSaveInterval == 1000UL);
   bool sdReliabilityPass = (sdReliabilityPct >= 99.0f);
   bool mqttReliabilityPass = (mqttReliabilityPct >= 99.0f || (mqttOk == 0 && mqttFail == 0));
@@ -5305,7 +5354,7 @@ uint32_t getMongoAvgSentRecordBytesNoFft() {
 }
 
 uint64_t estimateMongoPayloadBytesNoFft10Years(uint32_t recordBytes) {
-  // 1 record per second mengikuti localSaveInterval = 1000 ms.
+  // SD tetap 1 record per second mengikuti localSaveInterval = 1000 ms.
   // Jika interval berubah, rumus otomatis menyesuaikan recordsPerDay.
   if (recordBytes == 0) return 0;
   double intervalSec = (double)localSaveInterval / 1000.0;
@@ -5702,13 +5751,13 @@ void printSdFileCheck() {
 
   bool dbExists = SD.exists(DB_FILE);
   bool fftExists = SD.exists(FFT_FILE);
-  Serial.print  (F("║ database.csv exist           : ")); Serial.println(dbExists ? F("YES") : F("NO"));
+  Serial.print  (F("║ sdDatabase.csv exist           : ")); Serial.println(dbExists ? F("YES") : F("NO"));
   Serial.print  (F("║ fft.csv exist                : ")); Serial.println(fftExists ? F("YES") : F("NO"));
 
   if (dbExists) {
     File f = SD.open(DB_FILE, FILE_READ);
     if (f) {
-      Serial.print(F("║ database.csv size            : "));
+      Serial.print(F("║ sdDatabase.csv size            : "));
       Serial.print(f.size());
       Serial.println(F(" bytes"));
       String header = f.readStringUntil('\n');
@@ -5717,7 +5766,7 @@ void printSdFileCheck() {
       Serial.println(header.indexOf("fft_bins_xy") < 0 ? F("YES") : F("NO"));
       f.close();
     } else {
-      Serial.println(F("║ database.csv open            : FAILED"));
+      Serial.println(F("║ sdDatabase.csv open            : FAILED"));
     }
   }
 
@@ -5752,9 +5801,9 @@ void createDatabaseCsvFromCommand() {
     sdConsecutiveOpenFail = 0;
     sdOK = true;
     updateStorageCache();
-    Serial.println(F("[DB] /database.csv dan /fft.csv siap."));
+    Serial.println(F("[DB] /sdDatabase.csv dan /fft.csv siap."));
   } else {
-    Serial.println(F("[DB] Gagal membuat/mengecek /database.csv."));
+    Serial.println(F("[DB] Gagal membuat/mengecek /sdDatabase.csv."));
   }
 }
 
@@ -5768,13 +5817,13 @@ void reinitSdFromCommand() {
 
 void resetSDDatabase() {
   if (!sdOK) { Serial.println(F("[DB] SD not ready.")); return; }
-  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+  if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     deselectAllSPI();
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
     if (SD.exists(FFT_FILE)) SD.remove(FFT_FILE);
     if (createFreshDatabaseCsv() && createFreshFftCsv()) {
       dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; mongoUploadSuccessRecords = 0; mongoUploadFailCount = 0; mongoUploadLastHttpCode = 0; mongoUploadLastAckedRecords = 0; mongoUploadLastAttemptMs = 0; mongoUploadLastBatchRecords = 0; mongoUploadLastPayloadBytes = 0; mongoUploadLastRunChunks = 0; mongoUploadLastRunRecords = 0; mongoUploadLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; lastMongoBufferedLocalSeq = 0; lastSdSavedLocalSeq = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
-      Serial.println(F("[DB] database.csv dan fft.csv reset OK."));
+      Serial.println(F("[DB] sdDatabase.csv dan fft.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
     }
@@ -6036,7 +6085,7 @@ void setup() {
 
 void serviceDisplayAndTouch() {
   // Display/touch diservis sebelum pekerjaan WiFi/MQTT/SD yang bisa blocking.
-  // Dengan ini data lokal dari agregasi 1 detik tidak menunggu reconnect MQTT
+  // Dengan ini data lokal dari agregasi 0,5 detik tidak menunggu reconnect MQTT
   // atau retry SD runtime.
   handleTouchNavigation();
 
@@ -6121,5 +6170,5 @@ void loop() {
 
   serviceDisplayAndTouch();
 
-  delay(5);
+  delay(1);
 }
