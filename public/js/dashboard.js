@@ -8,6 +8,8 @@ const CHART_REFRESH_MS = 15000;
 const LAST_SENSOR_STORAGE_KEY = 'gensys:last-engine-sensor';
 const WIB_TIME_ZONE = 'Asia/Jakarta';
 let sensorRequestSeq = 0;
+let engineStream = null;
+let lastStreamMessageAt = 0;
 
 // --- UTILS ---
 const formatTime = (d) => new Date(d).toLocaleTimeString('id-ID', { timeZone: WIB_TIME_ZONE, hour:'2-digit', minute:'2-digit' });
@@ -294,14 +296,7 @@ async function updateSensorData() {
                 return;
             }
 
-            // Data fresh → catat waktu sukses
-            _lastSensorOkAt = Date.now();
-            _disconnectReported = false;
-
-            _lastDisplayData = data;
-            saveLastSensorSnapshot(data);
-            renderSensorSnapshot(data, { live: true });
-            setDataStatus({ live: true, timestamp: getLastDataTimestamp(data) });
+            applyLiveSensorData(data);
         }
     } catch (e) {
         console.warn('Sensor Error', e);
@@ -331,6 +326,50 @@ async function _handleDisconnect(fallbackData = null) {
             body   : JSON.stringify({ reason: 'esp32_disconnect' })
         });
     } catch (e) { /* silent */ }
+}
+
+
+function applyLiveSensorData(data) {
+    if (!data || typeof data !== 'object') return;
+
+    _lastSensorOkAt = Date.now();
+    _disconnectReported = false;
+    _lastDisplayData = data;
+    saveLastSensorSnapshot(data);
+    renderSensorSnapshot(data, { live: true });
+    setDataStatus({ live: true, timestamp: getLastDataTimestamp(data) });
+}
+
+function startEngineRealtimeStream() {
+    if (!window.EventSource || engineStream) return;
+
+    engineStream = new EventSource(`${API_URL}/engine-data/stream`);
+
+    engineStream.onmessage = (event) => {
+        try {
+            const json = JSON.parse(event.data);
+            if (!json.success || !json.data) return;
+
+            const data = json.data;
+            lastStreamMessageAt = Date.now();
+            const lastTs = data.realtimeReceivedAt || data.lastMqttUpdate;
+            const dataAge = Date.now() - new Date(lastTs || 0).getTime();
+
+            if (data.ecuConnected === false || dataAge > DISCONNECT_THRESHOLD_MS) {
+                _handleDisconnect(data);
+                return;
+            }
+
+            applyLiveSensorData(data);
+        } catch (error) {
+            console.warn('Realtime stream parse error', error);
+        }
+    };
+
+    engineStream.onerror = () => {
+        // EventSource auto-reconnect. Polling 1 detik tetap berjalan sebagai fallback.
+        if (Date.now() - lastStreamMessageAt > DISCONNECT_THRESHOLD_MS) _handleDisconnect();
+    };
 }
 
 // ─── 2. MAINTENANCE LOG ──────────────────────────────────────────────────────
@@ -608,6 +647,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderSensorSnapshot(_lastDisplayData, { live: false });
         setDataStatus({ live: false, timestamp: getLastDataTimestamp(_lastDisplayData) });
     }
+    startEngineRealtimeStream();
     updateSensorData();
     updateAuxiliaryData();
     initChart();
