@@ -31,8 +31,36 @@ function numberOrZero(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function getSaneDate(value) {
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value === 'string' && value.trim().toLowerCase().startsWith('millis:')) return null;
+
+    const dateObj = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(dateObj.getTime())) return null;
+
+    const now = Date.now();
+    const year = dateObj.getUTCFullYear();
+    const tooOld = year < 2020;
+    const tooFuture = dateObj.getTime() - now > 24 * 60 * 60 * 1000;
+    const absurdYear = year > 2100;
+    return (tooOld || tooFuture || absurdYear) ? null : dateObj;
+}
+
 function getLastDataTimestamp(data = {}) {
-    return data.timestamp || data.lastDataAt || data.deviceTimestamp || data.lastUpdated || data.serverReceivedAt || data.realtimeReceivedAt || data.lastMqttUpdate;
+    const candidates = [
+        data.timestamp,
+        data.lastDataAt,
+        data.deviceTimestamp,
+        data.lastUpdated,
+        data.serverReceivedAt,
+        data.realtimeReceivedAt,
+        data.lastMqttUpdate
+    ];
+    for (const candidate of candidates) {
+        const saneDate = getSaneDate(candidate);
+        if (saneDate) return saneDate;
+    }
+    return null;
 }
 
 function formatLastUpdated(date = new Date()) {

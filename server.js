@@ -777,6 +777,17 @@ function getValidDate(value) {
     return dt && Number.isFinite(dt.getTime()) ? dt : null;
 }
 
+function getSaneTimestamp(value, fallback = null) {
+    const dt = getValidDate(value);
+    if (!dt) return fallback;
+
+    const year = dt.getUTCFullYear();
+    const tooOld = year < 2020;
+    const tooFuture = dt.getTime() - Date.now() > 24 * 60 * 60 * 1000;
+    const absurdYear = year > 2100;
+    return (tooOld || tooFuture || absurdYear) ? fallback : dt;
+}
+
 function getLatestRealtimeSnapshot() {
     if (!isRealtimeSnapshotFresh()) return null;
 
@@ -1244,10 +1255,19 @@ async function checkAndSaveAlerts(data) {
     const alertsToSave = [];
     const T = ACTIVE_THRESHOLDS;
 
-    const thresholdBand = (limit) => Math.abs(Number(limit) || 0) * 0.05;
+    const warningBandFor = (param, limit) => {
+        if (param === 'freq') return 0.1;
+        if (param === 'volt' || param === 'phase') return 5;
+        return Math.abs(Number(limit) || 0) * 0.05;
+    };
+    const warningBandLabelFor = (param) => {
+        if (param === 'freq') return '0.1';
+        if (param === 'volt' || param === 'phase') return '5';
+        return '5%';
+    };
 
     // Critical selalu mengikuti batas threshold yang disimpan dari halaman engine.
-    // Warning aktif saat nilai masih di dalam batas, tetapi sudah masuk area ±5% dari batas tersebut.
+    // Warning khusus: frekuensi ±0.1, tegangan/fasa ±5, parameter lain ±5%.
     const check = (param, rawVal) => {
         const th = T[param];
         const val = Number(rawVal);
@@ -1255,7 +1275,7 @@ async function checkAndSaveAlerts(data) {
 
         if (th.max !== undefined && Number.isFinite(Number(th.max))) {
             const max = Number(th.max);
-            const warnFloor = max - thresholdBand(max);
+            const warnFloor = max - warningBandFor(param, max);
             if (val > max) {
                 alertsToSave.push({
                     parameter: param,
@@ -1267,7 +1287,7 @@ async function checkAndSaveAlerts(data) {
                 alertsToSave.push({
                     parameter: param,
                     value: val,
-                    message: `${param.toUpperCase()} Warning High (within 5% of ${max})`,
+                    message: `${param.toUpperCase()} Warning High (within ${warningBandLabelFor(param)} of ${max})`,
                     severity: 'warning'
                 });
             }
@@ -1275,7 +1295,7 @@ async function checkAndSaveAlerts(data) {
 
         if (th.min !== undefined && Number.isFinite(Number(th.min))) {
             const min = Number(th.min);
-            const warnCeil = min + thresholdBand(min);
+            const warnCeil = min + warningBandFor(param, min);
             if (val < min) {
                 alertsToSave.push({
                     parameter: param,
@@ -1287,7 +1307,7 @@ async function checkAndSaveAlerts(data) {
                 alertsToSave.push({
                     parameter: param,
                     value: val,
-                    message: `${param.toUpperCase()} Warning Low (within 5% of ${min})`,
+                    message: `${param.toUpperCase()} Warning Low (within ${warningBandLabelFor(param)} of ${min})`,
                     severity: 'warning'
                 });
             }
@@ -1308,6 +1328,7 @@ async function checkAndSaveAlerts(data) {
     check('afr', data.afr);
     check('tps', data.tps);
     check('batt', data.batt);
+    check('phase', data.phase ?? data.phaseAngle ?? data.phase_angle ?? data.phaseDiff ?? data.phase_diff);
 
     // Simpan Alert ke Database
     if (alertsToSave.length > 0) {
@@ -1527,8 +1548,8 @@ function pickEffectivePayload(rawPayload) {
 
 function normalizeGeneratorPayload(rawPayload) {
     const payload = pickEffectivePayload(rawPayload);
-    const eventTimestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
-    const timestamp = Number.isNaN(eventTimestamp.getTime()) ? new Date() : eventTimestamp;
+    const receivedAt = new Date();
+    const timestamp = getSaneTimestamp(payload.timestamp, receivedAt);
 
     const powerSource = normalizePowerSourceStatus(payload, latestData.powerSource);
     const syncStatus = normalizeSyncStatus(payload, getSyncStatusFromPowerSource(powerSource));
@@ -1562,8 +1583,7 @@ function normalizeGeneratorPayload(rawPayload) {
         _realtime: true
     };
 
-    const receivedAt = new Date();
-    const sentAt = getValidDate(snapshot.timestamp);
+    const sentAt = getSaneTimestamp(snapshot.timestamp);
     snapshot.serverReceivedAt = receivedAt;
     snapshot.transportLatencyMs = sentAt ? Math.max(0, receivedAt.getTime() - sentAt.getTime()) : undefined;
 
@@ -1591,10 +1611,7 @@ function normalizeFftPayload(rawPayload, fallbackDeviceId) {
     if (!len) return null;
 
     return {
-        timestamp: (() => {
-            const ts = payload.timestamp ? new Date(payload.timestamp) : new Date();
-            return Number.isNaN(ts.getTime()) ? new Date() : ts;
-        })(),
+        timestamp: getSaneTimestamp(payload.timestamp, new Date()),
         deviceId: payload.deviceId || fallbackDeviceId || 'ESP32_GENERATOR_01',
         source: String(fft.source || ''),
         sampleRateHz: toNumber(fft.sampleRateHz, 0),
