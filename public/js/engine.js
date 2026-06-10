@@ -22,15 +22,14 @@ function setEspConnectionStatus(isConnected, data = {}) {
     const el = document.getElementById('espConnection');
     if (!el) return;
 
-    const formatted = formatLastUpdatedTimestamp(getLastDataTimestamp(data));
-    const comment = formatted !== '--' ? `<small style="display:block;font-weight:600;opacity:.8;line-height:1.2">Data terakhir: ${formatted}</small>` : '';
-
+    // Timestamp data terakhir sudah ditampilkan di badge "Last Updated" terpisah,
+    // jadi badge ECU hanya menampilkan status koneksi agar tidak duplikatif.
     if (isConnected) {
         el.className = 'indicator ind-on';
-        el.innerHTML = `Connected${comment}`;
+        el.textContent = 'Connected';
     } else {
         el.className = 'indicator ind-off';
-        el.innerHTML = `Disconnected${comment}`;
+        el.textContent = 'Disconnected';
     }
 }
 
