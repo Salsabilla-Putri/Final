@@ -113,6 +113,8 @@ function normalizeSyncStatus(data = {}) {
 }
 
 function getPowerSourceStatus(data = {}) {
+    if (data.ecuConnected === false) return { label: 'OFF', detail: 'ECU disconnected', cls: 'st-err', ok: false };
+
     const rawSource = String(data.powerSource ?? data.power_source ?? data.supplySource ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '-');
     if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(rawSource)) return { label: 'GRID', detail: 'Grid/PLN tersambung', cls: 'st-ok', ok: true };
     if (['GENSET', 'GENERATOR', 'GEN'].includes(rawSource)) return { label: 'GENSET', detail: 'Genset tersambung', cls: 'st-warn', ok: true };
