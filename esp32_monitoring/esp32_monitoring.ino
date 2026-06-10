@@ -187,7 +187,7 @@
 
 #define MQTT_BUFFER_SIZE_BYTES       2048
 #define MQTT_KEEPALIVE_SEC           120
-#define MQTT_SOCKET_TIMEOUT_SEC      10
+#define MQTT_SOCKET_TIMEOUT_SEC      1   // Batasi blocking mqtt.connect agar TFT tidak freeze lama
 
 #define MQTT_RECONNECT_MIN_MS        10000UL
 #define MQTT_RECONNECT_MAX_MS        60000UL
@@ -290,6 +290,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 
 #define SD_SPI_FREQ_INIT 400000UL
 #define SD_SPI_FREQ_FAST 1000000UL
+#define SD_AUTO_RETRY_INTERVAL_MS 30000UL
 
 SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
@@ -648,6 +649,7 @@ bool sdOK = false;
 bool linkOK = false;
 bool needFullRedraw = true;
 bool displayUpdateNow = false;
+volatile uint32_t displayAggregateSeq = 0;  // naik setiap agregasi 1 detik agar TFT memaksa refresh nilai
 bool touchDetected = false;
 
 enum DisplayPage {
@@ -885,6 +887,8 @@ void applyWiFiStabilityConfig();
 void applyMqttStabilityConfig();
 void reconnectMQTT();
 void checkWiFiStatus();
+bool retrySDCardOnceFast();
+void serviceDisplayAndTouch();
 bool publishMongoBufferBatchToMqtt(const String &batchPayload);
 
 
@@ -1686,7 +1690,15 @@ void stopTestOnceMode() {
 
 void addSampleToAccumulator(const RawData &d) {
   if (!d.valid) return;
-  if (d.rpm == 0 && d.freq == 0.0f && d.volt == 0.0f) return;
+
+  // Terima juga mode GRID-only dari ESP32 sinkronisasi. Sebelumnya sample
+  // dibuang ketika rpm/freq/volt generator = 0, sehingga agregasi 1 detik
+  // tidak bergerak saat hanya PLN/grid yang hidup. Parameter grid wajib ikut
+  // dihitung supaya LCD, MQTT dashboard, dan database tetap berubah tiap
+  // window agregasi 1 detik sesuai status sumber daya aktual.
+  bool hasGeneratorData = d.rpm != 0 || d.freq != 0.0f || d.volt != 0.0f;
+  bool hasGridData = d.freqGrid != 0.0f || d.voltGrid != 0.0f;
+  if (!hasGeneratorData && !hasGridData) return;
 
   acc.count++;
 
@@ -1799,6 +1811,7 @@ void finalizeFastAggregate() {
     }
 
     pushStorageRecord(out);
+    displayAggregateSeq++;
 
     if (testOnceMode && testOnceRxDone && !testOnceAggDone) {
       testOnceAggDone = true;
@@ -2049,7 +2062,7 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
 
   // Database cloud dihitung hanya dari parameter utama generator/mesin.
-  // Tidak memasukkan FFT, freqGrid, voltGrid, metadata batch, atau timestampMs.
+  // Tidak memasukkan FFT besar; parameter utama generator dan grid tetap dikirim.
   String json = "{";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   json += "\"recordId\":\"" + r.recordId + "\",";
@@ -2064,7 +2077,9 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
+  json += "\"freqGrid\":" + String(a.freqGridAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
+  json += "\"voltGrid\":" + String(a.voltGridAvg, 2) + ",";
   json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
@@ -2114,6 +2129,10 @@ String buildMqttRealtimeFlatPayload() {
 
   const AggregatedData &a = r.agg;
   String json = "{";
+  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  json += "\"recordId\":\"" + r.recordId + "\",";
+  json += "\"localSeq\":" + String(r.localSeq) + ",";
+  json += "\"samples\":" + String(a.samples) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
 
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
@@ -3410,6 +3429,48 @@ String buildFftCsvLine(const StorageRecord &r) {
 }
 
 
+bool retrySDCardOnceFast() {
+  if (sdOK) return true;
+
+  // Retry runtime dibuat cepat/non-spam agar kegagalan SD tidak membekukan
+  // display 7 detik seperti init penuh 10x attempt. Init penuh tetap dipakai saat
+  // boot/command manual; loop runtime hanya mencoba 1 kali lalu kembali ke UI.
+  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return false;
+  }
+
+  deselectAllSPI();
+  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  delay(20);
+
+  bool ok = false;
+  if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
+    File testFile = SD.open("/sd_retry_test.txt", FILE_WRITE);
+    if (testFile) {
+      testFile.println(F("SD retry OK"));
+      testFile.close();
+      sdOK = true;
+      sdConsecutiveOpenFail = 0;
+      sdLastFileOkMs = millis();
+      ensureDatabaseCsvHeader();
+      ok = true;
+      Serial.println(F("[SD] Runtime retry OK; database.csv siap."));
+    }
+  }
+
+  if (!ok) {
+    sdOK = false;
+    sdLastFileErrorMs = millis();
+    SD.end();
+  }
+
+  if (sdMutex != NULL) xSemaphoreGive(sdMutex);
+
+  if (ok) updateStorageCache();
+  return ok;
+}
+
+
 void saveSnapshotToSD() {
   // Fungsi ini tetap dipanggil setiap 1 detik. Untuk pengujian database,
   // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke database.csv/fft.csv
@@ -4563,8 +4624,11 @@ void drawGeneratorPage(bool full) {
   static float lastPhase = NAN, lastCurrentA = NAN, lastPowerKW = NAN;
   static bool lastSynced = false;
   static String lastSyncStatus = "";
+  static uint32_t lastDrawnAggregateSeq = 0;
 
   AggregatedData d;
+  uint32_t currentAggregateSeq = displayAggregateSeq;
+  bool forceValueUpdate = full || currentAggregateSeq != lastDrawnAggregateSeq;
 
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     d = aggData;
@@ -4583,25 +4647,25 @@ void drawGeneratorPage(bool full) {
     drawHeaderStatusDots(false);
   }
 
-  if (changedFloat(lastVoltGen, d.voltAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastVoltGen, d.voltAvg, 0.5f)) {
     drawSemiGauge(14, 52, 46, d.voltAvg, 180.0f, 250.0f, "VOLT GEN", fmtF(d.voltAvg, 0), "V",
                   valColor(d.voltAvg, 240, 250, 200, 180));
     lastVoltGen = d.voltAvg;
   }
 
-  if (changedFloat(lastFreqGen, d.freqAvg, 0.02f)) {
+  if (forceValueUpdate || changedFloat(lastFreqGen, d.freqAvg, 0.02f)) {
     drawSemiGauge(170, 52, 46, d.freqAvg, 45.0f, 55.0f, "FREQ GEN", fmtF(d.freqAvg, 2), "Hz",
                   valColor(d.freqAvg, 51.0, 52.0, 49.0, 48.0));
     lastFreqGen = d.freqAvg;
   }
 
-  if (changedFloat(lastVoltGrid, d.voltGridAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastVoltGrid, d.voltGridAvg, 0.5f)) {
     drawSemiGauge(14, 170, 46, d.voltGridAvg, 180.0f, 250.0f, "VOLT GRID", fmtF(d.voltGridAvg, 0), "V",
                   valColor(d.voltGridAvg, 240, 250, 200, 180));
     lastVoltGrid = d.voltGridAvg;
   }
 
-  if (changedFloat(lastFreqGrid, d.freqGridAvg, 0.02f)) {
+  if (forceValueUpdate || changedFloat(lastFreqGrid, d.freqGridAvg, 0.02f)) {
     drawSemiGauge(170, 170, 46, d.freqGridAvg, 45.0f, 55.0f, "FREQ GRID", fmtF(d.freqGridAvg, 2), "Hz",
                   valColor(d.freqGridAvg, 51.0, 52.0, 49.0, 48.0));
     lastFreqGrid = d.freqGridAvg;
@@ -4609,38 +4673,43 @@ void drawGeneratorPage(bool full) {
 
   // Right-side cards: PHASE, POWER, CURRENT, SYNC STATUS.
   // Semua card hanya di-render ulang jika nilainya berubah atau saat ganti page.
-  if (changedFloat(lastPhase, d.phaseAngleAvg, 0.1f)) {
+  if (forceValueUpdate || changedFloat(lastPhase, d.phaseAngleAvg, 0.1f)) {
     drawValueBox(326, 50, 140, 50, "PHASE", fmtF(d.phaseAngleAvg, 1), "deg",
                  abs(d.phaseAngleAvg) < 10 ? C_GREEN : abs(d.phaseAngleAvg) < 20 ? C_ORANGE : C_RED);
     lastPhase = d.phaseAngleAvg;
   }
 
-  if (changedFloat(lastPowerKW, d.powerAvg, 0.02f)) {
+  if (forceValueUpdate || changedFloat(lastPowerKW, d.powerAvg, 0.02f)) {
     drawValueBox(326, 106, 140, 50, "POWER", fmtF(d.powerAvg, 2), "kW",
                  valColor(d.powerAvg, 8.0, 12.0, -1e9, -1e9));
     lastPowerKW = d.powerAvg;
   }
 
-  if (changedFloat(lastCurrentA, d.currentAvg, 0.1f)) {
+  if (forceValueUpdate || changedFloat(lastCurrentA, d.currentAvg, 0.1f)) {
     drawValueBox(326, 162, 140, 50, "CURRENT", fmtF(d.currentAvg, 1), "A",
                  valColor(d.currentAvg, 40.0, 55.0, -1e9, -1e9));
     lastCurrentA = d.currentAvg;
   }
 
   const char* syncStatus = getDisplaySyncTextFromAggregate(d);
-  if (full || d.synced != lastSynced || lastSyncStatus != String(syncStatus)) {
+  if (forceValueUpdate || full || d.synced != lastSynced || lastSyncStatus != String(syncStatus)) {
     uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_ORANGE : (strcmp(syncStatus, "GRID") == 0 ? C_BLUE2 : C_GREEN));
     drawValueBox(326, 218, 140, 56, "SYNC STATUS", syncStatus, "", syncColor);
     lastSynced = d.synced;
     lastSyncStatus = syncStatus;
   }
+
+  lastDrawnAggregateSeq = currentAggregateSeq;
 }
 void drawEnginePage(bool full) {
   static bool initialized = false;
   static float lastRpm = NAN, lastAfr = NAN, lastMap = NAN;
   static float lastTps = NAN, lastFuel = NAN, lastClt = NAN, lastIat = NAN, lastBatt = NAN;
+  static uint32_t lastDrawnAggregateSeq = 0;
 
   AggregatedData d;
+  uint32_t currentAggregateSeq = displayAggregateSeq;
+  bool forceValueUpdate = full || currentAggregateSeq != lastDrawnAggregateSeq;
 
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     d = aggData;
@@ -4658,19 +4727,19 @@ void drawEnginePage(bool full) {
     drawHeaderStatusDots(false);
   }
 
-  if (changedFloat(lastRpm, d.rpmAvg, 5.0f)) {
+  if (forceValueUpdate || changedFloat(lastRpm, d.rpmAvg, 5.0f)) {
     drawSemiGauge(14, 52, 46, d.rpmAvg, 0.0f, 6000.0f, "ENGINE RPM", fmtF(d.rpmAvg, 0), "rpm",
                   valColor(d.rpmAvg, 4500, 5500, -1e9, -1e9));
     lastRpm = d.rpmAvg;
   }
 
-  if (changedFloat(lastAfr, d.afrAvg, 0.05f)) {
+  if (forceValueUpdate || changedFloat(lastAfr, d.afrAvg, 0.05f)) {
     drawSemiGauge(170, 52, 46, d.afrAvg, 10.0f, 20.0f, "AFR", fmtF(d.afrAvg, 1), "",
                   valColor(d.afrAvg, 16.0, 18.0, 12.0, 10.5));
     lastAfr = d.afrAvg;
   }
 
-  if (changedFloat(lastMap, d.mapAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastMap, d.mapAvg, 0.5f)) {
     drawSemiGauge(326, 52, 46, d.mapAvg, 20.0f, 105.0f, "MAP", fmtF(d.mapAvg, 0), "kPa",
                   valColor(d.mapAvg, 95, 105, -1e9, -1e9));
     lastMap = d.mapAvg;
@@ -4679,42 +4748,44 @@ void drawEnginePage(bool full) {
   // Panel frame dibuat hanya pada full redraw/first draw. Setelah itu,
   // update hanya bar/card yang nilainya berubah agar TFT tidak menggambar ulang
   // satu panel penuh untuk perubahan kecil.
-  if (full || isnan(lastTps) || isnan(lastFuel)) {
+  if (forceValueUpdate || full || isnan(lastTps) || isnan(lastFuel)) {
     drawPanel(14, 172, 220, 102, "FUEL & THROTTLE");
   }
 
-  if (changedFloat(lastTps, d.tpsAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastTps, d.tpsAvg, 0.5f)) {
     drawLineBar(28, 214, 145, 12, d.tpsAvg, 0.0f, 100.0f, C_GREEN, "TPS");
     lastTps = d.tpsAvg;
   }
 
-  if (changedFloat(lastFuel, d.fuelAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastFuel, d.fuelAvg, 0.5f)) {
     drawLineBar(28, 253, 145, 12, d.fuelAvg, 0.0f, 100.0f,
                 d.fuelAvg > 30 ? C_GREEN : d.fuelAvg > 15 ? C_ORANGE : C_RED, "Fuel");
     lastFuel = d.fuelAvg;
   }
 
-  if (full || isnan(lastBatt) || isnan(lastIat) || isnan(lastClt)) {
+  if (forceValueUpdate || full || isnan(lastBatt) || isnan(lastIat) || isnan(lastClt)) {
     drawPanel(246, 172, 220, 102, "THERMAL & POWER");
   }
 
-  if (changedFloat(lastBatt, d.battAvg, 0.05f)) {
+  if (forceValueUpdate || changedFloat(lastBatt, d.battAvg, 0.05f)) {
     drawValueCard(256, 205, 62, 58, "Battery", fmtF(d.battAvg, 1), "V",
                   valColor(d.battAvg, 14.5, 15.5, 11.5, 10.5));
     lastBatt = d.battAvg;
   }
 
-  if (changedFloat(lastIat, d.iatAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastIat, d.iatAvg, 0.5f)) {
     drawValueCard(326, 205, 62, 58, "IAT", fmtF(d.iatAvg, 0), "C",
                   valColor(d.iatAvg, 55, 70, -1e9, -1e9));
     lastIat = d.iatAvg;
   }
 
-  if (changedFloat(lastClt, d.cltAvg, 0.5f)) {
+  if (forceValueUpdate || changedFloat(lastClt, d.cltAvg, 0.5f)) {
     drawValueCard(396, 205, 62, 58, "Coolant", fmtF(d.cltAvg, 0), "C",
                   valColor(d.cltAvg, 90, 105, -1e9, -1e9));
     lastClt = d.cltAvg;
   }
+
+  lastDrawnAggregateSeq = currentAggregateSeq;
 }
 
 void drawFFTPage(bool full) {
@@ -5962,9 +6033,37 @@ void setup() {
   Serial.println(LINK_BAUD);
 }
 
+
+void serviceDisplayAndTouch() {
+  // Display/touch diservis sebelum pekerjaan WiFi/MQTT/SD yang bisa blocking.
+  // Dengan ini data lokal dari agregasi 1 detik tidak menunggu reconnect MQTT
+  // atau retry SD runtime.
+  handleTouchNavigation();
+
+  bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
+  if (needFullRedraw || doPartialUpdate) {
+    lastDraw = millis();
+
+    drawCurrentPage(needFullRedraw);
+    needFullRedraw = false;
+    displayUpdateNow = false;
+
+    if (testOnceMode && testOnceAggDone && !testOnceDisplayDone) {
+      testOnceDisplayDone = true;
+      Serial.println();
+      Serial.println(F("╔════════════ TEST-ONCE TFT MONITORING ════════════╗"));
+      Serial.println(F("[TEST] Satu tampilan monitoring telah dirender ke TFT."));
+      Serial.println(F("[TEST] Data dibekukan, tetapi HMI/touch navigation tetap aktif."));
+      Serial.println(F("╚═══════════════════════════════════════════════════╝"));
+      updateTestOnceCompletion();
+    }
+  }
+}
+
 void loop() {
   handleSerialCommandConsole();
   handlePeriodicSerialLog();
+  serviceDisplayAndTouch();
 
   if (paperTickerEnabled && millis() - lastPaperTickerMs >= paperTickerIntervalMs) {
     lastPaperTickerMs = millis();
@@ -5996,10 +6095,10 @@ void loop() {
     }
   }
 
-  if (!sdOK && millis() - lastSDRetry >= 5000) {
+  if (!sdOK && millis() - lastSDRetry >= SD_AUTO_RETRY_INTERVAL_MS) {
     lastSDRetry = millis();
-    Serial.println("[SD] Retry init otomatis...");
-    initSDCard();
+    Serial.println("[SD] Runtime retry cepat (1 attempt, non-blocking panjang)...");
+    retrySDCardOnceFast();
     displayUpdateNow = true;
   }
 
@@ -6020,33 +6119,7 @@ void loop() {
   // Kirim buffer RAM MongoDB sesesuai interval batch; SD tetap hanya arsip lokal.
  
 
-  // WAJIB tetap aktif meskipun test-once sudah selesai.
-  // Yang dibekukan hanya data RX/agregasi/database, bukan UI.
-  handleTouchNavigation();
-
-  // Render normal tidak boleh menggambar ulang satu halaman penuh.
-  // Full redraw hanya untuk boot pertama, ganti page, atau command "redraw".
-  // Data/agregasi/status runtime cukup memaksa partial update nilai yang berubah.
-  bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
-  if (needFullRedraw || doPartialUpdate) {
-    lastDraw = millis();
-
-    drawCurrentPage(needFullRedraw);
-    needFullRedraw = false;
-    displayUpdateNow = false;
-
-    // Status test-once display hanya ditandai sekali.
-    // Setelah itu display tetap boleh dirender untuk navigasi page.
-    if (testOnceMode && testOnceAggDone && !testOnceDisplayDone) {
-      testOnceDisplayDone = true;
-      Serial.println();
-      Serial.println(F("╔════════════ TEST-ONCE TFT MONITORING ════════════╗"));
-      Serial.println(F("[TEST] Satu tampilan monitoring telah dirender ke TFT."));
-      Serial.println(F("[TEST] Data dibekukan, tetapi HMI/touch navigation tetap aktif."));
-      Serial.println(F("╚═══════════════════════════════════════════════════╝"));
-      updateTestOnceCompletion();
-    }
-  }
+  serviceDisplayAndTouch();
 
   delay(5);
 }
