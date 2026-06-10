@@ -14,6 +14,7 @@ let selectedCostMonthIndex = null;
 let lastFuelCostSignature = '';
 let isDashboardFetching = false;
 let lastHealthSnapshot = null;
+let dashboardTotalActiveHours = 0;
 let lastHeavyFetchAt = 0;
 const DASHBOARD_REFRESH_MS = 1000;
 const HEAVY_ENDPOINT_REFRESH_MS = 30000;
@@ -211,6 +212,7 @@ async function fetchDashboardData() {
 
         if (historyData?.success) {
             dashboardHistoryCache = historyData.data || [];
+            dashboardTotalActiveHours = Number(historyData.totalHours) || sumRuntimeHoursFromHistory(dashboardHistoryCache);
             // Gabungkan riwayat sesi DB dengan maintenance yang Completed
             renderRecentActivity(historyData.data, maintenanceData?.success ? maintenanceData.data : []);
         }
@@ -253,8 +255,8 @@ async function fetchDashboardData() {
         if (!engineData?.data && dashData?.success && dashData.data) updatePerformanceSection(dashData.data);
 
         const cachedSnapshot = readLastPublicSensorSnapshot();
-        const latestTs = engineData?.data?.lastUpdated || engineData?.data?.lastMqttUpdate || engineData?.data?.timestamp || engineData?.data?.createdAt || cachedSnapshot?.lastUpdated || cachedSnapshot?.lastMqttUpdate || cachedSnapshot?.timestamp || null;
-        const live = engineData?.data?.ecuConnected !== false && getDataAgeMs(latestTs) <= DATA_LIVE_THRESHOLD_MS;
+        const latestTs = engineData?.data?.lastUpdated || engineData?.data?.serverReceivedAt || cachedSnapshot?.lastUpdated || cachedSnapshot?.serverReceivedAt || null;
+        const live = engineData?.data?.ecuConnected === true;
         setDataStatus({ live, timestamp: latestTs });
 
     } catch (err) {
@@ -304,13 +306,11 @@ function updateOperationsSection(data, cbmData, alertRows = []) {
         sourceEl.className = supply.cls;
     }
 
-    // Status
+    // Engine State mengikuti status koneksi ECU dari server.
     const statEl = document.getElementById('engStat');
     if (statEl) {
-        statEl.innerText = data.status || '--';
-        const running = ['RUNNING','ON-GRID'].includes((data.status || '').toUpperCase());
-        const stopped = (data.status || '').toUpperCase() === 'STOPPED';
-        statEl.className = running ? 'st-ok' : stopped ? 'st-err' : 'st-warn';
+        statEl.innerText = data.ecuConnected === true ? 'ECU Connected' : 'ECU Disconnected';
+        statEl.className = data.ecuConnected === true ? 'st-ok' : 'st-err';
     }
 
     // Fuel
@@ -476,7 +476,7 @@ function renderHealthScore(engineData, cbmData, alertRows = []) {
     const container = document.getElementById('systemHealthContainer');
     if (!container) return;
 
-    const runtimeHours = sumRuntimeHoursFromHistory(dashboardHistoryCache);
+    const runtimeHours = Number(engineData.engineHours) || dashboardTotalActiveHours || sumRuntimeHoursFromHistory(dashboardHistoryCache);
     const latestMaintenance = getLatestCompletedMaintenance(dashboardMaintenanceCache);
     const indicators = [
         getParameterIndicator('Tegangan', engineData.volt ?? engineData.voltage, 200, 240),
@@ -537,10 +537,12 @@ function renderHealthScore(engineData, cbmData, alertRows = []) {
     const ageEl = document.getElementById('st-age');
     const runtimeEl = document.getElementById('st-runtime');
     const lastMaintEl = document.getElementById('st-last-maint');
-    const running = ['RUNNING', 'ON-GRID', 'ON', 'ACTIVE'].includes(String(engineData.status || '').toUpperCase()) || Number(engineData.rpm || 0) > 0;
     const source = getPowerSourceStatus(engineData);
-    if (ageEl) ageEl.textContent = running ? `Live • ${source.label}` : 'Standby/Offline';
-    if (runtimeEl) runtimeEl.textContent = `${Math.round(runtimeHours).toLocaleString('id-ID')} jam`;
+    const serverTs = engineData.lastUpdated || engineData.serverReceivedAt || engineData.realtimeReceivedAt || engineData.lastMqttUpdate;
+    const ageMs = getDataAgeMs(serverTs);
+    const ageText = Number.isFinite(ageMs) ? ` • update ${Math.max(0, Math.round(ageMs / 1000))} dtk lalu` : '';
+    if (ageEl) ageEl.textContent = engineData.ecuConnected === true ? `ECU Connected • ${source.label}${ageText}` : `ECU Disconnected${ageText}`;
+    if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toFixed(2).replace('.', ',')} jam`;
     if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
         ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')
         : '-';
