@@ -708,24 +708,32 @@ const ACTIVE_SESSION_TIMEOUT_MS = Math.max(ACTIVE_TIME_INACTIVE_THRESHOLD_MS, pa
 let latestRealtimeReceivedAt = null;
 const engineStreamClients = new Set();
 
+function getRealtimeLastSeenAt(data = latestData, receivedAt = latestRealtimeReceivedAt) {
+    return getValidDate(data?.realtimeReceivedAt || data?.lastMqttUpdate) || getValidDate(receivedAt);
+}
+
+function isFreshRealtimeConnection(data = latestData, receivedAt = latestRealtimeReceivedAt) {
+    const lastSeenAt = getRealtimeLastSeenAt(data, receivedAt);
+    return Boolean(lastSeenAt && (Date.now() - lastSeenAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+}
+
 function buildEngineRealtimeStreamPayload() {
-    const lastDataAt = getValidDate(latestData?.realtimeReceivedAt || latestData?.lastMqttUpdate)
-        || getValidDate(latestData?.timestamp)
-        || getValidDate(latestRealtimeReceivedAt);
-    const ecuConnected = Boolean(lastDataAt && (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS);
+    const realtimeLastSeenAt = getRealtimeLastSeenAt();
+    const displayTimestamp = realtimeLastSeenAt || getValidDate(latestData?.timestamp) || null;
+    const ecuConnected = isFreshRealtimeConnection();
 
     return {
         success: true,
         source: 'realtime-stream',
         data: {
             ...latestData,
-            timestamp: lastDataAt || latestData?.timestamp,
-            lastUpdated: lastDataAt || latestData?.timestamp,
-            lastMqttUpdate: getValidDate(latestData?.lastMqttUpdate) || latestRealtimeReceivedAt || lastDataAt,
-            realtimeReceivedAt: getValidDate(latestData?.realtimeReceivedAt) || latestRealtimeReceivedAt || lastDataAt,
+            timestamp: displayTimestamp || latestData?.timestamp,
+            lastUpdated: displayTimestamp || latestData?.timestamp,
+            lastMqttUpdate: realtimeLastSeenAt,
+            realtimeReceivedAt: realtimeLastSeenAt,
             ecuConnected,
             alerts: generateAlerts(latestData, null),
-            ...getPublicLabels(latestData)
+            ...getPublicLabels({ ...latestData, ecuConnected })
         }
     };
 }
@@ -745,11 +753,7 @@ function broadcastEngineRealtimeUpdate() {
 
 function isRealtimeSnapshotFresh(data = latestData, receivedAt = latestRealtimeReceivedAt) {
     if (!data || data._realtime !== true) return false;
-
-    const receivedTime = getValidDate(receivedAt);
-    if (!receivedTime) return false;
-
-    return Date.now() - receivedTime.getTime() <= ECU_DISCONNECT_THRESHOLD_MS;
+    return isFreshRealtimeConnection(data, receivedAt);
 }
 
 function getValidDate(value) {
@@ -1896,8 +1900,9 @@ app.get('/api/engine-data/last-running', async (req, res) => {
             return res.status(404).json({ success: false, error: 'No running engine data found' });
         }
 
-        const dataAgeMs = Date.now() - new Date(lastRunning.timestamp || 0).getTime();
-        const ecuConnected = dataAgeMs <= ECU_DISCONNECT_THRESHOLD_MS;
+        const realtimeLastSeenAt = getRealtimeLastSeenAt();
+        const realtimeDeviceMatches = !latestData?.deviceId || latestData.deviceId === lastRunning.deviceId;
+        const ecuConnected = realtimeDeviceMatches && isFreshRealtimeConnection(latestData, realtimeLastSeenAt);
         res.json({ success: true, data: { ...lastRunning, ecuConnected } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1953,7 +1958,7 @@ app.get('/api/engine-data/latest', async (req, res) => {
                 lastUpdated: lastDataAt,
                 alerts: generateAlerts(realtimeData, null),
                 maintenance: getMaintenanceStatus(realtimeData, []),
-                ...getPublicLabels(realtimeData)
+                ...getPublicLabels({ ...realtimeData, ecuConnected: true })
             };
             return res.json({ success: true, data: enrichedRealtime, source: 'realtime-memory' });
         }
@@ -1969,9 +1974,12 @@ app.get('/api/engine-data/latest', async (req, res) => {
         }
 
         const baseTimestamp = getValidDate(baseData.timestamp);
-        const realtimeReceivedAt = getValidDate(baseData.realtimeReceivedAt || baseData.lastMqttUpdate);
-        const lastDataAt = realtimeReceivedAt || baseTimestamp || getValidDate(dbData?.timestamp) || latestRealtimeReceivedAt;
-        const ecuConnected = lastDataAt ? (Date.now() - lastDataAt.getTime()) <= ECU_DISCONNECT_THRESHOLD_MS : false;
+        const realtimeReceivedAt = getRealtimeLastSeenAt(baseData, latestRealtimeReceivedAt);
+        const baseIsRealtime = baseData?._realtime === true;
+        const lastDataAt = (baseIsRealtime ? realtimeReceivedAt : null) || baseTimestamp || getValidDate(dbData?.timestamp) || null;
+        // Status koneksi ECU hanya boleh berasal dari pesan MQTT realtime yang benar-benar baru.
+        // Dokumen MongoDB adalah data historis, sehingga timestamp database tidak boleh membuat UI terlihat Live.
+        const ecuConnected = baseIsRealtime && isFreshRealtimeConnection(baseData, latestRealtimeReceivedAt);
         const previousDoc = latestDocs.find((doc) => String(doc._id) !== String(baseData._id)) || latestDocs[1] || null;
         const totalEngineHours = await getTotalOperatingHours(effectiveDeviceId);
         const enrichedData = {
@@ -1983,7 +1991,7 @@ app.get('/api/engine-data/latest', async (req, res) => {
             lastUpdated: lastDataAt || baseData.timestamp,
             alerts: generateAlerts(baseData, previousDoc),
             maintenance: getMaintenanceStatus(baseData, latestDocs.slice(1)),
-            ...getPublicLabels(baseData)
+            ...getPublicLabels({ ...baseData, ecuConnected })
         };
         const source = baseData._realtime ? 'realtime-memory' : 'database';
         res.json({ success: true, data: enrichedData, source });
