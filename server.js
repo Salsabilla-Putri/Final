@@ -2192,7 +2192,23 @@ app.get('/api/engine-data/latest', async (req, res) => {
         const dbData = latestDocs[0] || null;
         const baseData = pickLatestEngineSnapshot(dbData, effectiveDeviceId);
         if (!baseData) {
-            return res.status(404).json({ success: false, error: 'No generator data found' });
+            const emptySnapshot = applyDisconnectedPowerSource({
+                ...latestData,
+                deviceId: effectiveDeviceId,
+                timestamp: null,
+                ecuConnected: false,
+                lastMqttUpdate: null,
+                realtimeReceivedAt: null,
+                serverReceivedAt: null,
+                lastUpdated: null
+            }, false);
+
+            return res.json({
+                success: false,
+                error: 'No generator data found',
+                data: emptySnapshot,
+                source: 'empty'
+            });
         }
 
         const baseTimestamp = getValidDate(baseData.timestamp);
