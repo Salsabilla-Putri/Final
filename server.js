@@ -1227,6 +1227,7 @@ mqttClient.on('error', (error) => {
 // ============================================================
 
 const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
+const DB_BATCH_MAX_RECORDS = parseInt(process.env.DB_BATCH_MAX_RECORDS || '300', 10); // flush otomatis saat 1 chunk ESP32 penuh
 
 let generatorBatchBuffer = [];
 let fftBatchBuffer = [];
@@ -1234,6 +1235,7 @@ let activeTimeBatchBuffer = [];
 let isFlushingGeneratorBatch = false;
 let generatorBatchTimerStartedAt = null;
 let generatorBatchFlushTimer = null;
+let generatorBatchImmediateFlushScheduled = false;
 
 function buildGeneratorDbDocument(data) {
     const snapshot = { ...data };
@@ -1310,6 +1312,20 @@ function scheduleGeneratorBatchFlush() {
 }
 
 
+function triggerGeneratorBatchFlush(reason) {
+    if (isFlushingGeneratorBatch || generatorBatchImmediateFlushScheduled) return;
+    generatorBatchImmediateFlushScheduled = true;
+    setImmediate(() => {
+        flushGeneratorBatch(reason)
+            .catch((err) => {
+                console.error('❌ Immediate batch flush error:', err.message);
+            })
+            .finally(() => {
+                generatorBatchImmediateFlushScheduled = false;
+            });
+    });
+}
+
 function addGeneratorDataToBatch(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return;
 
@@ -1325,6 +1341,9 @@ function addGeneratorDataToBatch(snapshot) {
     mqttIngestStats.lastBufferedAt = now;
     updateGeneratorBatchStats();
 
+    if (DB_BATCH_MAX_RECORDS > 0 && generatorBatchBuffer.length >= DB_BATCH_MAX_RECORDS) {
+        triggerGeneratorBatchFlush(`chunk-${DB_BATCH_MAX_RECORDS}-records`);
+    }
 }
 
 function addFftDataToBatch(fftDoc) {
@@ -1809,6 +1828,7 @@ app.get('/api/ingest/status', (req, res) => {
         dbReady: isDbReady(),
         dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
         dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
+        dbBatchMaxRecords: DB_BATCH_MAX_RECORDS,
         nextFlushAt: mqttIngestStats.nextFlushAt,
         bufferedGeneratorRecords: generatorBatchBuffer.length,
         bufferedFftRecords: fftBatchBuffer.length,
@@ -1827,6 +1847,7 @@ app.get('/api/ingest/batch', (req, res) => {
         realtimeTopic: 'gen/realtime',
         dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
         dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
+        dbBatchMaxRecords: DB_BATCH_MAX_RECORDS,
         nextFlushAt: mqttIngestStats.nextFlushAt,
         acceptedBody: {
             deviceId: 'ESP32_GENERATOR_01',
