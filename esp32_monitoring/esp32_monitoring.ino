@@ -2091,9 +2091,7 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
-  json += "\"syncStatus\":\"" + String(getSyncTextFromAggregate(a)) + "\"";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
   json += "}";
   return json;
 }
@@ -2159,9 +2157,7 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\",";
-  json += "\"synced\":" + String(a.synced ? "true" : "false") + ",";
-  json += "\"syncStatus\":\"" + String(getSyncTextFromAggregate(a)) + "\"";
+  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
 
   json += "}";
 
@@ -2463,8 +2459,8 @@ void publishRealtimeData() {
   }
   if (!hasData) return;
 
-  // MQTT publish langsung untuk dashboard dan history/cloud MongoDB setiap 0,5 detik.
-  // Buffer RAM/SD tetap menjadi fallback saat koneksi atau publish gen/data gagal.
+  // MQTT publish langsung hanya untuk dashboard realtime.
+  // History/cloud MongoDB masuk ke buffer RAM dan dikirim batch 10 menit ke topic gen/data.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
@@ -2478,16 +2474,14 @@ void publishRealtimeData() {
   if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
     mqtt.loop();
-    historyOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
-    mqtt.loop();
+    historyOk = true; // gen/data dikirim oleh MongoBufferTask sebagai batch 10 menit.
     xSemaphoreGive(mqttMutex);
   } else if (mqttMutex == NULL) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
     mqtt.loop();
-    historyOk = mqtt.publish(MQTT_TOPIC, parameterOnlyPayload.c_str());
-    mqtt.loop();
+    historyOk = true; // gen/data dikirim oleh MongoBufferTask sebagai batch 10 menit.
   }
-  bool ok = realtimeOk && historyOk;
+  bool ok = realtimeOk;
   perfMqttPublishUs = micros() - pubStart;
   perfUpdateStat(acqMon.mqttPublishUs, perfMqttPublishUs);
 
@@ -2535,9 +2529,6 @@ void publishRealtimeData() {
 
   if (ok) {
     lastMqttPublishMs = millis();
-    if (historyOk && latestPayloadSeq > lastMqttHistoryPublishedLocalSeq) {
-      lastMqttHistoryPublishedLocalSeq = latestPayloadSeq;
-    }
     mqttPublishSuccessCount++;
     mqttTotalPayloadBytes += mqttLastPayloadBytes;
     mqttTotalParameterPayloadBytes += mqttLastParameterPayloadBytes;
@@ -2551,7 +2542,7 @@ void publishRealtimeData() {
                     MQTT_REALTIME_TOPIC,
                     (unsigned long)mqttLastPayloadBytes,
                     (unsigned long)mqttLastRecordsSent);
-      Serial.println(F("[TEST] Realtime dan MongoDB/history terkirim tiap 1 detik via MQTT."));
+      Serial.println(F("[TEST] Realtime terkirim; MongoDB/history menunggu buffer batch 10 menit."));
       Serial.println(F("╚══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -2992,8 +2983,8 @@ void sendMongoDbBufferToMongoDB() {
 // - Mengirim buffer RAM MongoDB ke MQTT_TOPIC = gen/data.
 // - Pengiriman fallback dilakukan setiap MONGODB_BATCH_INTERVAL_MS.
 // - Buffer juga dikirim lebih cepat jika penuh/manual.
-// - Realtime dashboard dan history live tetap dikirim oleh publishRealtimeData()
-//   ke MQTT_REALTIME_TOPIC/gen/realtime dan MQTT_TOPIC/gen/data setiap 0,5 detik.
+// - Realtime dashboard dikirim oleh publishRealtimeData() ke MQTT_REALTIME_TOPIC/gen/realtime.
+// - History/cloud dikirim batch 10 menit oleh MongoBufferTask ke MQTT_TOPIC/gen/data.
 
 void MongoBufferTask(void *pvParameters) {
   (void) pvParameters;
@@ -3524,7 +3515,7 @@ void saveSnapshotToSD() {
   // Fungsi SD tetap dipanggil setiap 1 detik. Untuk pengujian database,
   // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke sdDatabase.csv/fft.csv
   // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap menjadi fallback
-  // jika publish live gen/data 0,5 detik tertahan atau gagal.
+  // sebelum MongoBufferTask mengirim batch gen/data 10 menit.
   //
   // Untuk operasi harian, set SD_SAVE_ONLINE_FOR_DB_TEST=0 agar SD hanya ditulis jika:
   // 1) WiFi/MQTT/server bermasalah,
@@ -3541,14 +3532,11 @@ void saveSnapshotToSD() {
 
   uint32_t saveStart = micros();
 
-  // Buffer MongoDB/history diisi setiap ada record agregasi baru (hingga 2 record/detik).
-  // Upload live ke server/MongoDB dilakukan oleh publishRealtimeData() setiap 0,5 detik.
-  // MongoBufferTask tetap menyimpan fallback untuk retry batch jika koneksi gagal.
+  // Buffer MongoDB/history diisi setiap ada record agregasi baru.
+  // MongoBufferTask mengirim satu batch ke topic gen/data setiap 10 menit.
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
     if (storageBatch[i].localSeq <= lastMongoBufferedLocalSeq) continue;
-    if (storageBatch[i].localSeq <= lastMqttHistoryPublishedLocalSeq) continue;
-
     bool mongoAccepted = addRecordToMongoDbBuffer(storageBatch[i]);
     if (mongoAccepted) {
       lastMongoBufferedLocalSeq = storageBatch[i].localSeq;
@@ -5404,8 +5392,8 @@ void printMongoBufferStatus() {
   Serial.print  (F("  last send age  : "));
   if (mongoDbLastSendMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - mongoDbLastSendMs) / 1000UL); Serial.println(F(" s ago")); }
-  Serial.println(F("STATUS: buffer berkurang setelah publish OK ke topic gen/data. Validasi insert MongoDB dilakukan di backend/dashboard."));
-  Serial.println(F("NOTE  : Tidak ada HTTP batch; SD tetap arsip lokal, cloud lewat MQTT gen/data."));
+  Serial.println(F("STATUS: buffer disimpan 10 menit, lalu dikirim satu batch ke topic gen/data untuk MongoDB."));
+  Serial.println(F("NOTE  : Serial monitor menampilkan buffer count, umur buffer, dan record terkirim ke MongoDB/backend."));
   Serial.println(F("======================================================="));
 }
 
