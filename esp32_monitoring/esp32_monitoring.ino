@@ -4113,13 +4113,13 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.print((int)WiFi.status());
   Serial.print(" / ");
   Serial.println(wifiStatusText(WiFi.status()));
-  Serial.println("[EDUROAM] Cleaning enterprise mode before WiFiManager...");
+  Serial.println("[EDUROAM] Cleaning enterprise mode before manual WiFi command...");
 
-  // Setelah gagal, bersihkan EAP satu kali lalu fallback ke WiFiManager.
+  // Setelah gagal, bersihkan EAP satu kali lalu tunggu command Serial.
   // Jangan coba eduroam ulang dalam loop karena dapat membuat driver EAP tidak stabil.
   prepareNormalWiFiMode();
 
-  Serial.println("[EDUROAM] Fallback to WiFiManager portal.");
+  Serial.println("[EDUROAM] WiFiManager tidak dibuka otomatis; gunakan Serial command wifi portal jika diperlukan.");
   Serial.println("╚═══════════════════════════════════════════════════════════╝");
 
   return false;
@@ -4478,23 +4478,11 @@ void setupWiFiManager() {
   prepareNormalWiFiMode();
 #endif
 
-  Serial.println(F("[WIFI] Jika touch terdeteksi, operator bisa memilih SSID di LCD."));
-  Serial.println(F("[WIFI] Jika timeout/touch tidak ada, WiFiManager dibuka otomatis."));
-
-  if (connectWiFiFromLcdSelection()) {
-    Serial.println(F("[WIFI] Connected from LCD selection."));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return;
-  }
-
-  if (connectWiFiManagerFallback()) {
-    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER"));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return;
-  }
-
-  Serial.println(F("[WIFI] Tidak ada koneksi saat boot; sistem tetap jalan offline."));
-  Serial.println(F("[WIFI] Command Serial tetap tersedia: wifi portal / wifi eduroam."));
+  Serial.println(F("[WIFI] Tidak ada pemilihan WiFi di LCD. LCD hanya menampilkan logo/loading."));
+  Serial.println(F("[WIFI] Konfigurasi WiFi dilakukan dari Serial Monitor saja:"));
+  Serial.println(F("[WIFI]   wifi portal  -> buka WiFiManager AP GenTrack-Monitor-AP"));
+  Serial.println(F("[WIFI]   wifi eduroam -> coba ulang eduroam WPA2-Enterprise"));
+  Serial.println(F("[WIFI] Sistem berjalan offline sampai command Serial dipilih."));
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
   Serial.println(F("╚══════════════════════════════════════════════╝"));
@@ -4704,14 +4692,22 @@ void drawPulseLine(int cx, int cy, uint16_t color) {
   tft.fillCircle(cx + points[8][0], cy + points[8][1], 4, color);
 }
 
+uint16_t bootLogoColor(uint16_t rgb565) {
+  // Modul TFT ini menampilkan warna boot logo tertukar byte untuk primitive
+  // drawing (biru menjadi kuning/hijau dan oranye menjadi cyan). Fallback logo
+  // memakai warna referensi yang dibalik byte-nya agar hasil fisik LCD kembali
+  // navy/biru/oranye seperti gambar GENSYS yang diberikan.
+  return (uint16_t)((rgb565 << 8) | (rgb565 >> 8));
+}
+
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   (void)fg;
   // Fallback ini dibuat sebagai versi vektor dari logo referensi: gear/navy
   // di kiri, panah circular biru di kanan-atas dan kiri-bawah, heartbeat
   // oranye di tengah, dan gap huruf G yang bersih.
-  const uint16_t darkBlue = 0x0015;
-  const uint16_t brightBlue = 0x04BF;
-  const uint16_t orange = 0xFD20;
+  const uint16_t darkBlue = bootLogoColor(0x0015);
+  const uint16_t brightBlue = bootLogoColor(0x04BF);
+  const uint16_t orange = bootLogoColor(0xFD20);
 
   const int outerR = r;
   const int innerR = r - 23;
@@ -4890,9 +4886,9 @@ void drawBootSplashStep(const char* statusText, int progress) {
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(4);
     // Wordmark fallback dibuat dua warna seperti logo referensi: GEN navy, SYS biru.
-    tft.setTextColor(0x0015, C_WHITE);
+    tft.setTextColor(bootLogoColor(0x0015), C_WHITE);
     tft.drawString("GEN", (SW / 2) - 36, 214);
-    tft.setTextColor(0x04BF, C_WHITE);
+    tft.setTextColor(bootLogoColor(0x04BF), C_WHITE);
     tft.drawString("SYS", (SW / 2) + 36, 214);
 
     tft.setTextColor(C_PRIMARY, C_WHITE);
@@ -6506,7 +6502,7 @@ void setup() {
 
   drawBootSplashStep(sdOK ? "Local SD database ready" : "SD offline - continuing", 50);
 
-  drawBootSplashStep("Starting WiFi manager...", 58);
+  drawBootSplashStep("Loading WiFi... check Serial Monitor", 58);
   setupWiFiManager();
 
   drawBootSplashStep("Synchronizing NTP timestamp...", 72);
