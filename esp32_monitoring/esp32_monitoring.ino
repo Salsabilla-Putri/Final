@@ -4478,8 +4478,14 @@ void setupWiFiManager() {
   prepareNormalWiFiMode();
 #endif
 
-  Serial.println(F("[WIFI] Layar LCD tetap di boot splash; WiFiManager berjalan tanpa halaman portal di TFT."));
-  Serial.println(F("[WIFI] Membuka WiFiManager otomatis jika eduroam gagal."));
+  Serial.println(F("[WIFI] Jika touch terdeteksi, operator bisa memilih SSID di LCD."));
+  Serial.println(F("[WIFI] Jika timeout/touch tidak ada, WiFiManager dibuka otomatis."));
+
+  if (connectWiFiFromLcdSelection()) {
+    Serial.println(F("[WIFI] Connected from LCD selection."));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
 
   if (connectWiFiManagerFallback()) {
     Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER"));
