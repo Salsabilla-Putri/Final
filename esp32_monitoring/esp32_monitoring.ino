@@ -104,6 +104,18 @@
 #define WIFI_MANAGER_SCAN_DEBUG 1
 #endif
 
+#ifndef WIFI_LCD_SELECT_TIMEOUT_MS
+#define WIFI_LCD_SELECT_TIMEOUT_MS 30000UL
+#endif
+
+#ifndef WIFI_LCD_CONNECT_TIMEOUT_MS
+#define WIFI_LCD_CONNECT_TIMEOUT_MS 20000UL
+#endif
+
+#ifndef WIFI_LCD_MAX_NETWORKS
+#define WIFI_LCD_MAX_NETWORKS 6
+#endif
+
 // Set 1 hanya jika ingin reset/portal WiFiManager dipaksa muncul.
 // Pada mode eduroam-first, nilai ini hanya berpengaruh saat fallback portal.
 #ifndef FORCE_WIFI_PORTAL
@@ -210,7 +222,7 @@
 // Nilai ini tetap dipakai sebagai batas payload realtime biasa.
 // Batch besar tidak memakai mqtt.publish() agar tidak perlu buffer internal PubSubClient besar.
 #define MONGO_BATCH_STREAM_CHUNK_BYTES 512
-#define MONGO_BATCH_MAX_PAYLOAD_BYTES  80000UL
+#define MONGO_BATCH_MAX_PAYLOAD_BYTES  160000UL
 
 // Proteksi heap.
 #define HEAP_MIN_FREE_BYTES          25000UL
@@ -330,10 +342,12 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_BATCH_INTERVAL_MS 600000UL  // fallback buffer dikirim per 10 menit jika publish live tertahan
 #define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
-// MQTT broker/cloud sering menolak payload besar. Untuk fallback, buffer 600 record
-// dipecah menjadi 60 publish kecil berisi 10 record agar tetap diterima broker/cloud.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 10
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 20UL
+// Pengiriman fallback tetap mengikuti interval 10 menit. Saat interval tiba,
+// buffer 600 record dipecah menjadi 2 chunk besar berisi 300 record.
+// Jeda 500 ms antar chunk memberi waktu broker/backend memproses payload sebelum
+// chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
+#define MONGODB_UPLOAD_CHUNK_RECORDS 300
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 500UL
 
 // TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
@@ -654,6 +668,11 @@ bool needFullRedraw = true;
 bool displayUpdateNow = false;
 volatile uint32_t displayAggregateSeq = 0;  // naik setiap agregasi agar TFT memaksa refresh nilai
 bool touchDetected = false;
+
+String wifiLcdSsids[WIFI_LCD_MAX_NETWORKS];
+int32_t wifiLcdRssis[WIFI_LCD_MAX_NETWORKS];
+int wifiLcdEncryptions[WIFI_LCD_MAX_NETWORKS];
+uint8_t wifiLcdNetworkCount = 0;
 
 enum DisplayPage {
   PAGE_GENERATOR = 0,
@@ -1039,6 +1058,28 @@ String getCsvTimestampWIBms() {
     return String(buf);
   }
   return String("millis:") + String(millis());
+}
+
+String getClockWIBms() {
+  struct tm timeinfo;
+  unsigned long msPart = millis() % 1000UL;
+  char buf[20];
+
+  if (getLocalTime(&timeinfo, 5)) {
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d:%03lu",
+             timeinfo.tm_hour,
+             timeinfo.tm_min,
+             timeinfo.tm_sec,
+             msPart);
+    return String(buf);
+  }
+
+  unsigned long totalSeconds = millis() / 1000UL;
+  unsigned int hh = (totalSeconds / 3600UL) % 24UL;
+  unsigned int mm = (totalSeconds / 60UL) % 60UL;
+  unsigned int ss = totalSeconds % 60UL;
+  snprintf(buf, sizeof(buf), "%02u:%02u:%02u:%03lu", hh, mm, ss, msPart);
+  return String(buf);
 }
 
 void deselectAllSPI() {
@@ -2800,7 +2841,7 @@ void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi:
   // - mengirim fallback buffer sampai 600 record setiap 10 menit atau saat diminta,
-  // - default MQTT dipecah 10 record/publish agar tidak ditolak broker/cloud,
+  // - default MQTT dipecah 300 record/publish dengan jeda 500 ms antar chunk,
   // - tiap publish berisi payload.records[],
   // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
   // - record yang gagal tetap disimpan untuk retry berikutnya.
@@ -2890,7 +2931,7 @@ void sendMongoDbBufferToMongoDB() {
       Serial.println(batchPayload.length());
       Serial.print(F("[MONGO-MQTT] Max allowed         : "));
       Serial.println(MONGO_BATCH_MAX_PAYLOAD_BYTES);
-      Serial.println(F("[MONGO-MQTT] Solusi: turunkan MONGODB_UPLOAD_CHUNK_RECORDS atau kecilkan field JSON."));
+      Serial.println(F("[MONGO-MQTT] Solusi: cek broker limit, turunkan MONGODB_UPLOAD_CHUNK_RECORDS, atau kecilkan field JSON."));
       Serial.println(F("╚═════════════════════════════════════════════════╝"));
       break;
     }
@@ -3014,6 +3055,8 @@ void MongoBufferTask(void *pvParameters) {
     }
 
     bool intervalReached = (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS);
+    // Pengiriman otomatis tetap setiap 10 menit atau saat buffer penuh 600 record.
+    // Chunk 300 record hanya dipakai untuk memecah payload saat siklus upload berjalan.
     bool bufferFull = (bufferCountSnapshot >= MONGODB_BUFFER_RECORDS);
 
     if ((intervalReached || bufferFull || manualRequest) && bufferCountSnapshot > 0) {
@@ -4025,6 +4068,258 @@ bool connectEduroam(bool eraseCredentials = true) {
 #endif
 }
 
+void drawWiFiPortalInfo(const char* statusText) {
+  tft.fillScreen(C_BG);
+  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
+  tft.setTextColor(C_WHITE, C_PRIMARY);
+  tft.setTextSize(2);
+  tft.setCursor(12, 11);
+  tft.print("WIFI CONFIG PORTAL");
+
+  tft.setTextColor(C_DARK, C_BG);
+  tft.setTextSize(2);
+  tft.setCursor(24, 58);
+  tft.print("AP: ");
+  tft.print(WIFI_MANAGER_AP_NAME);
+
+  tft.setTextSize(1);
+  tft.setCursor(24, 96);
+  tft.print("Password AP : ");
+  tft.print(WIFI_MANAGER_AP_PASS);
+  tft.setCursor(24, 118);
+  tft.print("Buka browser : http://192.168.4.1");
+  tft.setCursor(24, 140);
+  tft.print("Jika Configure WiFi tidak muncul, matikan mobile data");
+  tft.setCursor(24, 158);
+  tft.print("lalu akses langsung IP di atas, bukan domain captive.");
+
+  tft.fillRoundRect(24, 198, 432, 56, 8, C_WHITE);
+  tft.drawRoundRect(24, 198, 432, 56, 8, C_BORDER);
+  tft.setTextColor(C_MUTED, C_WHITE);
+  tft.setCursor(38, 216);
+  tft.print(statusText);
+  tft.setCursor(38, 234);
+  tft.print("Pilih SSID dan isi password dari halaman Configure WiFi.");
+}
+
+void drawWiFiLcdSelectionPage(const char* statusText) {
+  tft.fillScreen(C_BG);
+  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
+  tft.setTextColor(C_WHITE, C_PRIMARY);
+  tft.setTextSize(2);
+  tft.setCursor(12, 11);
+  tft.print("PILIH WIFI");
+
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.setTextSize(1);
+  tft.setCursor(220, 15);
+  tft.print(statusText);
+
+  for (uint8_t i = 0; i < wifiLcdNetworkCount; i++) {
+    int y = 48 + i * 34;
+    bool openNetwork = wifiLcdEncryptions[i] == WIFI_AUTH_OPEN;
+    tft.fillRoundRect(14, y, 452, 28, 6, C_WHITE);
+    tft.drawRoundRect(14, y, 452, 28, 6, C_BORDER);
+    tft.setTextColor(C_DARK, C_WHITE);
+    tft.setTextSize(1);
+    tft.setCursor(26, y + 10);
+    String name = wifiLcdSsids[i];
+    if (name.length() > 28) name = name.substring(0, 28);
+    tft.print(i + 1);
+    tft.print(". ");
+    tft.print(name);
+    tft.setCursor(315, y + 10);
+    tft.print(wifiLcdRssis[i]);
+    tft.print(" dBm");
+    tft.setCursor(402, y + 10);
+    tft.print(openNetwork ? "OPEN" : "LOCK");
+  }
+
+  if (wifiLcdNetworkCount == 0) {
+    tft.setTextColor(C_RED, C_BG);
+    tft.setCursor(24, 92);
+    tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau PORTAL.");
+  }
+
+  tft.fillRoundRect(14, 262, 140, 40, 8, C_WHITE);
+  tft.drawRoundRect(14, 262, 140, 40, 8, C_PRIMARY);
+  tft.setTextColor(C_PRIMARY, C_WHITE);
+  tft.setCursor(55, 277);
+  tft.print("RESCAN");
+
+  tft.fillRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
+  tft.drawRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
+  tft.setTextColor(C_WHITE, C_PRIMARY);
+  tft.setCursor(210, 277);
+  tft.print("PORTAL");
+
+  tft.fillRoundRect(326, 262, 140, 40, 8, C_WHITE);
+  tft.drawRoundRect(326, 262, 140, 40, 8, C_PRIMARY);
+  tft.setTextColor(C_PRIMARY, C_WHITE);
+  tft.setCursor(370, 277);
+  tft.print("OFFLINE");
+}
+
+uint8_t scanWiFiForLcdSelection() {
+  wifiLcdNetworkCount = 0;
+  for (uint8_t i = 0; i < WIFI_LCD_MAX_NETWORKS; i++) {
+    wifiLcdSsids[i] = "";
+    wifiLcdRssis[i] = -127;
+    wifiLcdEncryptions[i] = WIFI_AUTH_OPEN;
+  }
+
+  drawWiFiLcdSelectionPage("Scanning...");
+  WiFi.mode(WIFI_STA);
+  applyWiFiCountryConfig();
+  delay(200);
+
+  int n = WiFi.scanNetworks(false, true);
+  if (n <= 0) {
+    WiFi.scanDelete();
+    drawWiFiLcdSelectionPage("No SSID found");
+    return 0;
+  }
+
+  for (int i = 0; i < n; i++) {
+    String ssid = WiFi.SSID(i);
+    if (!ssid.length()) continue;
+
+    bool duplicate = false;
+    for (uint8_t j = 0; j < wifiLcdNetworkCount; j++) {
+      if (wifiLcdSsids[j] == ssid) {
+        duplicate = true;
+        if (WiFi.RSSI(i) > wifiLcdRssis[j]) {
+          wifiLcdRssis[j] = WiFi.RSSI(i);
+          wifiLcdEncryptions[j] = WiFi.encryptionType(i);
+        }
+        break;
+      }
+    }
+    if (duplicate) continue;
+
+    if (wifiLcdNetworkCount < WIFI_LCD_MAX_NETWORKS) {
+      wifiLcdSsids[wifiLcdNetworkCount] = ssid;
+      wifiLcdRssis[wifiLcdNetworkCount] = WiFi.RSSI(i);
+      wifiLcdEncryptions[wifiLcdNetworkCount] = WiFi.encryptionType(i);
+      wifiLcdNetworkCount++;
+    }
+  }
+
+  WiFi.scanDelete();
+  drawWiFiLcdSelectionPage("Tap SSID / PORTAL");
+  return wifiLcdNetworkCount;
+}
+
+int waitForWiFiLcdSelection() {
+  unsigned long startedAt = millis();
+  static unsigned long lastTouchMs = 0;
+
+  while (millis() - startedAt < WIFI_LCD_SELECT_TIMEOUT_MS) {
+    if (touchDetected && ts.touched() && millis() - lastTouchMs > 220UL) {
+      int x, y, rawX, rawY;
+      readTouchMapped(x, y, rawX, rawY);
+      lastTouchMs = millis();
+
+      for (uint8_t i = 0; i < wifiLcdNetworkCount; i++) {
+        int rowY = 48 + i * 34;
+        if (x >= 14 && x <= 466 && y >= rowY && y <= rowY + 28) {
+          return i;
+        }
+      }
+
+      if (y >= 262 && y <= 310) {
+        if (x >= 14 && x <= 154) return -2;   // rescan
+        if (x >= 170 && x <= 310) return -3;  // portal
+        if (x >= 326 && x <= 466) return -4;  // offline
+      }
+    }
+
+    delay(20);
+    yield();
+  }
+
+  return -3; // timeout: open portal, because password entry still needs WiFiManager.
+}
+
+bool connectSelectedWiFiFromLcd(uint8_t index) {
+  if (index >= wifiLcdNetworkCount) return false;
+
+  const String ssid = wifiLcdSsids[index];
+  bool openNetwork = wifiLcdEncryptions[index] == WIFI_AUTH_OPEN;
+
+  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
+  tft.setTextColor(C_WHITE, C_PRIMARY);
+  tft.setTextSize(2);
+  tft.setCursor(12, 11);
+  tft.print("CONNECT WIFI");
+  tft.fillRect(14, 210, 452, 36, C_BG);
+  tft.setTextColor(C_DARK, C_BG);
+  tft.setTextSize(1);
+  tft.setCursor(24, 218);
+  tft.print("Mencoba SSID: ");
+  tft.print(ssid);
+  tft.setCursor(24, 236);
+  tft.print(openNetwork ? "Jaringan open." : "Jaringan terkunci: mencoba credential tersimpan.");
+
+  Serial.print(F("[WIFI LCD] Selected SSID: "));
+  Serial.println(ssid);
+  Serial.println(openNetwork ? F("[WIFI LCD] Open network, direct connect.") : F("[WIFI LCD] Locked network, trying saved credential first."));
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  applyWiFiStabilityConfig();
+
+  if (openNetwork) {
+    WiFi.begin(ssid.c_str());
+  } else {
+    // ESP32 can reconnect here only if this SSID/password was already saved in NVS.
+    // If it fails, fallback WiFiManager portal is shown for password entry.
+    WiFi.begin(ssid.c_str());
+  }
+
+  if (waitForWiFiConnection(F("[WIFI LCD]"), WIFI_LCD_CONNECT_TIMEOUT_MS)) {
+    wifiOK = true;
+    wifiConnectionMode = WIFI_MODE_MANAGER;
+    printWiFiConnectedInfo(F("[WIFI LCD]"));
+    return true;
+  }
+
+  WiFi.disconnect(false, false);
+  wifiOK = false;
+  Serial.println(F("[WIFI LCD] Connect failed. Password mungkin belum tersimpan; fallback ke portal."));
+  drawWiFiPortalInfo("SSID terkunci/gagal. Lanjutkan lewat Configure WiFi.");
+  delay(1200);
+  return false;
+}
+
+bool connectWiFiFromLcdSelection() {
+  if (!touchDetected) {
+    Serial.println(F("[WIFI LCD] Touch tidak terdeteksi, skip pilihan LCD."));
+    return false;
+  }
+
+  while (true) {
+    scanWiFiForLcdSelection();
+    int choice = waitForWiFiLcdSelection();
+
+    if (choice >= 0) {
+      if (connectSelectedWiFiFromLcd((uint8_t)choice)) return true;
+      return false;
+    }
+
+    if (choice == -2) continue;
+    if (choice == -4) {
+      Serial.println(F("[WIFI LCD] User chose OFFLINE."));
+      return false;
+    }
+
+    Serial.println(F("[WIFI LCD] User chose PORTAL or selection timeout."));
+    drawWiFiPortalInfo("Portal dibuka untuk input password WiFi.");
+    delay(700);
+    return false;
+  }
+}
+
 bool connectWiFiManagerFallback() {
   Serial.println();
   Serial.println(F("╔════════════ WIFI MANAGER PORTAL FALLBACK SAFE ════════════╗"));
@@ -4071,7 +4366,15 @@ bool connectWiFiManagerFallback() {
   Serial.println(WIFI_MANAGER_AP_NAME);
   Serial.print(F("[WIFI MANAGER] AP PASS : "));
   Serial.println(WIFI_MANAGER_AP_PASS);
+  Serial.println(F("[WIFI MANAGER] Portal URL: http://192.168.4.1"));
+  Serial.println(F("[WIFI MANAGER] Jika Configure WiFi tidak terbuka, akses IP langsung dan matikan mobile data."));
   Serial.println(F("[WIFI MANAGER] Starting config portal now..."));
+
+  wm.setAPCallback([](WiFiManager *manager) {
+    (void)manager;
+    drawWiFiPortalInfo("Portal aktif. Hubungkan HP ke AP lalu buka 192.168.4.1");
+  });
+  drawWiFiPortalInfo("Portal aktif. Hubungkan HP ke AP lalu buka 192.168.4.1");
 
   // startConfigPortal membuka AP portal dan tidak menjalankan autoConnect().
   bool res = wm.startConfigPortal(WIFI_MANAGER_AP_NAME, WIFI_MANAGER_AP_PASS);
@@ -4133,6 +4436,12 @@ void setupWiFiManager() {
 #if !USE_EDUROAM_FIRST
   prepareNormalWiFiMode();
 #endif
+
+  if (connectWiFiFromLcdSelection()) {
+    Serial.println(F("[WIFI] Mode koneksi: LCD WIFI SELECT / SAVED WIFI"));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
 
   if (connectWiFiManagerFallback()) {
     Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER / SAVED WIFI"));
@@ -4305,27 +4614,70 @@ void checkWiFiStatus() {
 // ============================================================
 // BOOT SPLASH + UI COMPONENT
 // ============================================================
+void drawThickArc(int cx, int cy, int r, int thick, int startDeg, int endDeg, uint16_t color) {
+  for (int a = startDeg; a <= endDeg; a += 4) {
+    float rad = a * PI / 180.0f;
+    int x = cx + (int)(cos(rad) * r);
+    int y = cy + (int)(sin(rad) * r);
+    tft.fillCircle(x, y, thick / 2, color);
+  }
+}
+
+void drawThickLine(int x1, int y1, int x2, int y2, uint16_t color, int width) {
+  for (int o = -(width / 2); o <= (width / 2); o++) {
+    tft.drawLine(x1, y1 + o, x2, y2 + o, color);
+    tft.drawLine(x1 + o, y1, x2 + o, y2, color);
+  }
+}
+
+void drawPulseLine(int cx, int cy, uint16_t color) {
+  const int points[][2] = {
+    {-70, 0}, {-32, 0}, {-22, -18}, {-8, 24}, {10, -82},
+    {32, 78}, {52, -42}, {68, 0}, {104, 0}
+  };
+
+  for (uint8_t i = 0; i < 8; i++) {
+    drawThickLine(cx + points[i][0], cy + points[i][1],
+                  cx + points[i + 1][0], cy + points[i + 1][1],
+                  color, 7);
+  }
+  tft.fillCircle(cx + points[0][0], cy + points[0][1], 4, color);
+  tft.fillCircle(cx + points[8][0], cy + points[8][1], 4, color);
+}
+
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
-  tft.drawCircle(cx, cy, r, fg);
-  tft.drawCircle(cx, cy, r - 4, fg);
+  (void)fg;
+  const uint16_t darkBlue = C_PRIMARY;
+  const uint16_t brightBlue = C_BLUE2;
+  const uint16_t orange = C_ORANGE;
 
-  // Large G style.
-  tft.fillCircle(cx + 20, cy, r / 2, fg);
-  tft.fillCircle(cx + 20, cy, r / 3, bg);
-  tft.fillRect(cx + 20, cy - 8, r / 2, 16, bg);
-  tft.fillRect(cx + 20, cy, r / 2, 14, fg);
+  // Left gear teeth, matching the supplied GENSYS startup mark style.
+  for (int a = 135; a <= 245; a += 28) {
+    float rad = a * PI / 180.0f;
+    int tx = cx + (int)(cos(rad) * (r + 8));
+    int ty = cy + (int)(sin(rad) * (r + 8));
+    tft.fillRoundRect(tx - 13, ty - 13, 26, 26, 5, darkBlue);
+  }
 
-  // Lightning.
-  int x0 = cx - r + 12;
-  int y0 = cy - 4;
-  tft.fillTriangle(x0, y0, cx - 5, cy - r + 12, cx - 28, cy + 4, fg);
-  tft.fillTriangle(cx - 28, cy + 4, cx + 5, cy + 2, x0 - 12, cy + r - 6, fg);
+  // Circular arrows / gear ring.
+  drawThickArc(cx, cy, r, 22, 130, 270, darkBlue);
+  drawThickArc(cx, cy, r, 22, -88, -2, darkBlue);
+  drawThickArc(cx, cy, r, 22, -88, -2, brightBlue);
+  drawThickArc(cx, cy, r, 22, 28, 145, brightBlue);
+  drawThickArc(cx, cy, r, 22, 0, 58, darkBlue);
 
-  // Plug.
-  tft.fillRoundRect(cx - 58, cy + 45, 42, 18, 5, fg);
-  tft.fillRect(cx - 68, cy + 51, 12, 5, fg);
-  tft.fillRect(cx - 55, cy + 36, 6, 12, fg);
-  tft.fillRect(cx - 42, cy + 36, 6, 12, fg);
+  // Arrow heads.
+  tft.fillTriangle(cx + r + 3, cy - 30, cx + r + 36, cy - 38, cx + r + 18, cy + 3, brightBlue);
+  tft.fillTriangle(cx - r - 6, cy + 36, cx - r + 28, cy + 28, cx - r + 2, cy + 70, brightBlue);
+
+  // White center hole and right G gap.
+  tft.fillCircle(cx, cy, r - 25, bg);
+  tft.fillRect(cx + r - 12, cy - 8, 64, 16, bg);
+  tft.fillRect(cx + 5, cy - r - 20, 10, 42, bg);
+  tft.fillRect(cx + 5, cy + r - 22, 10, 44, bg);
+
+  // Orange heartbeat line.
+  drawPulseLine(cx, cy + 2, orange);
 }
 
 void drawBootSplashStep(const char* statusText, int progress) {
@@ -4336,27 +4688,27 @@ void drawBootSplashStep(const char* statusText, int progress) {
   static String lastStatus = "";
 
   int barX = 80;
-  int barY = 288;
+  int barY = 292;
   int barW = 320;
   int barH = 14;
 
   progress = constrain(progress, 0, 100);
 
   if (!bootBaseDrawn || progress <= 0) {
-    tft.fillScreen(C_PRIMARY);
-    drawGensysLogoMark(SW / 2, 108, 78, C_WHITE, C_PRIMARY);
+    tft.fillScreen(C_WHITE);
+    drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
 
-    tft.setTextColor(C_WHITE, C_PRIMARY);
+    tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(4);
-    tft.drawString("GENSYS", SW / 2, 213);
+    tft.drawString("GENSYS", SW / 2, 214);
 
     tft.setTextSize(1);
-    tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 246);
-    tft.drawString("& MONITORING SYSTEM", SW / 2, 262);
+    tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 248);
+    tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
 
-    tft.drawRoundRect(barX, barY, barW, barH, 7, C_WHITE);
-    tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 5, C_PRIMARY);
+    tft.drawRoundRect(barX, barY, barW, barH, 7, C_BORDER);
+    tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 5, C_WHITE);
 
     bootBaseDrawn = true;
     lastProgress = -1;
@@ -4368,21 +4720,35 @@ void drawBootSplashStep(const char* statusText, int progress) {
     int fillW = map(progress, 0, 100, 0, innerW);
 
     // Area dalam bar saja yang dibersihkan, bukan seluruh boot page.
-    tft.fillRoundRect(barX + 2, barY + 2, innerW, barH - 4, 5, C_PRIMARY);
+    tft.fillRoundRect(barX + 2, barY + 2, innerW, barH - 4, 5, C_WHITE);
     if (fillW > 0) {
-      tft.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 5, C_GREEN);
+      tft.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 5, C_BLUE2);
     }
     lastProgress = progress;
   }
 
   if (lastStatus != String(statusText)) {
-    tft.fillRect(40, 302, 400, 16, C_PRIMARY);
-    tft.setTextColor(C_WHITE, C_PRIMARY);
+    tft.fillRect(40, 306, 400, 14, C_WHITE);
+    tft.setTextColor(C_MUTED, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
-    tft.drawString(statusText, SW / 2, 310);
+    tft.drawString(statusText, SW / 2, 313);
     tft.setTextDatum(TL_DATUM);
     lastStatus = String(statusText);
+  }
+}
+
+void drawHeaderClock(bool force) {
+  static String lastClock = "";
+  String clockText = getClockWIBms();
+
+  if (force || clockText != lastClock) {
+    tft.fillRect(10, 28, 118, 12, C_PRIMARY);
+    tft.setTextColor(C_WHITE, C_PRIMARY);
+    tft.setTextSize(1);
+    tft.setCursor(10, 30);
+    tft.print(clockText);
+    lastClock = clockText;
   }
 }
 
@@ -4390,8 +4756,10 @@ void drawHeader(const char* title) {
   tft.fillRect(0, 0, SW, 42, C_PRIMARY);
   tft.setTextColor(C_WHITE, C_PRIMARY);
   tft.setTextSize(2);
-  tft.setCursor(10, 12);
+  tft.setCursor(10, 7);
   tft.print(title);
+
+  drawHeaderClock(true);
 
   tft.setTextSize(1);
   tft.setCursor(300, 10); tft.print("LINK");
@@ -4536,25 +4904,9 @@ void drawSemiGauge(int x, int y, int r, float value, float minVal, float maxVal,
 
 void drawHeaderStatusDots(bool force) {
   static bool lastLink = false, lastWifi = false, lastMqtt = false, lastSd = false;
-  static uint32_t lastShownSeq = 0;
-  static uint32_t lastShownSecond = 0xFFFFFFFF;
   bool nowMqtt = mqtt.connected();
-  uint32_t currentSeq = localRecordSeq;
-  uint32_t currentSecond = millis() / 1000UL;
 
-  if (force || currentSeq != lastShownSeq || currentSecond != lastShownSecond) {
-    tft.fillRect(132, 28, 152, 12, C_PRIMARY);
-    tft.setTextColor(C_WHITE, C_PRIMARY);
-    tft.setTextSize(1);
-    tft.setCursor(132, 30);
-    tft.print("REC#");
-    tft.print(currentSeq);
-    tft.print("  ");
-    tft.print(currentSecond);
-    tft.print("s");
-    lastShownSeq = currentSeq;
-    lastShownSecond = currentSecond;
-  }
+  drawHeaderClock(force);
 
   if (force || lastLink != linkOK) {
     tft.fillCircle(315, 28, 6, C_PRIMARY);
@@ -5827,6 +6179,7 @@ void processSerialCommand(String cmd) {
   else if (cmd == "page generator") { if (activePage != PAGE_GENERATOR) { activePage = PAGE_GENERATOR; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] generator")); }
   else if (cmd == "page engine") { if (activePage != PAGE_ENGINE) { activePage = PAGE_ENGINE; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] engine")); }
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
+  else if (cmd == "configurewifi" || cmd == "configure wifi" || cmd == "wifi portal") { Serial.println(F("[WIFI] Manual Configure WiFi portal requested.")); prepareNormalWiFiMode(); connectWiFiManagerFallback(); needFullRedraw = true; }
   else if (cmd == "rx raw on") { runtimeDebugRxRaw = true; Serial.println(F("[RX] raw on")); }
   else if (cmd == "rx raw off") { runtimeDebugRxRaw = false; Serial.println(F("[RX] raw off")); }
   else if (cmd == "rx ok on") { runtimeDebugRxOK = true; Serial.println(F("[RX] ok on")); }
@@ -6022,6 +6375,12 @@ void serviceDisplayAndTouch() {
   // Dengan ini data lokal dari agregasi 0,5 detik tidak menunggu reconnect MQTT
   // atau retry SD runtime.
   handleTouchNavigation();
+
+  static unsigned long lastHeaderClockRefreshMs = 0;
+  if (!needFullRedraw && millis() - lastHeaderClockRefreshMs >= 50UL) {
+    lastHeaderClockRefreshMs = millis();
+    drawHeaderClock(false);
+  }
 
   bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
   if (needFullRedraw || doPartialUpdate) {
