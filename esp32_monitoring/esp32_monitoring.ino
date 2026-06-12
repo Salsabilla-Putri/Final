@@ -51,6 +51,14 @@
 #include <Adafruit_FT6206.h>
 #include <math.h>
 
+#if __has_include(<PNGdec.h>)
+  #include <PNGdec.h>
+  #define GENSYS_HAS_PNGDEC 1
+#else
+  #define GENSYS_HAS_PNGDEC 0
+#endif
+
+
 // ============================================================
 // USER CONFIG
 // ============================================================
@@ -277,6 +285,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 #define C_PRIMARY  0x1234
 #define C_PRIMARY2 0x1A76
 #define C_GREEN    0x15D0
+#define C_YELLOW   0xFFE0
 #define C_ORANGE   0xFB82
 #define C_RED      0xEA28
 #define C_DARK     0x08A5
@@ -315,12 +324,13 @@ SemaphoreHandle_t dataMutex = NULL;
 const char* DB_FILE = "/sdDatabase.csv";
 const char* DB_LEGACY_FILE = "/database.csv";  // File lama tidak dipakai lagi agar mulai bersih dengan sdDatabase.csv.
 const char* FFT_FILE = "/fft.csv";
+const char* BOOT_LOGO_PNG_FILE = "/logo.png";
 
 // Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
 // Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
 const char* DB_CSV_HEADER =
   "recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,"
-  "freq,volt,currentA,powerKW,phase_diff,sync,powerSource,synced,syncStatus";
+  "freq,volt,currentA,powerKW,phase_diff,powerSource";
 
 // Header CSV FFT lokal. Format fft_bins_xy: freqHz:magnitude|freqHz:magnitude|...
 const char* FFT_CSV_HEADER =
@@ -964,6 +974,43 @@ unsigned long serialLogIntervalMs = 3000;
 unsigned long lastSerialLogMs = 0;
 
 // ============================================================
+// THRESHOLD WARNA LCD
+// ============================================================
+// Normal = hijau, warning = kuning, kritis = merah.
+#define THRESH_VOLT_WARN_HI     240.0f
+#define THRESH_VOLT_CRIT_HI     250.0f
+#define THRESH_VOLT_WARN_LO     200.0f
+#define THRESH_VOLT_CRIT_LO     180.0f
+#define THRESH_FREQ_WARN_HI      51.0f
+#define THRESH_FREQ_CRIT_HI      52.0f
+#define THRESH_FREQ_WARN_LO      49.0f
+#define THRESH_FREQ_CRIT_LO      48.0f
+#define THRESH_PHASE_WARN_ABS    10.0f
+#define THRESH_PHASE_CRIT_ABS    20.0f
+#define THRESH_POWER_WARN_HI      8.0f
+#define THRESH_POWER_CRIT_HI     12.0f
+#define THRESH_CURRENT_WARN_HI   40.0f
+#define THRESH_CURRENT_CRIT_HI   55.0f
+#define THRESH_RPM_WARN_HI     4500.0f
+#define THRESH_RPM_CRIT_HI     5500.0f
+#define THRESH_AFR_WARN_HI       16.0f
+#define THRESH_AFR_CRIT_HI       18.0f
+#define THRESH_AFR_WARN_LO       12.0f
+#define THRESH_AFR_CRIT_LO       10.5f
+#define THRESH_MAP_WARN_HI       95.0f
+#define THRESH_MAP_CRIT_HI      105.0f
+#define THRESH_BATT_WARN_HI      14.5f
+#define THRESH_BATT_CRIT_HI      15.5f
+#define THRESH_BATT_WARN_LO      11.5f
+#define THRESH_BATT_CRIT_LO      10.5f
+#define THRESH_FUEL_WARN_LO      30.0f
+#define THRESH_FUEL_CRIT_LO      15.0f
+#define THRESH_IAT_WARN_HI       55.0f
+#define THRESH_IAT_CRIT_HI       70.0f
+#define THRESH_CLT_WARN_HI       90.0f
+#define THRESH_CLT_CRIT_HI      105.0f
+
+// ============================================================
 // HELPER
 // ============================================================
 const char* fmtF(float v, int d = 1) {
@@ -980,7 +1027,7 @@ String formatBytes(uint64_t bytes) {
 
 uint16_t valColor(float v, float warnHi, float dangerHi, float warnLo = -1e9, float dangerLo = -1e9) {
   if (v >= dangerHi || v <= dangerLo) return C_RED;
-  if (v >= warnHi || v <= warnLo) return C_ORANGE;
+  if (v >= warnHi || v <= warnLo) return C_YELLOW;
   return C_GREEN;
 }
 
@@ -3289,17 +3336,9 @@ bool ensureCsvFileExistsNoLock(const char* path,
   if (existingHeader != String(header) || existingHeader.indexOf(requiredHeaderToken) < 0) {
     Serial.print(F("[SD] Header "));
     Serial.print(path);
-    Serial.println(F(" lama/tidak sesuai. Tidak membuat sdDatabase_old.csv; hanya pakai sdDatabase.csv sesuai request."));
-
-    if (canAppendExistingCsvNoLock(path)) {
-      Serial.println(F("[SD] sdDatabase.csv lama masih bisa di-append; lanjut pakai file yang sama tanpa backup."));
-      sdLastFileOkMs = millis();
-      return true;
-    }
-
-    Serial.println(F("[SD] sdDatabase.csv ada tetapi tidak bisa di-append. Hapus file secara manual atau format ulang FAT32 jika ingin dibuat ulang."));
-    sdLastFileErrorMs = millis();
-    return false;
+    Serial.println(F(" lama/tidak sesuai. File dibuat ulang agar kolom CSV mengikuti format terbaru."));
+    SD.remove(path);
+    return createFreshFn();
   }
 
   sdLastFileOkMs = millis();
@@ -3436,10 +3475,7 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.currentAvg, 2); line += ",";
   line += String(a.powerAvg, 3); line += ",";
   line += String(a.phaseAngleAvg, 2); line += ",";
-  line += getSyncTextFromAggregate(a); line += ",";
-  line += getPowerSourceFromAggregate(a); line += ",";
-  line += String(a.synced ? 1 : 0); line += ",";
-  line += getSyncTextFromAggregate(a);
+  line += getPowerSourceFromAggregate(a);
 
   return line;
 }
@@ -4418,38 +4454,32 @@ void setupWiFiManager() {
   Serial.println(EDUROAM_SSID);
 
   // Eduroam hanya dicoba 1 kali saat boot. Ini mengikuti kode lama yang stabil.
-  // Jika gagal, sistem fallback ke WiFiManager. Saat runtime, jangan panggil
-  // connectEduroam() lagi; cukup WiFi.reconnect().
+  // Jika gagal, sistem tidak menampilkan pilihan di LCD; operator memilih
+  // wifi portal / wifi eduroam dari Serial Monitor.
   if (connectEduroam(true)) {
     Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
     Serial.println(F("╚══════════════════════════════════════════════╝"));
     return;
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal saat boot. Masuk fallback AP WiFiManager."));
+  Serial.println(F("[WIFI] Eduroam gagal saat boot. Menunggu pilihan dari Serial Monitor."));
 #else
-  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung membuka fallback AP WiFiManager."));
+  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, menunggu pilihan dari Serial Monitor."));
 #endif
 
   // connectEduroam() yang gagal sudah memanggil prepareNormalWiFiMode().
-  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum portal.
+  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum menunggu command Serial.
 #if !USE_EDUROAM_FIRST
   prepareNormalWiFiMode();
 #endif
 
-  if (connectWiFiFromLcdSelection()) {
-    Serial.println(F("[WIFI] Mode koneksi: LCD WIFI SELECT / SAVED WIFI"));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return;
-  }
-
-  if (connectWiFiManagerFallback()) {
-    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER / SAVED WIFI"));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return;
-  }
-
-  Serial.println(F("[WIFI] Tidak terkoneksi. Sistem berjalan offline."));
+  Serial.println(F("[WIFI] Pemilihan WiFi lewat LCD dinonaktifkan."));
+  Serial.println(F("[WIFI] Pilih koneksi dari Serial Monitor saja:"));
+  Serial.println(F("[WIFI]   wifi portal  -> buka Configure WiFi AP GenTrack-Monitor-AP"));
+  Serial.println(F("[WIFI]   wifi eduroam -> coba ulang eduroam WPA2-Enterprise"));
+  Serial.println(F("[WIFI] Sistem berjalan offline sampai command Serial dipilih."));
+  wifiOK = false;
+  wifiConnectionMode = WIFI_MODE_OFFLINE;
   Serial.println(F("╚══════════════════════════════════════════════╝"));
 }
 
@@ -4680,12 +4710,90 @@ void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   drawPulseLine(cx, cy + 2, orange);
 }
 
+
+#if GENSYS_HAS_PNGDEC
+PNG bootLogoPng;
+File bootLogoFile;
+int bootLogoX = 0;
+int bootLogoY = 0;
+uint16_t bootLogoLine[SW];
+
+void *pngSdOpen(const char *filename, int32_t *size) {
+  bootLogoFile = SD.open(filename, FILE_READ);
+  if (!bootLogoFile) return NULL;
+  *size = bootLogoFile.size();
+  return &bootLogoFile;
+}
+
+void pngSdClose(void *handle) {
+  File *f = static_cast<File*>(handle);
+  if (f && *f) f->close();
+}
+
+int32_t pngSdRead(PNGFILE *page, uint8_t *buffer, int32_t length) {
+  File *f = static_cast<File*>(page->fHandle);
+  if (!f || !*f) return 0;
+  return f->read(buffer, length);
+}
+
+int32_t pngSdSeek(PNGFILE *page, int32_t position) {
+  File *f = static_cast<File*>(page->fHandle);
+  if (!f || !*f) return 0;
+  return f->seek(position) ? position : 0;
+}
+
+void pngDrawToTft(PNGDRAW *pDraw) {
+  uint16_t width = pDraw->iWidth;
+  if (width > SW) width = SW;
+  bootLogoPng.getLineAsRGB565(pDraw, bootLogoLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
+  tft.pushImage(bootLogoX, bootLogoY + pDraw->y, width, 1, bootLogoLine);
+}
+#endif
+
+bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
+  if (!sdOK) return false;
+
+#if GENSYS_HAS_PNGDEC
+  if (!SD.exists(BOOT_LOGO_PNG_FILE)) return false;
+  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+
+  bool ok = false;
+  deselectAllSPI();
+  int rc = bootLogoPng.open(BOOT_LOGO_PNG_FILE, pngSdOpen, pngSdClose, pngSdRead, pngSdSeek, pngDrawToTft);
+  if (rc == PNG_SUCCESS) {
+    int pngW = bootLogoPng.getWidth();
+    int pngH = bootLogoPng.getHeight();
+    if (pngW > 0 && pngH > 0 && pngW <= maxW && pngH <= maxH) {
+      bootLogoX = cx - (pngW / 2);
+      bootLogoY = cy - (pngH / 2);
+      tft.fillRect(cx - maxW / 2, cy - maxH / 2, maxW, maxH, C_WHITE);
+      ok = bootLogoPng.decode(NULL, 0) == PNG_SUCCESS;
+    }
+    bootLogoPng.close();
+  }
+
+  if (sdMutex != NULL) xSemaphoreGive(sdMutex);
+  if (!ok) {
+    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pastikan file PNG muat area boot <=156x156 px dan library PNGdec tersedia."));
+  }
+  return ok;
+#else
+  static bool warned = false;
+  if (!warned) {
+    Serial.println(F("[BOOT LOGO] PNGdec tidak tersedia saat compile; /logo.png tidak bisa dibaca dan memakai logo vektor fallback."));
+    warned = true;
+  }
+  return false;
+#endif
+}
+
 void drawBootSplashStep(const char* statusText, int progress) {
   // Boot page di-render penuh hanya sekali. Step berikutnya hanya update loading bar
   // dan status text agar layar tidak flicker/berkedip saat proses init berjalan.
   static bool bootBaseDrawn = false;
   static int lastProgress = -1;
   static String lastStatus = "";
+  static bool logoFromSdDrawn = false;
 
   int barX = 80;
   int barY = 292;
@@ -4696,7 +4804,8 @@ void drawBootSplashStep(const char* statusText, int progress) {
 
   if (!bootBaseDrawn || progress <= 0) {
     tft.fillScreen(C_WHITE);
-    drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
+    logoFromSdDrawn = drawBootLogoFromSd(SW / 2, 98, 156, 156);
+    if (!logoFromSdDrawn) drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
 
     tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextDatum(MC_DATUM);
@@ -4713,6 +4822,10 @@ void drawBootSplashStep(const char* statusText, int progress) {
     bootBaseDrawn = true;
     lastProgress = -1;
     lastStatus = "";
+  }
+
+  if (!logoFromSdDrawn && sdOK) {
+    logoFromSdDrawn = drawBootLogoFromSd(SW / 2, 98, 156, 156);
   }
 
   if (progress != lastProgress) {
@@ -4991,25 +5104,25 @@ void drawGeneratorPage(bool full) {
 
   if (forceValueUpdate || changedFloat(lastVoltGen, d.voltAvg, 0.5f)) {
     drawSemiGauge(14, 52, 46, d.voltAvg, 180.0f, 250.0f, "VOLT GEN", fmtF(d.voltAvg, 0), "V",
-                  valColor(d.voltAvg, 240, 250, 200, 180));
+                  valColor(d.voltAvg, THRESH_VOLT_WARN_HI, THRESH_VOLT_CRIT_HI, THRESH_VOLT_WARN_LO, THRESH_VOLT_CRIT_LO));
     lastVoltGen = d.voltAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastFreqGen, d.freqAvg, 0.02f)) {
     drawSemiGauge(170, 52, 46, d.freqAvg, 45.0f, 55.0f, "FREQ GEN", fmtF(d.freqAvg, 2), "Hz",
-                  valColor(d.freqAvg, 51.0, 52.0, 49.0, 48.0));
+                  valColor(d.freqAvg, THRESH_FREQ_WARN_HI, THRESH_FREQ_CRIT_HI, THRESH_FREQ_WARN_LO, THRESH_FREQ_CRIT_LO));
     lastFreqGen = d.freqAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastVoltGrid, d.voltGridAvg, 0.5f)) {
     drawSemiGauge(14, 170, 46, d.voltGridAvg, 180.0f, 250.0f, "VOLT GRID", fmtF(d.voltGridAvg, 0), "V",
-                  valColor(d.voltGridAvg, 240, 250, 200, 180));
+                  valColor(d.voltGridAvg, THRESH_VOLT_WARN_HI, THRESH_VOLT_CRIT_HI, THRESH_VOLT_WARN_LO, THRESH_VOLT_CRIT_LO));
     lastVoltGrid = d.voltGridAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastFreqGrid, d.freqGridAvg, 0.02f)) {
     drawSemiGauge(170, 170, 46, d.freqGridAvg, 45.0f, 55.0f, "FREQ GRID", fmtF(d.freqGridAvg, 2), "Hz",
-                  valColor(d.freqGridAvg, 51.0, 52.0, 49.0, 48.0));
+                  valColor(d.freqGridAvg, THRESH_FREQ_WARN_HI, THRESH_FREQ_CRIT_HI, THRESH_FREQ_WARN_LO, THRESH_FREQ_CRIT_LO));
     lastFreqGrid = d.freqGridAvg;
   }
 
@@ -5017,25 +5130,25 @@ void drawGeneratorPage(bool full) {
   // Semua card hanya di-render ulang jika nilainya berubah atau saat ganti page.
   if (forceValueUpdate || changedFloat(lastPhase, d.phaseAngleAvg, 0.1f)) {
     drawValueBox(326, 50, 140, 50, "PHASE", fmtF(d.phaseAngleAvg, 1), "deg",
-                 abs(d.phaseAngleAvg) < 10 ? C_GREEN : abs(d.phaseAngleAvg) < 20 ? C_ORANGE : C_RED);
+                 abs(d.phaseAngleAvg) < THRESH_PHASE_WARN_ABS ? C_GREEN : abs(d.phaseAngleAvg) < THRESH_PHASE_CRIT_ABS ? C_YELLOW : C_RED);
     lastPhase = d.phaseAngleAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastPowerKW, d.powerAvg, 0.02f)) {
     drawValueBox(326, 106, 140, 50, "POWER", fmtF(d.powerAvg, 2), "kW",
-                 valColor(d.powerAvg, 8.0, 12.0, -1e9, -1e9));
+                 valColor(d.powerAvg, THRESH_POWER_WARN_HI, THRESH_POWER_CRIT_HI, -1e9, -1e9));
     lastPowerKW = d.powerAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastCurrentA, d.currentAvg, 0.1f)) {
     drawValueBox(326, 162, 140, 50, "CURRENT", fmtF(d.currentAvg, 1), "A",
-                 valColor(d.currentAvg, 40.0, 55.0, -1e9, -1e9));
+                 valColor(d.currentAvg, THRESH_CURRENT_WARN_HI, THRESH_CURRENT_CRIT_HI, -1e9, -1e9));
     lastCurrentA = d.currentAvg;
   }
 
   const char* syncStatus = getDisplaySyncTextFromAggregate(d);
   if (forceValueUpdate || full || d.synced != lastSynced || lastSyncStatus != String(syncStatus)) {
-    uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_ORANGE : (strcmp(syncStatus, "GRID") == 0 ? C_BLUE2 : C_GREEN));
+    uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_YELLOW : (strcmp(syncStatus, "GRID") == 0 ? C_BLUE2 : C_GREEN));
     drawValueBox(326, 218, 140, 56, "SYNC STATUS", syncStatus, "", syncColor);
     lastSynced = d.synced;
     lastSyncStatus = syncStatus;
@@ -5071,19 +5184,19 @@ void drawEnginePage(bool full) {
 
   if (forceValueUpdate || changedFloat(lastRpm, d.rpmAvg, 5.0f)) {
     drawSemiGauge(14, 52, 46, d.rpmAvg, 0.0f, 6000.0f, "ENGINE RPM", fmtF(d.rpmAvg, 0), "rpm",
-                  valColor(d.rpmAvg, 4500, 5500, -1e9, -1e9));
+                  valColor(d.rpmAvg, THRESH_RPM_WARN_HI, THRESH_RPM_CRIT_HI, -1e9, -1e9));
     lastRpm = d.rpmAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastAfr, d.afrAvg, 0.05f)) {
     drawSemiGauge(170, 52, 46, d.afrAvg, 10.0f, 20.0f, "AFR", fmtF(d.afrAvg, 1), "",
-                  valColor(d.afrAvg, 16.0, 18.0, 12.0, 10.5));
+                  valColor(d.afrAvg, THRESH_AFR_WARN_HI, THRESH_AFR_CRIT_HI, THRESH_AFR_WARN_LO, THRESH_AFR_CRIT_LO));
     lastAfr = d.afrAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastMap, d.mapAvg, 0.5f)) {
     drawSemiGauge(326, 52, 46, d.mapAvg, 20.0f, 105.0f, "MAP", fmtF(d.mapAvg, 0), "kPa",
-                  valColor(d.mapAvg, 95, 105, -1e9, -1e9));
+                  valColor(d.mapAvg, THRESH_MAP_WARN_HI, THRESH_MAP_CRIT_HI, -1e9, -1e9));
     lastMap = d.mapAvg;
   }
 
@@ -5101,7 +5214,7 @@ void drawEnginePage(bool full) {
 
   if (forceValueUpdate || changedFloat(lastFuel, d.fuelAvg, 0.5f)) {
     drawLineBar(28, 253, 145, 12, d.fuelAvg, 0.0f, 100.0f,
-                d.fuelAvg > 30 ? C_GREEN : d.fuelAvg > 15 ? C_ORANGE : C_RED, "Fuel");
+                d.fuelAvg > THRESH_FUEL_WARN_LO ? C_GREEN : d.fuelAvg > THRESH_FUEL_CRIT_LO ? C_YELLOW : C_RED, "Fuel");
     lastFuel = d.fuelAvg;
   }
 
@@ -5111,19 +5224,19 @@ void drawEnginePage(bool full) {
 
   if (forceValueUpdate || changedFloat(lastBatt, d.battAvg, 0.05f)) {
     drawValueCard(256, 205, 62, 58, "Battery", fmtF(d.battAvg, 1), "V",
-                  valColor(d.battAvg, 14.5, 15.5, 11.5, 10.5));
+                  valColor(d.battAvg, THRESH_BATT_WARN_HI, THRESH_BATT_CRIT_HI, THRESH_BATT_WARN_LO, THRESH_BATT_CRIT_LO));
     lastBatt = d.battAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastIat, d.iatAvg, 0.5f)) {
     drawValueCard(326, 205, 62, 58, "IAT", fmtF(d.iatAvg, 0), "C",
-                  valColor(d.iatAvg, 55, 70, -1e9, -1e9));
+                  valColor(d.iatAvg, THRESH_IAT_WARN_HI, THRESH_IAT_CRIT_HI, -1e9, -1e9));
     lastIat = d.iatAvg;
   }
 
   if (forceValueUpdate || changedFloat(lastClt, d.cltAvg, 0.5f)) {
     drawValueCard(396, 205, 62, 58, "Coolant", fmtF(d.cltAvg, 0), "C",
-                  valColor(d.cltAvg, 90, 105, -1e9, -1e9));
+                  valColor(d.cltAvg, THRESH_CLT_WARN_HI, THRESH_CLT_CRIT_HI, -1e9, -1e9));
     lastClt = d.cltAvg;
   }
 
@@ -6179,7 +6292,8 @@ void processSerialCommand(String cmd) {
   else if (cmd == "page generator") { if (activePage != PAGE_GENERATOR) { activePage = PAGE_GENERATOR; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] generator")); }
   else if (cmd == "page engine") { if (activePage != PAGE_ENGINE) { activePage = PAGE_ENGINE; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] engine")); }
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
-  else if (cmd == "configurewifi" || cmd == "configure wifi" || cmd == "wifi portal") { Serial.println(F("[WIFI] Manual Configure WiFi portal requested.")); prepareNormalWiFiMode(); connectWiFiManagerFallback(); needFullRedraw = true; }
+  else if (cmd == "configurewifi" || cmd == "configure wifi" || cmd == "wifi portal") { Serial.println(F("[WIFI] Manual Configure WiFi portal requested from Serial Monitor.")); prepareNormalWiFiMode(); connectWiFiManagerFallback(); needFullRedraw = true; }
+  else if (cmd == "wifi eduroam" || cmd == "eduroam") { Serial.println(F("[WIFI] Manual eduroam retry requested from Serial Monitor.")); connectEduroam(false); needFullRedraw = true; }
   else if (cmd == "rx raw on") { runtimeDebugRxRaw = true; Serial.println(F("[RX] raw on")); }
   else if (cmd == "rx raw off") { runtimeDebugRxRaw = false; Serial.println(F("[RX] raw off")); }
   else if (cmd == "rx ok on") { runtimeDebugRxOK = true; Serial.println(F("[RX] ok on")); }
