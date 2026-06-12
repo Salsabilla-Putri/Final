@@ -294,7 +294,7 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 
 #define SD_SPI_FREQ_INIT 400000UL
 #define SD_SPI_FREQ_FAST 1000000UL
-#define SD_AUTO_RETRY_INTERVAL_MS 1000UL
+#define SD_AUTO_RETRY_INTERVAL_MS 5000UL
 
 SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
@@ -3301,85 +3301,38 @@ void ensureDatabaseCsvHeader() {
 
 void initSDCard() {
   Serial.println();
-  Serial.println(F("════════════ SD CARD INIT ════════════"));
+  Serial.println("════════════ SD CARD INIT ════════════");
 
   sdOK = false;
-
-  // Mengikuti konfigurasi test SD yang berhasil pada modul TFT ILI9488/ILI9486.
-  // SD card on-board TFT memakai HSPI terpisah dan perlu semua CS dinonaktifkan
-  // sebelum SD.begin(), terutama karena TFT dan SD berbagi lingkungan SPI.
-  pinMode(TFT_CS, OUTPUT);
-  pinMode(SD_CS, OUTPUT);
-
-  digitalWrite(TFT_CS, HIGH);
-  digitalWrite(SD_CS, HIGH);
-
-  delay(1000);
-
+  deselectAllSPI();
+  delay(250);
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  delay(300);
+  delay(750); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
 
   bool begun = false;
-
-  for (uint8_t attempt = 1; attempt <= 10; attempt++) {
-    Serial.print(F("SD INIT ATTEMPT "));
+  for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+    Serial.print(F("[SD] Init attempt "));
     Serial.print(attempt);
-    Serial.print(F("/10 ... "));
-
-    digitalWrite(TFT_CS, HIGH);
-    digitalWrite(SD_CS, HIGH);
-    delay(100);
-
-    if (SD.begin(SD_CS, sdSPI, 400000UL)) {
-      if (SD.cardType() != CARD_NONE) {
-        begun = true;
-        Serial.println(F("OK"));
-        break;
-      }
+    Serial.println(F("/3..."));
+    deselectAllSPI();
+    delay(250);
+    if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT)) {
+      begun = true;
+      break;
     }
-
-    Serial.println(F("FAILED"));
-    SD.end();
-    delay(500);
+    delay(1000);
   }
 
   if (!begun) {
     sdOK = false;
-    Serial.println(F("SD INIT FAILED FINAL"));
-    Serial.println(F("[SD] Cek wiring/pin: CS=26, MOSI=13, MISO=12, SCK=14, format FAT32."));
-    Serial.println(F("══════════════════════════════════════"));
+    Serial.println("[SD] GAGAL. Cek CS=26, MOSI=13, MISO=12, SCK=14, FAT32.");
+    Serial.println("══════════════════════════════════════");
     return;
   }
 
+  delay(500);
   sdOK = true;
-  sdConsecutiveOpenFail = 0;
-  sdLastFileOkMs = millis();
-
-  Serial.println(F("[SD] OK."));
-  Serial.print(F("[SD] Card type : "));
-  uint8_t cardType = SD.cardType();
-  if (cardType == CARD_MMC) Serial.println(F("MMC"));
-  else if (cardType == CARD_SD) Serial.println(F("SDSC"));
-  else if (cardType == CARD_SDHC) Serial.println(F("SDHC"));
-  else Serial.println(F("UNKNOWN"));
-
-  Serial.print(F("[SD] Card size : "));
-  Serial.println(formatBytes(SD.cardSize()));
-
-  // Test tulis singkat seperti sketch SD test, tetapi memakai nama khusus agar
-  // tidak mengganggu database utama.
-  File testFile = SD.open("/sd_init_test.txt", FILE_WRITE);
-  if (!testFile) {
-    Serial.println(F("[SD] OPEN TEST FILE FAILED"));
-    sdOK = false;
-    sdLastFileErrorMs = millis();
-    Serial.println(F("══════════════════════════════════════"));
-    return;
-  }
-
-  testFile.println(F("SD card test OK"));
-  testFile.close();
-  Serial.println(F("[SD] WRITE TEST OK"));
+  Serial.println("[SD] OK.");
 
   if (sdMutex == NULL || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000)) == pdTRUE) {
     ensureDatabaseCsvHeader();
@@ -3389,7 +3342,7 @@ void initSDCard() {
   }
 
   updateStorageCache();
-  Serial.println(F("══════════════════════════════════════"));
+  Serial.println("══════════════════════════════════════");
 }
 
 
@@ -5930,7 +5883,7 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println("BOOTING GENSYS ESP32-2 INDUSTRIAL HMI - SD BEFORE TFT SAFE V4");
+  Serial.println("BOOTING GENSYS ESP32-2 INDUSTRIAL HMI - SD STABLE ORDER");
 
   memset(&latestRaw, 0, sizeof(latestRaw));
   memset(&aggData, 0, sizeof(aggData));
@@ -5976,28 +5929,7 @@ void setup() {
   LinkSerial.begin(LINK_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
   LinkSerial.setTimeout(20);
 
-  xTaskCreatePinnedToCore(
-    UartRxTask,
-    "UartRxTask",
-    LINK_RX_TASK_STACK_WORDS,
-    NULL,
-    LINK_RX_TASK_PRIORITY,
-    NULL,
-    1
-  );
-
-  // ============================================================
-  // SD INIT SEBELUM TFT INIT
-  // ============================================================
-  // Urutan ini sengaja dibuat sama prinsipnya dengan sketch SD basic
-  // yang berhasil: SD diinisialisasi saat bus masih bersih, sebelum
-  // tft.init(), touch, WiFi, MQTT, dan task FreeRTOS berjalan.
-  Serial.println(F("[BOOT] Initializing SD before TFT..."));
-  deselectAllSPI();
-  initSDCard();
-  deselectAllSPI();
-
-  // TFT init setelah SD selesai agar TFT tidak mengganggu proses SD.begin().
+  // TFT init dulu seperti versi yang terbukti bisa mount SD onboard TFT.
   pinMode(CTP_RST, OUTPUT);
   digitalWrite(CTP_RST, LOW); delay(10);
   digitalWrite(CTP_RST, HIGH); delay(100);
@@ -6017,7 +5949,10 @@ void setup() {
     Serial.println("[TOUCH] OK.");
   }
 
-  drawBootSplashStep(sdOK ? "Local SD database mounted" : "SD offline - continuing", 40);
+  drawBootSplashStep("Mounting local SD database...", 40);
+  initSDCard();
+
+  drawBootSplashStep(sdOK ? "Local SD database mounted" : "SD offline - continuing", 50);
 
   drawBootSplashStep("Starting WiFi manager...", 58);
   setupWiFiManager();
@@ -6036,6 +5971,17 @@ void setup() {
   }
 
   drawBootSplashStep("Starting realtime sensor tasks...", 94);
+
+  xTaskCreatePinnedToCore(
+    UartRxTask,
+    "UartRxTask",
+    LINK_RX_TASK_STACK_WORDS,
+    NULL,
+    LINK_RX_TASK_PRIORITY,
+    NULL,
+    1
+  );
+
   xTaskCreatePinnedToCore(
     SensorTask50Hz,
     "SensorTask50Hz",
