@@ -3386,23 +3386,27 @@ void initSDCard() {
   Serial.println("════════════ SD CARD INIT ════════════");
 
   sdOK = false;
+  SD.end();
   deselectAllSPI();
-  delay(250);
+  delay(300);
+  sdSPI.end();
+  delay(50);
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  delay(750); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
+  delay(900); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
 
   bool begun = false;
-  for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
     Serial.print(F("[SD] Init attempt "));
     Serial.print(attempt);
-    Serial.println(F("/3..."));
+    Serial.println(F("/5..."));
+    SD.end();
     deselectAllSPI();
-    delay(250);
-    if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT)) {
+    delay(150 + attempt * 100);
+    if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
       begun = true;
       break;
     }
-    delay(1000);
+    delay(700);
   }
 
   if (!begun) {
@@ -3415,6 +3419,26 @@ void initSDCard() {
   delay(500);
   sdOK = true;
   Serial.println("[SD] OK.");
+
+  // Setelah mount stabil di 400 kHz, naikkan SPI SD secara konservatif.
+  // Jika kartu/modul sensitif, operasi file tetap aman karena setiap akses
+  // diawali deselectAllSPI() dan retry runtime akan kembali ke init lambat.
+  SD.end();
+  delay(50);
+  if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_FAST) && SD.cardType() != CARD_NONE) {
+    Serial.println(F("[SD] SPI switched to stable fast mode."));
+  } else {
+    Serial.println(F("[SD] Fast mode failed, remounting at init speed."));
+    SD.end();
+    delay(50);
+    sdOK = SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE;
+  }
+
+  if (!sdOK) {
+    Serial.println(F("[SD] Remount after speed switch failed; SD marked offline."));
+    Serial.println("══════════════════════════════════════");
+    return;
+  }
 
   if (sdMutex == NULL || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000)) == pdTRUE) {
     ensureDatabaseCsvHeader();
@@ -4462,22 +4486,34 @@ void setupWiFiManager() {
     return;
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal saat boot. Menunggu pilihan dari Serial Monitor."));
+  Serial.println(F("[WIFI] Eduroam gagal saat boot. Lanjut ke pilihan LCD / WiFiManager."));
 #else
-  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, menunggu pilihan dari Serial Monitor."));
+  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung ke pilihan LCD / WiFiManager."));
 #endif
 
   // connectEduroam() yang gagal sudah memanggil prepareNormalWiFiMode().
-  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum menunggu command Serial.
+  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum membuka portal.
 #if !USE_EDUROAM_FIRST
   prepareNormalWiFiMode();
 #endif
 
-  Serial.println(F("[WIFI] Pemilihan WiFi lewat LCD dinonaktifkan."));
-  Serial.println(F("[WIFI] Pilih koneksi dari Serial Monitor saja:"));
-  Serial.println(F("[WIFI]   wifi portal  -> buka Configure WiFi AP GenTrack-Monitor-AP"));
-  Serial.println(F("[WIFI]   wifi eduroam -> coba ulang eduroam WPA2-Enterprise"));
-  Serial.println(F("[WIFI] Sistem berjalan offline sampai command Serial dipilih."));
+  Serial.println(F("[WIFI] Jika touch terdeteksi, operator bisa memilih SSID di LCD."));
+  Serial.println(F("[WIFI] Jika timeout/touch tidak ada, WiFiManager dibuka otomatis."));
+
+  if (connectWiFiFromLcdSelection()) {
+    Serial.println(F("[WIFI] Connected from LCD selection."));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
+
+  if (connectWiFiManagerFallback()) {
+    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER"));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println(F("[WIFI] Tidak ada koneksi saat boot; sistem tetap jalan offline."));
+  Serial.println(F("[WIFI] Command Serial tetap tersedia: wifi portal / wifi eduroam."));
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
   Serial.println(F("╚══════════════════════════════════════════════╝"));
@@ -4677,36 +4713,40 @@ void drawPulseLine(int cx, int cy, uint16_t color) {
 
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   (void)fg;
-  const uint16_t darkBlue = C_PRIMARY;
-  const uint16_t brightBlue = C_BLUE2;
-  const uint16_t orange = C_ORANGE;
+  // Warna fallback disetel mendekati logo referensi: navy gelap, biru elektrik,
+  // dan heartbeat oranye. Nilai RGB565 eksplisit menghindari warna kusam dari
+  // konstanta UI umum yang dipakai untuk panel monitoring.
+  const uint16_t darkBlue = 0x0015;
+  const uint16_t brightBlue = 0x049F;
+  const uint16_t orange = 0xFD20;
 
-  // Left gear teeth, matching the supplied GENSYS startup mark style.
-  for (int a = 135; a <= 245; a += 28) {
+  // Gigi gear sisi kiri. Kotak dibuat sedikit memutar secara visual lewat
+  // penempatan radial agar siluetnya lebih dekat dengan logo GENSYS referensi.
+  for (int a = 132; a <= 246; a += 28) {
     float rad = a * PI / 180.0f;
     int tx = cx + (int)(cos(rad) * (r + 8));
     int ty = cy + (int)(sin(rad) * (r + 8));
-    tft.fillRoundRect(tx - 13, ty - 13, 26, 26, 5, darkBlue);
+    tft.fillRoundRect(tx - 12, ty - 12, 24, 24, 5, darkBlue);
   }
 
-  // Circular arrows / gear ring.
-  drawThickArc(cx, cy, r, 22, 130, 270, darkBlue);
-  drawThickArc(cx, cy, r, 22, -88, -2, darkBlue);
-  drawThickArc(cx, cy, r, 22, -88, -2, brightBlue);
-  drawThickArc(cx, cy, r, 22, 28, 145, brightBlue);
+  // Ring G/circular arrows. Bagian kiri dan kanan bawah navy; panah atas dan
+  // kiri bawah biru seperti gambar referensi. Urutan gambar dibuat tanpa
+  // overwrite warna agar warna akhir tidak tercampur/keliru.
+  drawThickArc(cx, cy, r, 22, 130, 268, darkBlue);
   drawThickArc(cx, cy, r, 22, 0, 58, darkBlue);
+  drawThickArc(cx, cy, r, 22, 268, 360, brightBlue);
+  drawThickArc(cx, cy, r, 22, 205, 270, brightBlue);
 
-  // Arrow heads.
-  tft.fillTriangle(cx + r + 3, cy - 30, cx + r + 36, cy - 38, cx + r + 18, cy + 3, brightBlue);
-  tft.fillTriangle(cx - r - 6, cy + 36, cx - r + 28, cy + 28, cx - r + 2, cy + 70, brightBlue);
+  // Kepala panah: kanan atas dan kiri bawah.
+  tft.fillTriangle(cx + r + 2, cy - 32, cx + r + 34, cy - 40, cx + r + 18, cy + 2, brightBlue);
+  tft.fillTriangle(cx - r - 5, cy + 38, cx - r + 28, cy + 30, cx - r + 2, cy + 68, brightBlue);
 
-  // White center hole and right G gap.
+  // Lubang tengah putih serta gap vertikal/horizontal khas huruf G.
   tft.fillCircle(cx, cy, r - 25, bg);
-  tft.fillRect(cx + r - 12, cy - 8, 64, 16, bg);
-  tft.fillRect(cx + 5, cy - r - 20, 10, 42, bg);
-  tft.fillRect(cx + 5, cy + r - 22, 10, 44, bg);
+  tft.fillRect(cx + r - 12, cy - 8, 66, 18, bg);
+  tft.fillRect(cx + 4, cy - r - 22, 12, 44, bg);
+  tft.fillRect(cx + 4, cy + r - 22, 12, 46, bg);
 
-  // Orange heartbeat line.
   drawPulseLine(cx, cy + 2, orange);
 }
 
@@ -4716,7 +4756,11 @@ PNG bootLogoPng;
 File bootLogoFile;
 int bootLogoX = 0;
 int bootLogoY = 0;
-uint16_t bootLogoLine[SW];
+int bootLogoScale = 1;
+int bootLogoDrawW = 0;
+int bootLogoDrawH = 0;
+uint16_t bootLogoSrcLine[SW];
+uint16_t bootLogoDrawLine[SW];
 
 void *pngSdOpen(const char *filename, int32_t *size) {
   bootLogoFile = SD.open(filename, FILE_READ);
@@ -4743,10 +4787,28 @@ int32_t pngSdSeek(PNGFILE *page, int32_t position) {
 }
 
 void pngDrawToTft(PNGDRAW *pDraw) {
-  uint16_t width = pDraw->iWidth;
-  if (width > SW) width = SW;
-  bootLogoPng.getLineAsRGB565(pDraw, bootLogoLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
-  tft.pushImage(bootLogoX, bootLogoY + pDraw->y, width, 1, bootLogoLine);
+  uint16_t srcW = pDraw->iWidth;
+  if (srcW > SW) srcW = SW;
+
+  bootLogoPng.getLineAsRGB565(pDraw, bootLogoSrcLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
+
+  if (bootLogoScale <= 1) {
+    tft.pushImage(bootLogoX, bootLogoY + pDraw->y, srcW, 1, bootLogoSrcLine);
+    return;
+  }
+
+  if ((pDraw->y % bootLogoScale) != 0) return;
+
+  int outY = bootLogoY + (pDraw->y / bootLogoScale);
+  if (outY < bootLogoY || outY >= bootLogoY + bootLogoDrawH) return;
+
+  int outW = min(bootLogoDrawW, SW);
+  for (int x = 0; x < outW; x++) {
+    int srcX = x * bootLogoScale;
+    if (srcX >= srcW) srcX = srcW - 1;
+    bootLogoDrawLine[x] = bootLogoSrcLine[srcX];
+  }
+  tft.pushImage(bootLogoX, outY, outW, 1, bootLogoDrawLine);
 }
 #endif
 
@@ -4763,18 +4825,32 @@ bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
   if (rc == PNG_SUCCESS) {
     int pngW = bootLogoPng.getWidth();
     int pngH = bootLogoPng.getHeight();
-    if (pngW > 0 && pngH > 0 && pngW <= maxW && pngH <= maxH) {
-      bootLogoX = cx - (pngW / 2);
-      bootLogoY = cy - (pngH / 2);
+
+    if (pngW > 0 && pngH > 0 && pngW <= SW) {
+      bootLogoScale = max(1, max((pngW + maxW - 1) / maxW, (pngH + maxH - 1) / maxH));
+      bootLogoDrawW = max(1, pngW / bootLogoScale);
+      bootLogoDrawH = max(1, pngH / bootLogoScale);
+      bootLogoX = cx - (bootLogoDrawW / 2);
+      bootLogoY = cy - (bootLogoDrawH / 2);
+
       tft.fillRect(cx - maxW / 2, cy - maxH / 2, maxW, maxH, C_WHITE);
       ok = bootLogoPng.decode(NULL, 0) == PNG_SUCCESS;
+
+      Serial.print(F("[BOOT LOGO] /logo.png drawn from SD: "));
+      Serial.print(pngW);
+      Serial.print('x');
+      Serial.print(pngH);
+      Serial.print(F(" -> "));
+      Serial.print(bootLogoDrawW);
+      Serial.print('x');
+      Serial.println(bootLogoDrawH);
     }
     bootLogoPng.close();
   }
 
   if (sdMutex != NULL) xSemaphoreGive(sdMutex);
   if (!ok) {
-    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pastikan file PNG muat area boot <=156x156 px dan library PNGdec tersedia."));
+    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pakai PNG RGB/RGBA dengan lebar <=480 px; gambar akan diskalakan ke area boot."));
   }
   return ok;
 #else
@@ -6404,7 +6480,11 @@ void setup() {
   tft.init();
   tft.setRotation(1);
 
-  drawBootSplashStep("Initializing UART link...", 10);
+  // Mount SD sebelum boot splash pertama agar /logo.png bisa langsung tampil
+  // dari kartu SD. Jika gagal, drawBootSplashStep() tetap memakai logo vektor.
+  initSDCard();
+
+  drawBootSplashStep(sdOK ? "Local SD mounted - loading logo.png" : "SD offline - using fallback logo", 10);
 
   drawBootSplashStep("Initializing touch controller...", 25);
   Wire.begin(CTP_SDA, CTP_SCL);
@@ -6416,10 +6496,7 @@ void setup() {
     Serial.println("[TOUCH] OK.");
   }
 
-  drawBootSplashStep("Mounting local SD database...", 40);
-  initSDCard();
-
-  drawBootSplashStep(sdOK ? "Local SD database mounted" : "SD offline - continuing", 50);
+  drawBootSplashStep(sdOK ? "Local SD database ready" : "SD offline - continuing", 50);
 
   drawBootSplashStep("Starting WiFi manager...", 58);
   setupWiFiManager();
