@@ -210,7 +210,7 @@
 // Nilai ini tetap dipakai sebagai batas payload realtime biasa.
 // Batch besar tidak memakai mqtt.publish() agar tidak perlu buffer internal PubSubClient besar.
 #define MONGO_BATCH_STREAM_CHUNK_BYTES 512
-#define MONGO_BATCH_MAX_PAYLOAD_BYTES  80000UL
+#define MONGO_BATCH_MAX_PAYLOAD_BYTES  160000UL
 
 // Proteksi heap.
 #define HEAP_MIN_FREE_BYTES          25000UL
@@ -330,10 +330,12 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_BATCH_INTERVAL_MS 600000UL  // fallback buffer dikirim per 10 menit jika publish live tertahan
 #define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
-// MQTT broker/cloud sering menolak payload besar. Untuk fallback, buffer 600 record
-// dipecah menjadi 60 publish kecil berisi 10 record agar tetap diterima broker/cloud.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 10
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 20UL
+// Pengiriman fallback tetap mengikuti interval 10 menit. Saat interval tiba,
+// buffer 600 record dipecah menjadi 2 chunk besar berisi 300 record.
+// Jeda 500 ms antar chunk memberi waktu broker/backend memproses payload sebelum
+// chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
+#define MONGODB_UPLOAD_CHUNK_RECORDS 300
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 500UL
 
 // TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
@@ -2800,7 +2802,7 @@ void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi:
   // - mengirim fallback buffer sampai 600 record setiap 10 menit atau saat diminta,
-  // - default MQTT dipecah 10 record/publish agar tidak ditolak broker/cloud,
+  // - default MQTT dipecah 300 record/publish dengan jeda 500 ms antar chunk,
   // - tiap publish berisi payload.records[],
   // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
   // - record yang gagal tetap disimpan untuk retry berikutnya.
@@ -2890,7 +2892,7 @@ void sendMongoDbBufferToMongoDB() {
       Serial.println(batchPayload.length());
       Serial.print(F("[MONGO-MQTT] Max allowed         : "));
       Serial.println(MONGO_BATCH_MAX_PAYLOAD_BYTES);
-      Serial.println(F("[MONGO-MQTT] Solusi: turunkan MONGODB_UPLOAD_CHUNK_RECORDS atau kecilkan field JSON."));
+      Serial.println(F("[MONGO-MQTT] Solusi: cek broker limit, turunkan MONGODB_UPLOAD_CHUNK_RECORDS, atau kecilkan field JSON."));
       Serial.println(F("╚═════════════════════════════════════════════════╝"));
       break;
     }
@@ -3014,6 +3016,8 @@ void MongoBufferTask(void *pvParameters) {
     }
 
     bool intervalReached = (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS);
+    // Pengiriman otomatis tetap setiap 10 menit atau saat buffer penuh 600 record.
+    // Chunk 300 record hanya dipakai untuk memecah payload saat siklus upload berjalan.
     bool bufferFull = (bufferCountSnapshot >= MONGODB_BUFFER_RECORDS);
 
     if ((intervalReached || bufferFull || manualRequest) && bufferCountSnapshot > 0) {
