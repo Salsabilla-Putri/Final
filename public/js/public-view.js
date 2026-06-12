@@ -423,10 +423,10 @@ function calculateHealthByComponentAge(engineData = {}, cbmData = {}) {
 function getParameterIndicator(label, value, min, max) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return { label, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
-    if (numeric >= min && numeric <= max) return { label, text: 'Sehat', cls: 'ok', icon: 'fa-check-circle' };
+    if (numeric >= min && numeric <= max) return { label, text: 'Healthy', cls: 'ok', icon: 'fa-check-circle' };
     const criticalLow = min !== 0 && numeric < min * 0.85;
     const criticalHigh = numeric > max * 1.15;
-    if (criticalLow || criticalHigh) return { label, text: 'Kritis', cls: 'danger', icon: 'fa-circle-exclamation' };
+    if (criticalLow || criticalHigh) return { label, text: 'Critical', cls: 'danger', icon: 'fa-circle-exclamation' };
     return { label, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
 }
 
@@ -434,10 +434,10 @@ function getCbmIndicators(cbmData = {}) {
     const components = cbmData.components || cbmData.componentHealth || {};
     return Object.values(components).map((comp) => {
         const status = String(comp.status || '').toLowerCase();
-        const label = comp.name || comp.parameter || 'Sistem';
-        if (status === 'critical' || status === 'bad') return { label, text: 'Kritis', cls: 'danger', icon: 'fa-circle-exclamation' };
+        const label = comp.name || comp.parameter || 'System';
+        if (status === 'critical' || status === 'bad') return { label, text: 'Critical', cls: 'danger', icon: 'fa-circle-exclamation' };
         if (status === 'warning' || status === 'degraded') return { label, text: 'Warning', cls: 'warn', icon: 'fa-triangle-exclamation' };
-        if (status === 'good' || status === 'normal') return { label, text: 'Sehat', cls: 'ok', icon: 'fa-check-circle' };
+        if (status === 'good' || status === 'normal') return { label, text: 'Healthy', cls: 'ok', icon: 'fa-check-circle' };
         return null;
     }).filter(Boolean);
 }
@@ -472,6 +472,18 @@ function normalizeHealthIndicatorByAlertPolicy(item, recentActiveAlertCount) {
     return item;
 }
 
+function formatLastSyncStatus(data = {}) {
+    const raw = String(data.sync ?? data.syncStatus ?? data.powerSource ?? data.power_source ?? '').trim();
+    if (!raw) return '--';
+
+    const normalized = raw.toUpperCase().replace(/[\s_-]+/g, '-');
+    if (['SYNC', 'SYNCHRONIZED', 'SINKRON', 'SINKRONISASI', 'ON-GRID', 'ONGRID'].includes(normalized)) return 'SYNC';
+    if (['GENSET', 'GENERATOR', 'GEN', 'OFF-GRID', 'OFFGRID'].includes(normalized)) return 'GENSET';
+    if (['GRID', 'PLN', 'UTILITY', 'MAINS'].includes(normalized)) return 'GRID';
+    if (['OFF', 'STOPPED', 'DISCONNECTED'].includes(normalized)) return 'OFF';
+    return normalized;
+}
+
 function renderHealthScore(engineData, cbmData, alertRows = []) {
     const container = document.getElementById('systemHealthContainer');
     if (!container) return;
@@ -479,16 +491,16 @@ function renderHealthScore(engineData, cbmData, alertRows = []) {
     const runtimeHours = Number(engineData.engineHours) || dashboardTotalActiveHours || sumRuntimeHoursFromHistory(dashboardHistoryCache);
     const latestMaintenance = getLatestCompletedMaintenance(dashboardMaintenanceCache);
     const indicators = [
-        getParameterIndicator('Tegangan', engineData.volt ?? engineData.voltage, 200, 240),
-        getParameterIndicator('Frekuensi', engineData.freq ?? engineData.frequency, 48, 52),
-        getParameterIndicator('Bahan Bakar', engineData.fuel, 20, 100),
-        getParameterIndicator('Temperatur', engineData.coolant ?? engineData.temp ?? engineData.temperature, 40, 90),
-        getParameterIndicator('MAP', engineData.map, 20, 250),
+        getParameterIndicator('Generator Voltage', engineData.volt ?? engineData.voltage, 200, 240),
+        getParameterIndicator('Generator Frequency', engineData.freq ?? engineData.frequency, 48, 52),
+        getParameterIndicator('Fuel Level', engineData.fuel, 20, 100),
+        getParameterIndicator('Engine Temperature', engineData.coolant ?? engineData.temp ?? engineData.temperature, 40, 90),
+        getParameterIndicator('Battery Voltage', engineData.batt ?? engineData.battery ?? engineData.battVolt, 11.5, 14.8),
         ...getCbmIndicators(cbmData || {})
     ];
 
     const recentActiveAlertCount = countRecentActiveAlerts(alertRows, 24);
-    const policyIndicators = indicators.map((item) => normalizeHealthIndicatorByAlertPolicy(item, recentActiveAlertCount));
+    const policyIndicators = indicators;
 
     const uniqueIndicators = [];
     const seen = new Set();
@@ -508,18 +520,17 @@ function renderHealthScore(engineData, cbmData, alertRows = []) {
         return acc;
     }, {});
     const overallCls = counts.danger ? 'danger' : counts.warn ? 'warn' : 'ok';
-    const overallText = overallCls === 'danger' ? 'Kritis' : overallCls === 'warn' ? 'Perlu Perhatian' : 'Normal';
+    const overallText = overallCls === 'danger' ? 'Critical' : overallCls === 'warn' ? 'Needs Attention' : 'Normal';
     const healthHtml = `
         <div class="health-panel ${overallCls}">
             <div class="health-summary">
                 <div class="health-summary-icon"><i class="fas ${overallCls === 'ok' ? 'fa-shield-halved' : overallCls === 'warn' ? 'fa-triangle-exclamation' : 'fa-circle-exclamation'}"></i></div>
                 <div>
-                    <span>Status Sistem</span>
+                    <span>System Status</span>
                     <strong>${overallText}</strong>
-                    <small>${uniqueIndicators.length} parameter dipantau • ${recentActiveAlertCount} alert aktif/24 jam</small>
+                    <small>${uniqueIndicators.length} monitored parameters • ${recentActiveAlertCount} active alerts/24h</small>
                 </div>
             </div>
-            <div class="health-policy-note">Indikator merah hanya aktif jika lebih dari 3 alert masih aktif dalam 24 jam terakhir.</div>
             <div class="health-indicator-list">
                 ${uniqueIndicators.map((item) => `
                     <div class="health-indicator-item ${item.cls}">
@@ -537,11 +548,7 @@ function renderHealthScore(engineData, cbmData, alertRows = []) {
     const ageEl = document.getElementById('st-age');
     const runtimeEl = document.getElementById('st-runtime');
     const lastMaintEl = document.getElementById('st-last-maint');
-    const source = getPowerSourceStatus(engineData);
-    const serverTs = engineData.lastUpdated || engineData.serverReceivedAt || engineData.realtimeReceivedAt || engineData.lastMqttUpdate;
-    const ageMs = getDataAgeMs(serverTs);
-    const ageText = Number.isFinite(ageMs) ? ` • update ${Math.max(0, Math.round(ageMs / 1000))} dtk lalu` : '';
-    if (ageEl) ageEl.textContent = engineData.ecuConnected === true ? `ECU Connected • ${source.label}${ageText}` : `ECU Disconnected${ageText}`;
+    if (ageEl) ageEl.textContent = formatLastSyncStatus(engineData);
     if (runtimeEl) runtimeEl.textContent = `${runtimeHours.toFixed(2).replace('.', ',')} jam`;
     if (lastMaintEl) lastMaintEl.textContent = latestMaintenance
         ? new Date(latestMaintenance.completedAt || latestMaintenance.updatedAt || latestMaintenance.createdAt).toLocaleDateString('id-ID')
