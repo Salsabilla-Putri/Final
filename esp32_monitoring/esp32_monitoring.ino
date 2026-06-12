@@ -330,7 +330,8 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_BATCH_INTERVAL_MS 600000UL  // fallback buffer dikirim per 10 menit jika publish live tertahan
 #define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
-// Buffer fallback 600 record dikirim sebagai chunk besar berisi 300 record.
+// Pengiriman fallback tetap mengikuti interval 10 menit. Saat interval tiba,
+// buffer 600 record dipecah menjadi 2 chunk besar berisi 300 record.
 // Jeda 500 ms antar chunk memberi waktu broker/backend memproses payload sebelum
 // chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
 #define MONGODB_UPLOAD_CHUNK_RECORDS 300
@@ -3015,11 +3016,11 @@ void MongoBufferTask(void *pvParameters) {
     }
 
     bool intervalReached = (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS);
-    // Upload otomatis dimulai saat minimal 1 chunk penuh (300 record), tidak perlu
-    // menunggu seluruh buffer 600 record penuh.
-    bool chunkReady = (bufferCountSnapshot >= MONGODB_UPLOAD_CHUNK_RECORDS);
+    // Pengiriman otomatis tetap setiap 10 menit atau saat buffer penuh 600 record.
+    // Chunk 300 record hanya dipakai untuk memecah payload saat siklus upload berjalan.
+    bool bufferFull = (bufferCountSnapshot >= MONGODB_BUFFER_RECORDS);
 
-    if ((intervalReached || chunkReady || manualRequest) && bufferCountSnapshot > 0) {
+    if ((intervalReached || bufferFull || manualRequest) && bufferCountSnapshot > 0) {
       if (!isWiFiUsableForMongoUpload()) {
         if (serialMongoBufferTickerEnabled) {
           Serial.println(F("[MONGO-MQTT] Batch postponed: WiFi not usable."));
