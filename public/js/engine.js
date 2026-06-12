@@ -17,6 +17,53 @@ const SYNC_THRESHOLDS = {
 
 let serverThresholds = {}; 
 let activeModalParam = null;
+let engineClockTimer = null;
+let engineClockFrozenText = '--:--:--.---';
+let engineClockRunning = false;
+let lastEngineDashboardData = null;
+
+function formatClockWithMs(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        fractionalSecondDigits: 3,
+        hour12: false
+    }).formatToParts(date).reduce((acc, part) => {
+        if (part.type !== 'literal') acc[part.type] = part.value;
+        return acc;
+    }, {});
+
+    return `${parts.hour || '--'}:${parts.minute || '--'}:${parts.second || '--'}.${parts.fractionalSecond || '---'}`;
+}
+
+function setEngineClockConnected(isConnected) {
+    const el = document.getElementById('engineLiveClock');
+    const pill = el?.closest('.engine-clock-pill');
+    engineClockRunning = Boolean(isConnected);
+
+    if (pill) pill.classList.toggle('clock-frozen', !engineClockRunning);
+
+    if (!el) return;
+    if (engineClockRunning) {
+        const text = formatClockWithMs();
+        engineClockFrozenText = text;
+        el.textContent = text;
+        el.title = 'Jam realtime WIB; berjalan saat ECU connected.';
+    } else {
+        el.textContent = engineClockFrozenText;
+        el.title = 'Jam dibekukan karena ECU disconnected.';
+    }
+}
+
+function startEngineClock() {
+    if (engineClockTimer) return;
+    engineClockTimer = setInterval(() => {
+        if (!engineClockRunning) return;
+        setEngineClockConnected(true);
+    }, 37);
+}
 
 function setEspConnectionStatus(isConnected, data = {}) {
     const el = document.getElementById('espConnection');
@@ -31,6 +78,8 @@ function setEspConnectionStatus(isConnected, data = {}) {
         el.className = 'indicator ind-off';
         el.textContent = 'Disconnected';
     }
+
+    setEngineClockConnected(isConnected);
 }
 
 
@@ -176,10 +225,17 @@ function updateEngineConnectionIndicators(data = {}, explicitFresh = null, { upd
 function handleEngineData(data = {}, explicitFresh = null) {
     const isFresh = isEcuFresh(data, explicitFresh);
 
-    // Parameter di engine page sengaja dirender dari payload polling database terakhir.
-    // Status ECU/power dihitung terpisah dari timestamp MQTT realtime agar tidak glitch
-    // antara data database dan heartbeat SSE.
-    updateDashboard(data, isFresh);
+    // Angka parameter hanya bergerak saat ECU fresh/connected. Ketika ECU
+    // disconnected, tampilan mempertahankan angka terakhir agar operator melihat
+    // nilai terakhir tanpa angka berubah dari polling database lama.
+    if (isFresh) {
+        lastEngineDashboardData = data;
+        updateDashboard(data, true);
+    } else if (!lastEngineDashboardData) {
+        lastEngineDashboardData = data;
+        updateDashboard(data, false);
+    }
+
     updateEngineConnectionIndicators(data, isFresh);
 }
 
@@ -446,6 +502,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const userLabel = document.querySelector('#userarea span');
     if (userLabel) userLabel.innerText = localStorage.getItem('username') || 'Pengguna';
 
+    startEngineClock();
     setEspConnectionStatus(false);
     loadThresholds();
     const streamStarted = startRealtimeEngineStream();
