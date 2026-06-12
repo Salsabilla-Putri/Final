@@ -4129,38 +4129,20 @@ bool connectEduroam(bool eraseCredentials = true) {
 }
 
 void drawWiFiPortalInfo(const char* statusText) {
-  tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
-  tft.setTextColor(C_WHITE, C_PRIMARY);
-  tft.setTextSize(2);
-  tft.setCursor(12, 11);
-  tft.print("WIFI CONFIG PORTAL");
+  // Tidak lagi mengganti layar LCD menjadi halaman WiFi config portal.
+  // WiFiManager tetap berjalan untuk konfigurasi dari HP/browser, sedangkan
+  // LCD cukup mempertahankan splash/status agar boot terlihat konsisten.
+  Serial.print(F("[WIFI LCD] "));
+  Serial.println(statusText);
 
-  tft.setTextColor(C_DARK, C_BG);
-  tft.setTextSize(2);
-  tft.setCursor(24, 58);
-  tft.print("AP: ");
-  tft.print(WIFI_MANAGER_AP_NAME);
-
-  tft.setTextSize(1);
-  tft.setCursor(24, 96);
-  tft.print("Password AP : ");
-  tft.print(WIFI_MANAGER_AP_PASS);
-  tft.setCursor(24, 118);
-  tft.print("Buka browser : http://192.168.4.1");
-  tft.setCursor(24, 140);
-  tft.print("Jika Configure WiFi tidak muncul, matikan mobile data");
-  tft.setCursor(24, 158);
-  tft.print("lalu akses langsung IP di atas, bukan domain captive.");
-
-  tft.fillRoundRect(24, 198, 432, 56, 8, C_WHITE);
-  tft.drawRoundRect(24, 198, 432, 56, 8, C_BORDER);
+  tft.fillRect(40, 306, 400, 14, C_WHITE);
   tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setCursor(38, 216);
-  tft.print(statusText);
-  tft.setCursor(38, 234);
-  tft.print("Pilih SSID dan isi password dari halaman Configure WiFi.");
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1);
+  tft.drawString(statusText, SW / 2, 313);
+  tft.setTextDatum(TL_DATUM);
 }
+
 
 void drawWiFiLcdSelectionPage(const char* statusText) {
   tft.fillScreen(C_BG);
@@ -4198,7 +4180,7 @@ void drawWiFiLcdSelectionPage(const char* statusText) {
   if (wifiLcdNetworkCount == 0) {
     tft.setTextColor(C_RED, C_BG);
     tft.setCursor(24, 92);
-    tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau PORTAL.");
+    tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau OFFLINE.");
   }
 
   tft.fillRoundRect(14, 262, 140, 40, 8, C_WHITE);
@@ -4211,7 +4193,7 @@ void drawWiFiLcdSelectionPage(const char* statusText) {
   tft.drawRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
   tft.setTextColor(C_WHITE, C_PRIMARY);
   tft.setCursor(210, 277);
-  tft.print("PORTAL");
+  tft.print("OFFLINE");
 
   tft.fillRoundRect(326, 262, 140, 40, 8, C_WHITE);
   tft.drawRoundRect(326, 262, 140, 40, 8, C_PRIMARY);
@@ -4266,7 +4248,7 @@ uint8_t scanWiFiForLcdSelection() {
   }
 
   WiFi.scanDelete();
-  drawWiFiLcdSelectionPage("Tap SSID / PORTAL");
+  drawWiFiLcdSelectionPage("Tap SSID / OFFLINE");
   return wifiLcdNetworkCount;
 }
 
@@ -4289,7 +4271,7 @@ int waitForWiFiLcdSelection() {
 
       if (y >= 262 && y <= 310) {
         if (x >= 14 && x <= 154) return -2;   // rescan
-        if (x >= 170 && x <= 310) return -3;  // portal
+        if (x >= 170 && x <= 310) return -4;  // offline
         if (x >= 326 && x <= 466) return -4;  // offline
       }
     }
@@ -4298,7 +4280,7 @@ int waitForWiFiLcdSelection() {
     yield();
   }
 
-  return -3; // timeout: open portal, because password entry still needs WiFiManager.
+  return -4; // timeout: stay offline; WiFiManager is handled by setupWiFiManager(), not the LCD page.
 }
 
 bool connectSelectedWiFiFromLcd(uint8_t index) {
@@ -4373,8 +4355,8 @@ bool connectWiFiFromLcdSelection() {
       return false;
     }
 
-    Serial.println(F("[WIFI LCD] User chose PORTAL or selection timeout."));
-    drawWiFiPortalInfo("Portal dibuka untuk input password WiFi.");
+    Serial.println(F("[WIFI LCD] Selection timeout; no portal page is drawn on LCD."));
+    drawWiFiPortalInfo("WiFiManager berjalan tanpa halaman portal di LCD.");
     delay(700);
     return false;
   }
@@ -4428,13 +4410,12 @@ bool connectWiFiManagerFallback() {
   Serial.println(WIFI_MANAGER_AP_PASS);
   Serial.println(F("[WIFI MANAGER] Portal URL: http://192.168.4.1"));
   Serial.println(F("[WIFI MANAGER] Jika Configure WiFi tidak terbuka, akses IP langsung dan matikan mobile data."));
-  Serial.println(F("[WIFI MANAGER] Starting config portal now..."));
+  Serial.println(F("[WIFI MANAGER] Starting config portal now (LCD tetap menampilkan boot splash)."));
 
   wm.setAPCallback([](WiFiManager *manager) {
     (void)manager;
-    drawWiFiPortalInfo("Portal aktif. Hubungkan HP ke AP lalu buka 192.168.4.1");
+    Serial.println(F("[WIFI MANAGER] AP portal aktif; LCD tidak dialihkan ke halaman konfigurasi."));
   });
-  drawWiFiPortalInfo("Portal aktif. Hubungkan HP ke AP lalu buka 192.168.4.1");
 
   // startConfigPortal membuka AP portal dan tidak menjalankan autoConnect().
   bool res = wm.startConfigPortal(WIFI_MANAGER_AP_NAME, WIFI_MANAGER_AP_PASS);
@@ -4689,6 +4670,18 @@ void drawThickArc(int cx, int cy, int r, int thick, int startDeg, int endDeg, ui
   }
 }
 
+void drawFilledRingSegment(int cx, int cy, int outerR, int innerR, int startDeg, int endDeg, uint16_t color) {
+  if (endDeg < startDeg) endDeg += 360;
+  for (int a = startDeg; a <= endDeg; a += 2) {
+    float rad = a * PI / 180.0f;
+    int x1 = cx + (int)(cos(rad) * innerR);
+    int y1 = cy + (int)(sin(rad) * innerR);
+    int x2 = cx + (int)(cos(rad) * outerR);
+    int y2 = cy + (int)(sin(rad) * outerR);
+    tft.drawLine(x1, y1, x2, y2, color);
+  }
+}
+
 void drawThickLine(int x1, int y1, int x2, int y2, uint16_t color, int width) {
   for (int o = -(width / 2); o <= (width / 2); o++) {
     tft.drawLine(x1, y1 + o, x2, y2 + o, color);
@@ -4713,41 +4706,52 @@ void drawPulseLine(int cx, int cy, uint16_t color) {
 
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   (void)fg;
-  // Warna fallback disetel mendekati logo referensi: navy gelap, biru elektrik,
-  // dan heartbeat oranye. Nilai RGB565 eksplisit menghindari warna kusam dari
-  // konstanta UI umum yang dipakai untuk panel monitoring.
+  // Fallback ini dibuat sebagai versi vektor dari logo referensi: gear/navy
+  // di kiri, panah circular biru di kanan-atas dan kiri-bawah, heartbeat
+  // oranye di tengah, dan gap huruf G yang bersih.
   const uint16_t darkBlue = 0x0015;
-  const uint16_t brightBlue = 0x049F;
+  const uint16_t brightBlue = 0x04BF;
   const uint16_t orange = 0xFD20;
 
-  // Gigi gear sisi kiri. Kotak dibuat sedikit memutar secara visual lewat
-  // penempatan radial agar siluetnya lebih dekat dengan logo GENSYS referensi.
-  for (int a = 132; a <= 246; a += 28) {
+  const int outerR = r;
+  const int innerR = r - 23;
+
+  // Gigi gear kiri, dibuat lebih besar dan menempel ke ring seperti logo asli.
+  for (int a = 126; a <= 242; a += 29) {
     float rad = a * PI / 180.0f;
-    int tx = cx + (int)(cos(rad) * (r + 8));
-    int ty = cy + (int)(sin(rad) * (r + 8));
-    tft.fillRoundRect(tx - 12, ty - 12, 24, 24, 5, darkBlue);
+    int tx = cx + (int)(cos(rad) * (outerR - 1));
+    int ty = cy + (int)(sin(rad) * (outerR - 1));
+    tft.fillRoundRect(tx - 15, ty - 14, 30, 28, 5, darkBlue);
   }
 
-  // Ring G/circular arrows. Bagian kiri dan kanan bawah navy; panah atas dan
-  // kiri bawah biru seperti gambar referensi. Urutan gambar dibuat tanpa
-  // overwrite warna agar warna akhir tidak tercampur/keliru.
-  drawThickArc(cx, cy, r, 22, 130, 268, darkBlue);
-  drawThickArc(cx, cy, r, 22, 0, 58, darkBlue);
-  drawThickArc(cx, cy, r, 22, 268, 360, brightBlue);
-  drawThickArc(cx, cy, r, 22, 205, 270, brightBlue);
+  // Ring utama: kiri navy, kanan atas dan kiri bawah biru. Segment dibuat
+  // solid, bukan titik-titik, agar tidak tampak pixelated/berbeda warna.
+  drawFilledRingSegment(cx, cy, outerR, innerR, 124, 270, darkBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 272, 360, brightBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 0, 62, brightBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 205, 270, brightBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 28, 64, darkBlue);
 
-  // Kepala panah: kanan atas dan kiri bawah.
-  tft.fillTriangle(cx + r + 2, cy - 32, cx + r + 34, cy - 40, cx + r + 18, cy + 2, brightBlue);
-  tft.fillTriangle(cx - r - 5, cy + 38, cx - r + 28, cy + 30, cx - r + 2, cy + 68, brightBlue);
+  // Kepala panah referensi.
+  tft.fillTriangle(cx + outerR - 4, cy - 31, cx + outerR + 37, cy - 41, cx + outerR + 17, cy + 4, brightBlue);
+  tft.fillTriangle(cx - outerR - 3, cy + 39, cx - outerR + 34, cy + 30, cx - outerR + 7, cy + 72, brightBlue);
 
-  // Lubang tengah putih serta gap vertikal/horizontal khas huruf G.
-  tft.fillCircle(cx, cy, r - 25, bg);
-  tft.fillRect(cx + r - 12, cy - 8, 66, 18, bg);
-  tft.fillRect(cx + 4, cy - r - 22, 12, 44, bg);
-  tft.fillRect(cx + 4, cy + r - 22, 12, 46, bg);
+  // Bersihkan lubang tengah dan celah huruf G.
+  tft.fillCircle(cx, cy, innerR - 2, bg);
+  tft.fillRect(cx + innerR - 2, cy - 11, outerR - innerR + 58, 23, bg);
+  tft.fillRect(cx + 3, cy - outerR - 4, 15, outerR - innerR + 18, bg);
+  tft.fillRect(cx + 3, cy + innerR - 8, 15, outerR - innerR + 22, bg);
 
-  drawPulseLine(cx, cy + 2, orange);
+  // Heartbeat oranye dengan proporsi lebih dekat ke logo contoh.
+  const int p[][2] = {
+    {-54, 0}, {-25, 0}, {-15, -15}, {-2, 20}, {12, -64},
+    {31, 66}, {49, -34}, {64, 0}, {86, 0}
+  };
+  for (uint8_t i = 0; i < 8; i++) {
+    drawThickLine(cx + p[i][0], cy + p[i][1], cx + p[i + 1][0], cy + p[i + 1][1], orange, 6);
+  }
+  tft.fillCircle(cx + p[0][0], cy + p[0][1], 3, orange);
+  tft.fillCircle(cx + p[8][0], cy + p[8][1], 3, orange);
 }
 
 
@@ -4883,11 +4887,15 @@ void drawBootSplashStep(const char* statusText, int progress) {
     logoFromSdDrawn = drawBootLogoFromSd(SW / 2, 98, 156, 156);
     if (!logoFromSdDrawn) drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
 
-    tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(4);
-    tft.drawString("GENSYS", SW / 2, 214);
+    // Wordmark fallback dibuat dua warna seperti logo referensi: GEN navy, SYS biru.
+    tft.setTextColor(0x0015, C_WHITE);
+    tft.drawString("GEN", (SW / 2) - 36, 214);
+    tft.setTextColor(0x04BF, C_WHITE);
+    tft.drawString("SYS", (SW / 2) + 36, 214);
 
+    tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextSize(1);
     tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 248);
     tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
