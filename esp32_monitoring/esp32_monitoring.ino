@@ -3386,23 +3386,27 @@ void initSDCard() {
   Serial.println("════════════ SD CARD INIT ════════════");
 
   sdOK = false;
+  SD.end();
   deselectAllSPI();
-  delay(250);
+  delay(300);
+  sdSPI.end();
+  delay(50);
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  delay(750); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
+  delay(900); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
 
   bool begun = false;
-  for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
     Serial.print(F("[SD] Init attempt "));
     Serial.print(attempt);
-    Serial.println(F("/3..."));
+    Serial.println(F("/5..."));
+    SD.end();
     deselectAllSPI();
-    delay(250);
-    if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT)) {
+    delay(150 + attempt * 100);
+    if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
       begun = true;
       break;
     }
-    delay(1000);
+    delay(700);
   }
 
   if (!begun) {
@@ -3415,6 +3419,26 @@ void initSDCard() {
   delay(500);
   sdOK = true;
   Serial.println("[SD] OK.");
+
+  // Setelah mount stabil di 400 kHz, naikkan SPI SD secara konservatif.
+  // Jika kartu/modul sensitif, operasi file tetap aman karena setiap akses
+  // diawali deselectAllSPI() dan retry runtime akan kembali ke init lambat.
+  SD.end();
+  delay(50);
+  if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_FAST) && SD.cardType() != CARD_NONE) {
+    Serial.println(F("[SD] SPI switched to stable fast mode."));
+  } else {
+    Serial.println(F("[SD] Fast mode failed, remounting at init speed."));
+    SD.end();
+    delay(50);
+    sdOK = SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE;
+  }
+
+  if (!sdOK) {
+    Serial.println(F("[SD] Remount after speed switch failed; SD marked offline."));
+    Serial.println("══════════════════════════════════════");
+    return;
+  }
 
   if (sdMutex == NULL || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000)) == pdTRUE) {
     ensureDatabaseCsvHeader();
@@ -4105,38 +4129,20 @@ bool connectEduroam(bool eraseCredentials = true) {
 }
 
 void drawWiFiPortalInfo(const char* statusText) {
-  tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
-  tft.setTextColor(C_WHITE, C_PRIMARY);
-  tft.setTextSize(2);
-  tft.setCursor(12, 11);
-  tft.print("WIFI CONFIG PORTAL");
+  // Tidak lagi mengganti layar LCD menjadi halaman WiFi config portal.
+  // WiFiManager tetap berjalan untuk konfigurasi dari HP/browser, sedangkan
+  // LCD cukup mempertahankan splash/status agar boot terlihat konsisten.
+  Serial.print(F("[WIFI LCD] "));
+  Serial.println(statusText);
 
-  tft.setTextColor(C_DARK, C_BG);
-  tft.setTextSize(2);
-  tft.setCursor(24, 58);
-  tft.print("AP: ");
-  tft.print(WIFI_MANAGER_AP_NAME);
-
-  tft.setTextSize(1);
-  tft.setCursor(24, 96);
-  tft.print("Password AP : ");
-  tft.print(WIFI_MANAGER_AP_PASS);
-  tft.setCursor(24, 118);
-  tft.print("Buka browser : http://192.168.4.1");
-  tft.setCursor(24, 140);
-  tft.print("Jika Configure WiFi tidak muncul, matikan mobile data");
-  tft.setCursor(24, 158);
-  tft.print("lalu akses langsung IP di atas, bukan domain captive.");
-
-  tft.fillRoundRect(24, 198, 432, 56, 8, C_WHITE);
-  tft.drawRoundRect(24, 198, 432, 56, 8, C_BORDER);
+  tft.fillRect(40, 306, 400, 14, C_WHITE);
   tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setCursor(38, 216);
-  tft.print(statusText);
-  tft.setCursor(38, 234);
-  tft.print("Pilih SSID dan isi password dari halaman Configure WiFi.");
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1);
+  tft.drawString(statusText, SW / 2, 313);
+  tft.setTextDatum(TL_DATUM);
 }
+
 
 void drawWiFiLcdSelectionPage(const char* statusText) {
   tft.fillScreen(C_BG);
@@ -4174,7 +4180,7 @@ void drawWiFiLcdSelectionPage(const char* statusText) {
   if (wifiLcdNetworkCount == 0) {
     tft.setTextColor(C_RED, C_BG);
     tft.setCursor(24, 92);
-    tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau PORTAL.");
+    tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau OFFLINE.");
   }
 
   tft.fillRoundRect(14, 262, 140, 40, 8, C_WHITE);
@@ -4187,7 +4193,7 @@ void drawWiFiLcdSelectionPage(const char* statusText) {
   tft.drawRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
   tft.setTextColor(C_WHITE, C_PRIMARY);
   tft.setCursor(210, 277);
-  tft.print("PORTAL");
+  tft.print("OFFLINE");
 
   tft.fillRoundRect(326, 262, 140, 40, 8, C_WHITE);
   tft.drawRoundRect(326, 262, 140, 40, 8, C_PRIMARY);
@@ -4242,7 +4248,7 @@ uint8_t scanWiFiForLcdSelection() {
   }
 
   WiFi.scanDelete();
-  drawWiFiLcdSelectionPage("Tap SSID / PORTAL");
+  drawWiFiLcdSelectionPage("Tap SSID / OFFLINE");
   return wifiLcdNetworkCount;
 }
 
@@ -4265,7 +4271,7 @@ int waitForWiFiLcdSelection() {
 
       if (y >= 262 && y <= 310) {
         if (x >= 14 && x <= 154) return -2;   // rescan
-        if (x >= 170 && x <= 310) return -3;  // portal
+        if (x >= 170 && x <= 310) return -4;  // offline
         if (x >= 326 && x <= 466) return -4;  // offline
       }
     }
@@ -4274,7 +4280,7 @@ int waitForWiFiLcdSelection() {
     yield();
   }
 
-  return -3; // timeout: open portal, because password entry still needs WiFiManager.
+  return -4; // timeout: stay offline; WiFiManager is handled by setupWiFiManager(), not the LCD page.
 }
 
 bool connectSelectedWiFiFromLcd(uint8_t index) {
@@ -4349,8 +4355,8 @@ bool connectWiFiFromLcdSelection() {
       return false;
     }
 
-    Serial.println(F("[WIFI LCD] User chose PORTAL or selection timeout."));
-    drawWiFiPortalInfo("Portal dibuka untuk input password WiFi.");
+    Serial.println(F("[WIFI LCD] Selection timeout; no portal page is drawn on LCD."));
+    drawWiFiPortalInfo("WiFiManager berjalan tanpa halaman portal di LCD.");
     delay(700);
     return false;
   }
@@ -4404,13 +4410,12 @@ bool connectWiFiManagerFallback() {
   Serial.println(WIFI_MANAGER_AP_PASS);
   Serial.println(F("[WIFI MANAGER] Portal URL: http://192.168.4.1"));
   Serial.println(F("[WIFI MANAGER] Jika Configure WiFi tidak terbuka, akses IP langsung dan matikan mobile data."));
-  Serial.println(F("[WIFI MANAGER] Starting config portal now..."));
+  Serial.println(F("[WIFI MANAGER] Starting config portal now (LCD tetap menampilkan boot splash)."));
 
   wm.setAPCallback([](WiFiManager *manager) {
     (void)manager;
-    drawWiFiPortalInfo("Portal aktif. Hubungkan HP ke AP lalu buka 192.168.4.1");
+    Serial.println(F("[WIFI MANAGER] AP portal aktif; LCD tidak dialihkan ke halaman konfigurasi."));
   });
-  drawWiFiPortalInfo("Portal aktif. Hubungkan HP ke AP lalu buka 192.168.4.1");
 
   // startConfigPortal membuka AP portal dan tidak menjalankan autoConnect().
   bool res = wm.startConfigPortal(WIFI_MANAGER_AP_NAME, WIFI_MANAGER_AP_PASS);
@@ -4462,22 +4467,28 @@ void setupWiFiManager() {
     return;
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal saat boot. Menunggu pilihan dari Serial Monitor."));
+  Serial.println(F("[WIFI] Eduroam gagal saat boot. Lanjut ke pilihan LCD / WiFiManager."));
 #else
-  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, menunggu pilihan dari Serial Monitor."));
+  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung ke pilihan LCD / WiFiManager."));
 #endif
 
   // connectEduroam() yang gagal sudah memanggil prepareNormalWiFiMode().
-  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum menunggu command Serial.
+  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum membuka portal.
 #if !USE_EDUROAM_FIRST
   prepareNormalWiFiMode();
 #endif
 
-  Serial.println(F("[WIFI] Pemilihan WiFi lewat LCD dinonaktifkan."));
-  Serial.println(F("[WIFI] Pilih koneksi dari Serial Monitor saja:"));
-  Serial.println(F("[WIFI]   wifi portal  -> buka Configure WiFi AP GenTrack-Monitor-AP"));
-  Serial.println(F("[WIFI]   wifi eduroam -> coba ulang eduroam WPA2-Enterprise"));
-  Serial.println(F("[WIFI] Sistem berjalan offline sampai command Serial dipilih."));
+  Serial.println(F("[WIFI] Layar LCD tetap di boot splash; WiFiManager berjalan tanpa halaman portal di TFT."));
+  Serial.println(F("[WIFI] Membuka WiFiManager otomatis jika eduroam gagal."));
+
+  if (connectWiFiManagerFallback()) {
+    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER"));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println(F("[WIFI] Tidak ada koneksi saat boot; sistem tetap jalan offline."));
+  Serial.println(F("[WIFI] Command Serial tetap tersedia: wifi portal / wifi eduroam."));
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
   Serial.println(F("╚══════════════════════════════════════════════╝"));
@@ -4653,6 +4664,18 @@ void drawThickArc(int cx, int cy, int r, int thick, int startDeg, int endDeg, ui
   }
 }
 
+void drawFilledRingSegment(int cx, int cy, int outerR, int innerR, int startDeg, int endDeg, uint16_t color) {
+  if (endDeg < startDeg) endDeg += 360;
+  for (int a = startDeg; a <= endDeg; a += 2) {
+    float rad = a * PI / 180.0f;
+    int x1 = cx + (int)(cos(rad) * innerR);
+    int y1 = cy + (int)(sin(rad) * innerR);
+    int x2 = cx + (int)(cos(rad) * outerR);
+    int y2 = cy + (int)(sin(rad) * outerR);
+    tft.drawLine(x1, y1, x2, y2, color);
+  }
+}
+
 void drawThickLine(int x1, int y1, int x2, int y2, uint16_t color, int width) {
   for (int o = -(width / 2); o <= (width / 2); o++) {
     tft.drawLine(x1, y1 + o, x2, y2 + o, color);
@@ -4677,37 +4700,52 @@ void drawPulseLine(int cx, int cy, uint16_t color) {
 
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   (void)fg;
-  const uint16_t darkBlue = C_PRIMARY;
-  const uint16_t brightBlue = C_BLUE2;
-  const uint16_t orange = C_ORANGE;
+  // Fallback ini dibuat sebagai versi vektor dari logo referensi: gear/navy
+  // di kiri, panah circular biru di kanan-atas dan kiri-bawah, heartbeat
+  // oranye di tengah, dan gap huruf G yang bersih.
+  const uint16_t darkBlue = 0x0015;
+  const uint16_t brightBlue = 0x04BF;
+  const uint16_t orange = 0xFD20;
 
-  // Left gear teeth, matching the supplied GENSYS startup mark style.
-  for (int a = 135; a <= 245; a += 28) {
+  const int outerR = r;
+  const int innerR = r - 23;
+
+  // Gigi gear kiri, dibuat lebih besar dan menempel ke ring seperti logo asli.
+  for (int a = 126; a <= 242; a += 29) {
     float rad = a * PI / 180.0f;
-    int tx = cx + (int)(cos(rad) * (r + 8));
-    int ty = cy + (int)(sin(rad) * (r + 8));
-    tft.fillRoundRect(tx - 13, ty - 13, 26, 26, 5, darkBlue);
+    int tx = cx + (int)(cos(rad) * (outerR - 1));
+    int ty = cy + (int)(sin(rad) * (outerR - 1));
+    tft.fillRoundRect(tx - 15, ty - 14, 30, 28, 5, darkBlue);
   }
 
-  // Circular arrows / gear ring.
-  drawThickArc(cx, cy, r, 22, 130, 270, darkBlue);
-  drawThickArc(cx, cy, r, 22, -88, -2, darkBlue);
-  drawThickArc(cx, cy, r, 22, -88, -2, brightBlue);
-  drawThickArc(cx, cy, r, 22, 28, 145, brightBlue);
-  drawThickArc(cx, cy, r, 22, 0, 58, darkBlue);
+  // Ring utama: kiri navy, kanan atas dan kiri bawah biru. Segment dibuat
+  // solid, bukan titik-titik, agar tidak tampak pixelated/berbeda warna.
+  drawFilledRingSegment(cx, cy, outerR, innerR, 124, 270, darkBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 272, 360, brightBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 0, 62, brightBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 205, 270, brightBlue);
+  drawFilledRingSegment(cx, cy, outerR, innerR, 28, 64, darkBlue);
 
-  // Arrow heads.
-  tft.fillTriangle(cx + r + 3, cy - 30, cx + r + 36, cy - 38, cx + r + 18, cy + 3, brightBlue);
-  tft.fillTriangle(cx - r - 6, cy + 36, cx - r + 28, cy + 28, cx - r + 2, cy + 70, brightBlue);
+  // Kepala panah referensi.
+  tft.fillTriangle(cx + outerR - 4, cy - 31, cx + outerR + 37, cy - 41, cx + outerR + 17, cy + 4, brightBlue);
+  tft.fillTriangle(cx - outerR - 3, cy + 39, cx - outerR + 34, cy + 30, cx - outerR + 7, cy + 72, brightBlue);
 
-  // White center hole and right G gap.
-  tft.fillCircle(cx, cy, r - 25, bg);
-  tft.fillRect(cx + r - 12, cy - 8, 64, 16, bg);
-  tft.fillRect(cx + 5, cy - r - 20, 10, 42, bg);
-  tft.fillRect(cx + 5, cy + r - 22, 10, 44, bg);
+  // Bersihkan lubang tengah dan celah huruf G.
+  tft.fillCircle(cx, cy, innerR - 2, bg);
+  tft.fillRect(cx + innerR - 2, cy - 11, outerR - innerR + 58, 23, bg);
+  tft.fillRect(cx + 3, cy - outerR - 4, 15, outerR - innerR + 18, bg);
+  tft.fillRect(cx + 3, cy + innerR - 8, 15, outerR - innerR + 22, bg);
 
-  // Orange heartbeat line.
-  drawPulseLine(cx, cy + 2, orange);
+  // Heartbeat oranye dengan proporsi lebih dekat ke logo contoh.
+  const int p[][2] = {
+    {-54, 0}, {-25, 0}, {-15, -15}, {-2, 20}, {12, -64},
+    {31, 66}, {49, -34}, {64, 0}, {86, 0}
+  };
+  for (uint8_t i = 0; i < 8; i++) {
+    drawThickLine(cx + p[i][0], cy + p[i][1], cx + p[i + 1][0], cy + p[i + 1][1], orange, 6);
+  }
+  tft.fillCircle(cx + p[0][0], cy + p[0][1], 3, orange);
+  tft.fillCircle(cx + p[8][0], cy + p[8][1], 3, orange);
 }
 
 
@@ -4716,7 +4754,11 @@ PNG bootLogoPng;
 File bootLogoFile;
 int bootLogoX = 0;
 int bootLogoY = 0;
-uint16_t bootLogoLine[SW];
+int bootLogoScale = 1;
+int bootLogoDrawW = 0;
+int bootLogoDrawH = 0;
+uint16_t bootLogoSrcLine[SW];
+uint16_t bootLogoDrawLine[SW];
 
 void *pngSdOpen(const char *filename, int32_t *size) {
   bootLogoFile = SD.open(filename, FILE_READ);
@@ -4743,10 +4785,28 @@ int32_t pngSdSeek(PNGFILE *page, int32_t position) {
 }
 
 void pngDrawToTft(PNGDRAW *pDraw) {
-  uint16_t width = pDraw->iWidth;
-  if (width > SW) width = SW;
-  bootLogoPng.getLineAsRGB565(pDraw, bootLogoLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
-  tft.pushImage(bootLogoX, bootLogoY + pDraw->y, width, 1, bootLogoLine);
+  uint16_t srcW = pDraw->iWidth;
+  if (srcW > SW) srcW = SW;
+
+  bootLogoPng.getLineAsRGB565(pDraw, bootLogoSrcLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
+
+  if (bootLogoScale <= 1) {
+    tft.pushImage(bootLogoX, bootLogoY + pDraw->y, srcW, 1, bootLogoSrcLine);
+    return;
+  }
+
+  if ((pDraw->y % bootLogoScale) != 0) return;
+
+  int outY = bootLogoY + (pDraw->y / bootLogoScale);
+  if (outY < bootLogoY || outY >= bootLogoY + bootLogoDrawH) return;
+
+  int outW = min(bootLogoDrawW, SW);
+  for (int x = 0; x < outW; x++) {
+    int srcX = x * bootLogoScale;
+    if (srcX >= srcW) srcX = srcW - 1;
+    bootLogoDrawLine[x] = bootLogoSrcLine[srcX];
+  }
+  tft.pushImage(bootLogoX, outY, outW, 1, bootLogoDrawLine);
 }
 #endif
 
@@ -4763,18 +4823,32 @@ bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
   if (rc == PNG_SUCCESS) {
     int pngW = bootLogoPng.getWidth();
     int pngH = bootLogoPng.getHeight();
-    if (pngW > 0 && pngH > 0 && pngW <= maxW && pngH <= maxH) {
-      bootLogoX = cx - (pngW / 2);
-      bootLogoY = cy - (pngH / 2);
+
+    if (pngW > 0 && pngH > 0 && pngW <= SW) {
+      bootLogoScale = max(1, max((pngW + maxW - 1) / maxW, (pngH + maxH - 1) / maxH));
+      bootLogoDrawW = max(1, pngW / bootLogoScale);
+      bootLogoDrawH = max(1, pngH / bootLogoScale);
+      bootLogoX = cx - (bootLogoDrawW / 2);
+      bootLogoY = cy - (bootLogoDrawH / 2);
+
       tft.fillRect(cx - maxW / 2, cy - maxH / 2, maxW, maxH, C_WHITE);
       ok = bootLogoPng.decode(NULL, 0) == PNG_SUCCESS;
+
+      Serial.print(F("[BOOT LOGO] /logo.png drawn from SD: "));
+      Serial.print(pngW);
+      Serial.print('x');
+      Serial.print(pngH);
+      Serial.print(F(" -> "));
+      Serial.print(bootLogoDrawW);
+      Serial.print('x');
+      Serial.println(bootLogoDrawH);
     }
     bootLogoPng.close();
   }
 
   if (sdMutex != NULL) xSemaphoreGive(sdMutex);
   if (!ok) {
-    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pastikan file PNG muat area boot <=156x156 px dan library PNGdec tersedia."));
+    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pakai PNG RGB/RGBA dengan lebar <=480 px; gambar akan diskalakan ke area boot."));
   }
   return ok;
 #else
@@ -4807,11 +4881,15 @@ void drawBootSplashStep(const char* statusText, int progress) {
     logoFromSdDrawn = drawBootLogoFromSd(SW / 2, 98, 156, 156);
     if (!logoFromSdDrawn) drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
 
-    tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(4);
-    tft.drawString("GENSYS", SW / 2, 214);
+    // Wordmark fallback dibuat dua warna seperti logo referensi: GEN navy, SYS biru.
+    tft.setTextColor(0x0015, C_WHITE);
+    tft.drawString("GEN", (SW / 2) - 36, 214);
+    tft.setTextColor(0x04BF, C_WHITE);
+    tft.drawString("SYS", (SW / 2) + 36, 214);
 
+    tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextSize(1);
     tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 248);
     tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
@@ -6404,7 +6482,11 @@ void setup() {
   tft.init();
   tft.setRotation(1);
 
-  drawBootSplashStep("Initializing UART link...", 10);
+  // Mount SD sebelum boot splash pertama agar /logo.png bisa langsung tampil
+  // dari kartu SD. Jika gagal, drawBootSplashStep() tetap memakai logo vektor.
+  initSDCard();
+
+  drawBootSplashStep(sdOK ? "Local SD mounted - loading logo.png" : "SD offline - using fallback logo", 10);
 
   drawBootSplashStep("Initializing touch controller...", 25);
   Wire.begin(CTP_SDA, CTP_SCL);
@@ -6416,10 +6498,7 @@ void setup() {
     Serial.println("[TOUCH] OK.");
   }
 
-  drawBootSplashStep("Mounting local SD database...", 40);
-  initSDCard();
-
-  drawBootSplashStep(sdOK ? "Local SD database mounted" : "SD offline - continuing", 50);
+  drawBootSplashStep(sdOK ? "Local SD database ready" : "SD offline - continuing", 50);
 
   drawBootSplashStep("Starting WiFi manager...", 58);
   setupWiFiManager();
