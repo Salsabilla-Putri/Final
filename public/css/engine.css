@@ -122,9 +122,13 @@ body {
 .ind-neutral { background: #f3f4f6; color: #374151; }
 
 .engine-live-meta { display:flex; gap:12px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
-.timestamp-pill { display:inline-flex; flex-direction:column; gap:2px; padding:6px 10px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; color:var(--accent); min-width:170px; }
-.timestamp-pill span { font-size:10px; text-transform:uppercase; color:#64748b; font-weight:700; }
-.timestamp-pill b { font-size:12px; color:#0f172a; }
+.timestamp-pill, .engine-clock-pill { display:inline-flex; flex-direction:column; gap:2px; padding:6px 10px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; color:var(--accent); min-width:170px; }
+.engine-clock-pill { min-width:132px; background:#f8fafc; border-color:#cbd5e1; }
+.timestamp-pill span, .engine-clock-pill span { font-size:10px; text-transform:uppercase; color:#64748b; font-weight:700; }
+.timestamp-pill b, .engine-clock-pill b { font-size:12px; color:#0f172a; }
+.engine-clock-pill b { font-variant-numeric: tabular-nums; letter-spacing:.04em; }
+.engine-clock-pill.clock-frozen { background:#fff7ed; border-color:#fed7aa; }
+.engine-clock-pill.clock-frozen b { color:#9a3412; }
 
 .esp-connection {
     display: inline-flex;
