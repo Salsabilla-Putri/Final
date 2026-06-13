@@ -1956,14 +1956,60 @@ mqttClient.on('message', async (topic, message) => {
         mqttIngestStats.lastPayloadBytes = Buffer.byteLength(raw);
 
         let parsed;
+        const trimmedRaw = raw.trim();
 
-        try {
-            parsed = JSON.parse(raw);
-        } catch (parseError) {
-            mqttIngestStats.invalidJsonMessages++;
-            updateMqttIngestError(parseError);
-            console.warn(`⚠️ Invalid JSON on ${topic}:`, raw.slice(0, 500));
-            return;
+        // Deteksi format: JSON diawali dengan '{' atau '['
+        if (trimmedRaw.startsWith('{') || trimmedRaw.startsWith('[')) {
+            try {
+                parsed = JSON.parse(trimmedRaw);
+            } catch (parseError) {
+                mqttIngestStats.invalidJsonMessages++;
+                updateMqttIngestError(parseError);
+                console.warn(`⚠️ Invalid JSON on ${topic}:`, raw.slice(0, 500));
+                return;
+            }
+        } else {
+            // Jika bukan JSON, proses sebagai CSV Kompresi Ekstrem
+            try {
+                const lines = trimmedRaw.split('\n').filter(l => l.trim().length > 0);
+                const records = lines.map(line => {
+                    const cols = line.split(',');
+                    return {
+                        deviceId: cols[0],
+                        recordId: cols[1],
+                        localSeq: parseInt(cols[2], 10),
+                        timestamp: cols[3],
+                        rpm: parseFloat(cols[4]),
+                        tps: parseFloat(cols[5]),
+                        map: parseFloat(cols[6]),
+                        iat: parseFloat(cols[7]),
+                        clt: parseFloat(cols[8]),
+                        afr: parseFloat(cols[9]),
+                        batt: parseFloat(cols[10]),
+                        fuel: parseFloat(cols[11]),
+                        freq: parseFloat(cols[12]),
+                        freqGrid: parseFloat(cols[13]),
+                        volt: parseFloat(cols[14]),
+                        voltGrid: parseFloat(cols[15]),
+                        currentA: parseFloat(cols[16]),
+                        powerKW: parseFloat(cols[17]),
+                        phaseAngle: parseFloat(cols[18]),
+                        sync: cols[19],
+                        powerSource: cols[20]
+                    };
+                });
+                
+                // Bungkus array CSV ke format yang dimengerti logika backend lama
+                parsed = { 
+                    deviceId: records[0].deviceId,
+                    records: records 
+                };
+            } catch (csvError) {
+                mqttIngestStats.invalidJsonMessages++;
+                updateMqttIngestError(csvError);
+                console.warn(`⚠️ Invalid CSV format on ${topic}:`, raw.slice(0, 500));
+                return;
+            }
         }
 
         // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.

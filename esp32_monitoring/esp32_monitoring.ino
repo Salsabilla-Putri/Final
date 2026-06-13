@@ -50,6 +50,7 @@
 #include <time.h>
 #include <Adafruit_FT6206.h>
 #include <math.h>
+#include "gensys_logo_200x200_rgb565.h"
 
 #if __has_include(<PNGdec.h>)
   #include <PNGdec.h>
@@ -342,7 +343,7 @@ const char* FFT_CSV_HEADER =
 // ============================================================
 #define SENSOR_SAMPLE_HZ          50
 #define SENSOR_SAMPLE_INTERVAL_MS 20
-#define AGGREGATION_INTERVAL_MS   500
+#define AGGREGATION_INTERVAL_MS   1000
 #define STORAGE_BATCH_SIZE        1
 // ============================================================
 // MONGODB BATCH CONFIG
@@ -356,8 +357,8 @@ const char* FFT_CSV_HEADER =
 // buffer 600 record dipecah menjadi 2 chunk besar berisi 300 record.
 // Jeda 500 ms antar chunk memberi waktu broker/backend memproses payload sebelum
 // chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 300
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 500UL
+#define MONGODB_UPLOAD_CHUNK_RECORDS 100
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 50UL
 
 // TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
@@ -368,26 +369,9 @@ const char* FFT_CSV_HEADER =
 // Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
 // saat EAP handshake dan MQTT fallback batch publish.
 
-const unsigned long publishInterval   = 500;
+const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
-const unsigned long drawInterval      = 500;   // LCD partial update tiap 0,5 detik mengikuti agregasi cepat
-
-// ============================================================
-// FFT EDGE
-// ============================================================
-#define ENABLE_FFT_EDGE        0
-#define FFT_SAMPLE_RATE_HZ     10.0f   // Mengikuti UART ESP32-1: 100 ms = 10 Hz
-#define FFT_SAMPLES            64
-#define FFT_BINS_TO_SEND       32
-#define FFT_COMPUTE_INTERVAL_MS 1000UL   // FFT dihitung di task terpisah, bukan di SensorTask50Hz.
-
-// FFT multi-sumber:
-// 0 = tegangan generator, 1 = tegangan grid, 2 = RPM mesin.
-// Semua sumber dihitung paralel. Halaman FFT menampilkan sumber yang dipilih.
-#define FFT_SOURCE_COUNT       3
-#define FFT_SRC_VOLT_GEN       0
-#define FFT_SRC_VOLT_GRID      1
-#define FFT_SRC_RPM            2
+const unsigned long drawInterval      = 1000;   // LCD partial update tiap 0,5 detik mengikuti agregasi cepat
 
 // ============================================================
 // DATA STRUCT
@@ -477,19 +461,6 @@ struct AggAccumulator {
   uint16_t statusGensetCount = 0;
   uint16_t statusGridCount = 0;
   uint16_t statusOffCount = 0;
-};
-
-struct FFTData {
-  bool valid = false;
-  uint8_t source = FFT_SRC_VOLT_GEN;
-  uint16_t samples = 0;
-  float sampleRateHz = FFT_SAMPLE_RATE_HZ;
-  float resolutionHz = FFT_SAMPLE_RATE_HZ / FFT_SAMPLES;
-  float peakHz = 0;
-  float peakMagnitude = 0;
-  float rms = 0;
-  float freqBins[FFT_BINS_TO_SEND];
-  float magBins[FFT_BINS_TO_SEND];
 };
 
 struct StorageRecord {
@@ -4036,26 +4007,18 @@ void printWiFiConnectedInfo(const __FlashStringHelper* label) {
 }
 
 bool connectEduroam(bool eraseCredentials = true) {
-#if USE_EDUROAM_FIRST
   Serial.println();
   Serial.println("╔══════════════ EDUROAM WIFI INIT BOOT-ONLY ══════════════╗");
 
   if (!isEduroamCredentialConfigured()) {
     Serial.println("[EDUROAM] SKIP: credential belum valid / masih placeholder.");
-    Serial.println("[EDUROAM] Fallback ke WiFiManager portal.");
-    Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return false;
   }
 
   Serial.println("[EDUROAM] Trying WPA2-Enterprise PEAP connection...");
   Serial.print("[EDUROAM] SSID     : "); Serial.println(EDUROAM_SSID);
   Serial.print("[EDUROAM] Identity : "); Serial.println(EDUROAM_IDENTITY);
-  Serial.print("[EDUROAM] Username : "); Serial.println(EDUROAM_USERNAME);
-  Serial.println("[EDUROAM] Password : ********");
 
-  // Urutan ini mengikuti kode eduroam yang sebelumnya stabil:
-  // mode STA -> disable sleep -> disconnect bersih -> disable EAP lama -> begin EAP.
-  // Fungsi ini hanya boleh dipanggil saat boot. Runtime reconnect cukup WiFi.reconnect().
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -4068,30 +4031,12 @@ bool connectEduroam(bool eraseCredentials = true) {
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   // Arduino-ESP32 core 3.x
-  WiFi.begin(
-    EDUROAM_SSID,
-    WPA2_AUTH_PEAP,
-    EDUROAM_IDENTITY,
-    EDUROAM_USERNAME,
-    EDUROAM_PASSWORD
-  );
+  WiFi.begin(EDUROAM_SSID, WPA2_AUTH_PEAP, EDUROAM_IDENTITY, EDUROAM_USERNAME, EDUROAM_PASSWORD);
 #else
   // Arduino-ESP32 core 2.x
-  esp_wifi_sta_wpa2_ent_set_identity(
-    (uint8_t *)EDUROAM_IDENTITY,
-    strlen(EDUROAM_IDENTITY)
-  );
-
-  esp_wifi_sta_wpa2_ent_set_username(
-    (uint8_t *)EDUROAM_USERNAME,
-    strlen(EDUROAM_USERNAME)
-  );
-
-  esp_wifi_sta_wpa2_ent_set_password(
-    (uint8_t *)EDUROAM_PASSWORD,
-    strlen(EDUROAM_PASSWORD)
-  );
-
+  esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)EDUROAM_IDENTITY, strlen(EDUROAM_IDENTITY));
+  esp_wifi_sta_wpa2_ent_set_username((uint8_t *)EDUROAM_USERNAME, strlen(EDUROAM_USERNAME));
+  esp_wifi_sta_wpa2_ent_set_password((uint8_t *)EDUROAM_PASSWORD, strlen(EDUROAM_PASSWORD));
   esp_wifi_sta_wpa2_ent_enable();
   WiFi.begin(EDUROAM_SSID);
 #endif
@@ -4099,7 +4044,6 @@ bool connectEduroam(bool eraseCredentials = true) {
   if (waitForWiFiConnection(F("[EDUROAM]"), EDUROAM_TIMEOUT_MS)) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_EDUROAM;
-
     printWiFiConnectedInfo(F("[EDUROAM]"));
     Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return true;
@@ -4113,19 +4057,10 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.print((int)WiFi.status());
   Serial.print(" / ");
   Serial.println(wifiStatusText(WiFi.status()));
-  Serial.println("[EDUROAM] Cleaning enterprise mode before manual WiFi command...");
-
-  // Setelah gagal, bersihkan EAP satu kali lalu tunggu command Serial.
-  // Jangan coba eduroam ulang dalam loop karena dapat membuat driver EAP tidak stabil.
+  
   prepareNormalWiFiMode();
-
-  Serial.println("[EDUROAM] WiFiManager tidak dibuka otomatis; gunakan Serial command wifi portal jika diperlukan.");
   Serial.println("╚═══════════════════════════════════════════════════════════╝");
-
   return false;
-#else
-  return false;
-#endif
 }
 
 void drawWiFiPortalInfo(const char* statusText) {
@@ -4443,8 +4378,6 @@ bool connectWiFiManagerFallback() {
   Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
   return false;
 }
-
-
 void setupWiFiManager() {
   Serial.println();
   Serial.println(F("╔════════════ WIFI CONNECTION INIT ════════════╗"));
@@ -4453,38 +4386,71 @@ void setupWiFiManager() {
   mqttOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
 
-#if USE_EDUROAM_FIRST
-  Serial.println(F("[WIFI] Mode utama: eduroam WPA2-Enterprise boot-only"));
-  Serial.print(F("[WIFI] Target SSID: "));
-  Serial.println(EDUROAM_SSID);
+  // Hentikan state WiFi yang mungkin menggantung sebelum masuk ke menu
+  prepareNormalWiFiMode();
 
-  // Eduroam hanya dicoba 1 kali saat boot. Ini mengikuti kode lama yang stabil.
-  // Jika gagal, sistem tidak menampilkan pilihan di LCD; operator memilih
-  // wifi portal / wifi eduroam dari Serial Monitor.
-  if (connectEduroam(true)) {
-    Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
-    Serial.println(F("╚══════════════════════════════════════════════╝"));
-    return;
+  Serial.println(F("PILIH MODE WIFI (Ketik angka lalu tekan Enter/Send):"));
+  Serial.println(F("1. Eduroam (WPA2-Enterprise)"));
+  Serial.println(F("2. Fixed WiFi (SSID: hai, Pass: hello123)"));
+  Serial.println(F("3. WiFiManager Portal (AP Mode)"));
+  Serial.println(F("Menunggu input... (Timeout 10 detik, default ke 3/WiFiManager)"));
+
+  unsigned long startWait = millis();
+  int wifiChoice = 3; // Default ke WiFiManager jika tidak ada input dari operator
+
+  while (millis() - startWait < 10000) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == '1') wifiChoice = 1;
+      else if (c == '2') wifiChoice = 2;
+      else if (c == '3') wifiChoice = 3;
+
+      // Bersihkan sisa karakter di buffer (seperti newline \n atau \r)
+      while (Serial.available()) Serial.read();
+      break;
+    }
+    delay(20);
+    // Render loading text agar LCD tetap responsif
+    drawBootSplashStep("Pilih mode WiFi di Serial Monitor...", 60);
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal saat boot. Lanjut ke pilihan LCD / WiFiManager."));
-#else
-  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung ke pilihan LCD / WiFiManager."));
-#endif
+  Serial.print(F("[WIFI] Mode yang terpilih: "));
+  Serial.println(wifiChoice);
 
-  // connectEduroam() yang gagal sudah memanggil prepareNormalWiFiMode().
-  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum membuka portal.
-#if !USE_EDUROAM_FIRST
-  prepareNormalWiFiMode();
-#endif
+  if (wifiChoice == 1) {
+    // ── OPSI 1: EDUROAM ──
+    Serial.println(F("[WIFI] Mencoba koneksi Eduroam..."));
+    if (connectEduroam(true)) {
+      Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
+    } else {
+      Serial.println(F("[WIFI] Eduroam gagal. Sistem berjalan offline."));
+      prepareNormalWiFiMode();
+    }
 
-  Serial.println(F("[WIFI] Tidak ada pemilihan WiFi di LCD. LCD hanya menampilkan logo/loading."));
-  Serial.println(F("[WIFI] Konfigurasi WiFi dilakukan dari Serial Monitor saja:"));
-  Serial.println(F("[WIFI]   wifi portal  -> buka WiFiManager AP GenTrack-Monitor-AP"));
-  Serial.println(F("[WIFI]   wifi eduroam -> coba ulang eduroam WPA2-Enterprise"));
-  Serial.println(F("[WIFI] Sistem berjalan offline sampai command Serial dipilih."));
-  wifiOK = false;
-  wifiConnectionMode = WIFI_MODE_OFFLINE;
+  } else if (wifiChoice == 2) {
+    // ── OPSI 2: FIXED WIFI (HOTSPOT HP) ──
+    Serial.println(F("[WIFI] Mencoba Fixed WiFi (SSID: hai)..."));
+    WiFi.mode(WIFI_STA);
+    applyWiFiStabilityConfig();
+    WiFi.begin("hai", "hello123");
+    
+    if (waitForWiFiConnection(F("[FIXED WIFI]"), 15000)) {
+      wifiOK = true;
+      wifiConnectionMode = WIFI_MODE_MANAGER; // Pakai konstanta MANAGER untuk mode personal/bukan enterprise
+      printWiFiConnectedInfo(F("[FIXED WIFI]"));
+    } else {
+      Serial.println(F("[WIFI] Fixed WiFi gagal. Sistem berjalan offline."));
+      wifiOK = false;
+      wifiConnectionMode = WIFI_MODE_OFFLINE;
+      prepareNormalWiFiMode();
+    }
+
+  } else {
+    // ── OPSI 3: WIFI MANAGER AP ──
+    Serial.println(F("[WIFI] Membuka WiFiManager AP..."));
+    connectWiFiManagerFallback();
+  }
+
   Serial.println(F("╚══════════════════════════════════════════════╝"));
 }
 
@@ -4863,69 +4829,111 @@ bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
 #endif
 }
 
+
+// ============================================================
+// BOOT LOGO FROM ESP32 FLASH
+// ============================================================
+// Logo GENSYS disimpan di program flash sebagai RGB565 PROGMEM.
+// Tujuan:
+// - Boot logo tetap muncul walaupun SD card gagal init.
+// - Tidak perlu membaca /logo.png dari SD saat boot.
+// - SD tetap boleh dipakai untuk database/logging tanpa mempengaruhi tampilan logo.
+bool drawBootLogoFromFlash(int cx, int cy) {
+  static uint16_t lineBuf[GENSYS_LOGO_W];
+
+  int x0 = cx - (GENSYS_LOGO_W / 2);
+  int y0 = cy - (GENSYS_LOGO_H / 2);
+
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+
+  tft.fillRect(x0 - 4, y0 - 4, GENSYS_LOGO_W + 8, GENSYS_LOGO_H + 8, C_WHITE);
+
+  for (int y = 0; y < GENSYS_LOGO_H; y++) {
+    for (int x = 0; x < GENSYS_LOGO_W; x++) {
+      // Header menyimpan warna RGB565 normal.
+      // bootLogoColor() dipakai agar byte order warna sama dengan logo PNG/primitive
+      // pada konfigurasi TFT yang digunakan di kode ini.
+      lineBuf[x] = bootLogoColor(pgm_read_word(&gensysLogoRgb565[y * GENSYS_LOGO_W + x]));
+    }
+    tft.pushImage(x0, y0 + y, GENSYS_LOGO_W, 1, lineBuf);
+  }
+
+  Serial.print(F("[BOOT LOGO] Logo drawn from ESP32 flash: "));
+  Serial.print(GENSYS_LOGO_W);
+  Serial.print('x');
+  Serial.println(GENSYS_LOGO_H);
+  return true;
+}
+
+
 void drawBootSplashStep(const char* statusText, int progress) {
-  // Boot page di-render penuh hanya sekali. Step berikutnya hanya update loading bar
-  // dan status text agar layar tidak flicker/berkedip saat proses init berjalan.
+  // Boot page di-render penuh hanya sekali.
+  // Step berikutnya hanya update loading bar dan status text agar layar tidak flicker.
+  //
+  // Perubahan utama:
+  // - Logo GENSYS ditampilkan dari flash ESP32, bukan bergantung SD card.
+  // - Text manual "GEN" dan "SYS" dihapus supaya tidak dobel dengan logo asli.
+  // - Loading bar diposisikan lebih bawah agar tidak menabrak logo.
   static bool bootBaseDrawn = false;
   static int lastProgress = -1;
   static String lastStatus = "";
-  static bool logoFromSdDrawn = false;
 
-  int barX = 80;
-  int barY = 292;
-  int barW = 320;
-  int barH = 14;
+  const int logoCx = SW / 2;
+  const int logoCy = 126;
+
+  const int barX = 90;
+  const int barY = 274;
+  const int barW = 300;
+  const int barH = 16;
 
   progress = constrain(progress, 0, 100);
 
   if (!bootBaseDrawn || progress <= 0) {
     tft.fillScreen(C_WHITE);
-    logoFromSdDrawn = drawBootLogoFromSd(SW / 2, 98, 156, 156);
-    if (!logoFromSdDrawn) drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
 
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(4);
-    // Wordmark fallback dibuat dua warna seperti logo referensi: GEN navy, SYS biru.
-    tft.setTextColor(bootLogoColor(0x0015), C_WHITE);
-    tft.drawString("GEN", (SW / 2) - 36, 214);
-    tft.setTextColor(bootLogoColor(0x04BF), C_WHITE);
-    tft.drawString("SYS", (SW / 2) + 36, 214);
+    // Prioritas utama: logo dari flash ESP32.
+    // Ini tetap berhasil walaupun SD INIT FAILED.
+    bool logoDrawn = drawBootLogoFromFlash(logoCx, logoCy);
 
-    tft.setTextColor(C_PRIMARY, C_WHITE);
-    tft.setTextSize(1);
-    tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 248);
-    tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
+    // Fallback terakhir jika file header/logo flash tidak terbaca saat modifikasi project.
+    if (!logoDrawn) {
+      drawGensysLogoMark(SW / 2, 108, 78, C_PRIMARY, C_WHITE);
 
-    tft.drawRoundRect(barX, barY, barW, barH, 7, C_BORDER);
-    tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 5, C_WHITE);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextSize(4);
+      tft.setTextColor(bootLogoColor(0x0015), C_WHITE);
+      tft.drawString("GEN", (SW / 2) - 36, 214);
+      tft.setTextColor(bootLogoColor(0x04BF), C_WHITE);
+      tft.drawString("SYS", (SW / 2) + 36, 214);
+    }
+
+    tft.drawRoundRect(barX, barY, barW, barH, 8, C_BORDER);
+    tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 6, C_WHITE);
 
     bootBaseDrawn = true;
     lastProgress = -1;
     lastStatus = "";
   }
 
-  if (!logoFromSdDrawn && sdOK) {
-    logoFromSdDrawn = drawBootLogoFromSd(SW / 2, 98, 156, 156);
-  }
-
   if (progress != lastProgress) {
     int innerW = barW - 4;
     int fillW = map(progress, 0, 100, 0, innerW);
 
-    // Area dalam bar saja yang dibersihkan, bukan seluruh boot page.
-    tft.fillRoundRect(barX + 2, barY + 2, innerW, barH - 4, 5, C_WHITE);
+    // Bersihkan hanya isi loading bar, bukan seluruh splash screen.
+    tft.fillRoundRect(barX + 2, barY + 2, innerW, barH - 4, 6, C_WHITE);
     if (fillW > 0) {
-      tft.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 5, C_BLUE2);
+      tft.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 6, C_BLUE2);
     }
     lastProgress = progress;
   }
 
   if (lastStatus != String(statusText)) {
-    tft.fillRect(40, 306, 400, 14, C_WHITE);
+    tft.fillRect(40, 300, 400, 18, C_WHITE);
     tft.setTextColor(C_MUTED, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
-    tft.drawString(statusText, SW / 2, 313);
+    tft.drawString(statusText, SW / 2, 309);
     tft.setTextDatum(TL_DATUM);
     lastStatus = String(statusText);
   }
