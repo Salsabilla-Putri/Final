@@ -1227,6 +1227,7 @@ mqttClient.on('error', (error) => {
 // ============================================================
 
 const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
+const REALTIME_BUFFER_BACKEND_TO_MONGO = process.env.REALTIME_BUFFER_BACKEND_TO_MONGO !== 'false';
 
 let generatorBatchBuffer = [];
 let fftBatchBuffer = [];
@@ -1274,6 +1275,39 @@ function buildGeneratorDbDocument(data) {
         tps: toNumber(snapshot.tps, 0),
         phaseAngle: toNumber(snapshot.phaseAngle ?? snapshot.phase_diff ?? snapshot.phase_angle, 0)
     };
+}
+
+
+async function persistGeneratorDocumentsDirect(docs, reason = 'direct-batch') {
+    if (!docs.length) return { inserted: 0, duplicates: 0 };
+    await ensureDbReady();
+    const operations = docs.map((doc) => {
+        if (doc.recordId) {
+            return {
+                updateOne: {
+                    filter: { recordId: doc.recordId },
+                    update: { $setOnInsert: doc },
+                    upsert: true
+                }
+            };
+        }
+        return { insertOne: { document: doc } };
+    });
+    const result = await GeneratorData.bulkWrite(operations, { ordered: false });
+    const inserted = (result.insertedCount || 0) + (result.upsertedCount || 0);
+    const duplicates = result.matchedCount || 0;
+    mqttIngestStats.savedMessages++;
+    mqttIngestStats.insertedRecords += inserted;
+    mqttIngestStats.duplicateRecords += duplicates;
+    mqttIngestStats.lastInsertedRecords = inserted;
+    mqttIngestStats.lastDuplicateRecords = duplicates;
+    mqttIngestStats.lastFlushAt = new Date();
+    mqttIngestStats.lastFlushReason = reason;
+    mqttIngestStats.lastFlushedRecords = docs.length;
+    mqttIngestStats.lastError = null;
+    mqttIngestStats.lastErrorAt = null;
+    console.log(`💾 MongoDB direct batch saved | reason=${reason} | received=${docs.length} | inserted=${inserted} | duplicates=${duplicates}`);
+    return { inserted, duplicates };
 }
 
 function getNextGeneratorBatchFlushAt(now = new Date()) {
@@ -2052,15 +2086,23 @@ mqttClient.on('message', async (topic, message) => {
         // bukan dari heartbeat dashboard gen/realtime, agar mengikuti timestamp
         // data baru yang benar-benar masuk ke database.
 
-        // gen/realtime: jalur dashboard + alert.
-        // Alert tidak menunggu batch MongoDB.
+        // gen/realtime: jalur dashboard + alert. Pada mode bufferbackend,
+        // record 1 detik juga ditahan di RAM server dan baru di-flush ke MongoDB tiap 10 menit.
         if (topic === 'gen/realtime') {
             await checkAndSaveAlerts(latestData);
+            if (REALTIME_BUFFER_BACKEND_TO_MONGO) {
+                addGeneratorDataToBatch({
+                    ...latestData,
+                    recordId: parsed.recordId || latestData.recordId,
+                    localSeq: parsed.localSeq || latestData.localSeq
+                });
+                logGeneratorBatchStatus('📦 gen/realtime buffered for MongoDB');
+            }
             return;
         }
 
-        // gen/data: jalur historis/database. ESP32 mengirim record realtime,
-        // server menahan data selama 10 menit lalu menyimpan satu batch ke MongoDB.
+        // gen/data: jalur bufferesp. ESP32 mengirim CSV batch ±10 menit,
+        // lalu server menyimpan batch tersebut langsung ke MongoDB.
         // Bentuk lama { records: [...] } tetap diterima untuk kompatibilitas.
         if (topic === 'gen/data') {
             const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
@@ -2073,6 +2115,8 @@ mqttClient.on('message', async (topic, message) => {
                 return;
             }
 
+            const directGeneratorDocs = [];
+            const directActiveTimeSnapshots = [];
             let bufferedGenerator = 0;
             let bufferedFft = 0;
 
@@ -2086,11 +2130,13 @@ mqttClient.on('message', async (topic, message) => {
                     timestamp: record.timestamp || parsed.timestamp
                 });
 
-                addGeneratorDataToBatch({
+                const directSnapshot = {
                     ...snapshot,
                     recordId: record.recordId,
                     localSeq: record.localSeq
-                });
+                };
+                directGeneratorDocs.push(buildGeneratorDbDocument(directSnapshot));
+                directActiveTimeSnapshots.push(directSnapshot);
                 bufferedGenerator++;
 
                 const recordFftDoc = normalizeFftPayload(record, snapshot.deviceId);
@@ -2106,7 +2152,13 @@ mqttClient.on('message', async (topic, message) => {
                 return;
             }
 
-            logGeneratorBatchStatus(`📦 gen/data buffered | received=${records.length} | added=${bufferedGenerator} | fftAdded=${bufferedFft}`);
+            if (directGeneratorDocs.length) {
+                await persistGeneratorDocumentsDirect(directGeneratorDocs, `esp-buffer-csv-${directGeneratorDocs.length}`);
+                for (const snapshot of directActiveTimeSnapshots) await syncActiveTimeHistory(snapshot);
+            }
+
+            if (bufferedFft) logGeneratorBatchStatus(`📦 gen/data FFT buffered | received=${records.length} | generatorDirect=${bufferedGenerator} | fftAdded=${bufferedFft}`);
+            else console.log(`💾 gen/data ESP buffer stored direct | received=${records.length} | stored=${bufferedGenerator}`);
         }
 
     } catch (error) {

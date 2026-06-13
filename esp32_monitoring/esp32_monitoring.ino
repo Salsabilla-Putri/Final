@@ -46,6 +46,8 @@
 #include <SPI.h>
 #include <FS.h>
 #include <SD.h>
+#include <LittleFS.h>
+#include <PNGdec.h>
 #include <TFT_eSPI.h>
 #include <time.h>
 #include <Adafruit_FT6206.h>
@@ -108,7 +110,7 @@
 #endif
 
 #ifndef USE_EDUROAM_FIRST
-#define USE_EDUROAM_FIRST 0   // Matikan percobaan otomatis, kita pakai menu
+#define USE_EDUROAM_FIRST 1   // Coba eduroam otomatis lebih dulu, tetap ada menu/fallback
 #endif
 
 // Konfigurasi eduroam WPA2-Enterprise PEAP.
@@ -205,7 +207,7 @@ const int   DAYLIGHT_OFFSET_SEC = 0;
 // ============================================================
 static const uint32_t LINK_BAUD = 115200;
 static const int LINK_RX_PIN = 16;
-static const int LINK_TX_PIN = 17;
+static const int LINK_TX_PIN = -1;  // RX only: hindari bentrok dengan TX ESP32-1/Speeduino pada jalur UART link
 
 HardwareSerial LinkSerial(2);
 String linkRxBuffer = "";
@@ -271,6 +273,10 @@ SemaphoreHandle_t dataMutex = NULL;
 const char* DB_FILE = "/sdDatabase.csv";
 const char* DB_LEGACY_FILE = "/database.csv";
 const char* BOOT_LOGO_PNG_FILE = "/logo.png";
+const char* BOOT_LOGO_FS_FILE = "/logo.png";
+bool littleFsOK = false;
+PNG bootPng;
+File bootPngFile;
 
 // Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
 const char* DB_CSV_HEADER =
@@ -2788,11 +2794,17 @@ bool isEduroamCredentialConfigured() {
 #if USE_EDUROAM_FIRST
   if (String(EDUROAM_USERNAME) == "username@kampus.ac.id") return false;
   if (String(EDUROAM_PASSWORD) == "password_eduroam") return false;
+  if (!String(EDUROAM_IDENTITY).length()) return false;
   if (String(EDUROAM_USERNAME).length() < 4) return false;
   if (String(EDUROAM_PASSWORD).length() < 1) return false;
   return true;
 #else
-  return false;
+  if (String(EDUROAM_USERNAME) == "username@kampus.ac.id") return false;
+  if (String(EDUROAM_PASSWORD) == "password_eduroam") return false;
+  if (!String(EDUROAM_IDENTITY).length()) return false;
+  if (String(EDUROAM_USERNAME).length() < 4) return false;
+  if (String(EDUROAM_PASSWORD).length() < 1) return false;
+  return true;
 #endif
 }
 
@@ -3324,8 +3336,8 @@ void setupWiFiWithMenu() {
     delay(100);
   }
   if (choice == -1) {
-    Serial.println(F("[WIFI] Tidak ada input dalam 10 detik, default ke WiFi Manager."));
-    choice = 3;
+    Serial.println(F("[WIFI] Tidak ada input dalam 10 detik, default ke Eduroam."));
+    choice = 1;
   }
   switch (choice) {
     case 1:
@@ -3514,9 +3526,70 @@ void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   tft.fillCircle(cx + p[8][0], cy + p[8][1], 3, orange);
 }
 
+void* pngOpenFile(const char *filename, int32_t *size) {
+  if (bootPngFile) bootPngFile.close();
+  if (littleFsOK && LittleFS.exists(filename)) {
+    bootPngFile = LittleFS.open(filename, "r");
+  }
+  if (!bootPngFile && sdOK && SD.exists(filename)) {
+    bootPngFile = SD.open(filename, FILE_READ);
+  }
+  if (!bootPngFile) return NULL;
+  *size = bootPngFile.size();
+  return &bootPngFile;
+}
+
+void pngCloseFile(void *handle) {
+  File *f = static_cast<File*>(handle);
+  if (f && *f) f->close();
+}
+
+int32_t pngReadFile(PNGFILE *page, uint8_t *buffer, int32_t length) {
+  File *f = static_cast<File*>(page->fHandle);
+  if (!f || !*f) return 0;
+  return f->read(buffer, length);
+}
+
+int32_t pngSeekFile(PNGFILE *page, int32_t position) {
+  File *f = static_cast<File*>(page->fHandle);
+  if (!f || !*f) return 0;
+  return f->seek(position);
+}
+
+int bootLogoX = 0;
+int bootLogoY = 0;
+uint16_t bootLogoLine[480];
+
+void pngDrawBootLogo(PNGDRAW *pDraw) {
+  int w = pDraw->iWidth;
+  if (w > SW) w = SW;
+  bootPng.getLineAsRGB565(pDraw, bootLogoLine, PNG_RGB565_BIG_ENDIAN, 0xFFFFFFFF);
+  tft.pushImage(bootLogoX, bootLogoY + pDraw->y, w, 1, bootLogoLine);
+}
+
 bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
-  // Tidak ada PNGdec, fallback ke vektor
-  return false;
+  (void)maxW;
+  (void)maxH;
+  if (!littleFsOK && !sdOK) return false;
+  int rc = bootPng.open(BOOT_LOGO_FS_FILE, pngOpenFile, pngCloseFile, pngReadFile, pngSeekFile, pngDrawBootLogo);
+  if (rc != PNG_SUCCESS) {
+    if (bootPngFile) bootPngFile.close();
+    return false;
+  }
+  int w = bootPng.getWidth();
+  int h = bootPng.getHeight();
+  if (w > SW || h > SH) {
+    Serial.println(F("[LOGO] logo.png terlalu besar untuk TFT; gunakan PNG <= 480x320 atau fallback vektor aktif."));
+    bootPng.close();
+    return false;
+  }
+  bootLogoX = cx - (w / 2);
+  bootLogoY = cy - (h / 2);
+  if (bootLogoX < 0) bootLogoX = 0;
+  if (bootLogoY < 0) bootLogoY = 0;
+  bootPng.decode(NULL, 0);
+  bootPng.close();
+  return true;
 }
 
 void drawBootSplashStep(const char* statusText, int progress) {
@@ -3527,7 +3600,8 @@ void drawBootSplashStep(const char* statusText, int progress) {
   progress = constrain(progress, 0, 100);
   if (!bootBaseDrawn || progress <= 0) {
     tft.fillScreen(C_WHITE);
-    drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
+    if (!drawBootLogoFromSd(SW / 2, 144, 250, 250)) {
+      drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(4);
     tft.setTextColor(bootLogoColor(0x0015), C_WHITE);
@@ -3537,7 +3611,8 @@ void drawBootSplashStep(const char* statusText, int progress) {
     tft.setTextColor(C_PRIMARY, C_WHITE);
     tft.setTextSize(1);
     tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 248);
-    tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
+      tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
+    }
     tft.drawRoundRect(barX, barY, barW, barH, 7, C_BORDER);
     tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 5, C_WHITE);
     bootBaseDrawn = true;
@@ -4524,6 +4599,8 @@ void setup() {
   digitalWrite(CTP_RST, HIGH); delay(100);
   tft.init();
   tft.setRotation(1);
+  littleFsOK = LittleFS.begin(false);
+  if (!littleFsOK) Serial.println("[LittleFS] Mount gagal; boot logo pakai fallback vektor.");
   initSDCard();
   drawBootSplashStep(sdOK ? "Local SD mounted - loading logo.png" : "SD offline - using fallback logo", 10);
   drawBootSplashStep("Initializing touch controller...", 25);
