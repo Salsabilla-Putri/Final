@@ -2089,25 +2089,36 @@ mqttClient.on('message', async (topic, message) => {
         // bukan dari heartbeat dashboard gen/realtime, agar mengikuti timestamp
         // data baru yang benar-benar masuk ke database.
 
-        // gen/realtime: jalur dashboard + alert. Pada mode bufferbackend,
-        // record 1 detik juga ditahan di RAM server dan baru di-flush ke MongoDB tiap 10 menit.
+        // gen/realtime adalah jalur live untuk LCD/web dashboard. Jangan menunggu pekerjaan
+        // database, alert, atau batch MongoDB di handler MQTT karena delay di sini dapat
+        // membuat pesan realtime berikutnya antre dan dashboard tampak disconnected.
         if (topic === 'gen/realtime') {
-            await checkAndSaveAlerts(latestData);
-
+            const realtimeSnapshotForBackend = {
+                ...latestData,
+                recordId: parsed.recordId || latestData.recordId,
+                localSeq: parsed.localSeq || latestData.localSeq
+            };
             const payloadMode = String(parsed.dataSendMode || parsed.sendMode || DATA_SEND_MODE || 'auto').toLowerCase();
-            const shouldBufferRealtimeToMongo = REALTIME_BUFFER_BACKEND_TO_MONGO
-                && payloadMode !== 'bufferesp'
-                && payloadMode !== 'esp'
-                && payloadMode !== 'esp32';
 
-            if (shouldBufferRealtimeToMongo) {
-                addGeneratorDataToBatch({
-                    ...latestData,
-                    recordId: parsed.recordId || latestData.recordId,
-                    localSeq: parsed.localSeq || latestData.localSeq
-                });
-                logGeneratorBatchStatus('📦 gen/realtime buffered for MongoDB');
-            }
+            setImmediate(async () => {
+                try {
+                    await checkAndSaveAlerts(realtimeSnapshotForBackend);
+
+                    const shouldBufferRealtimeToMongo = REALTIME_BUFFER_BACKEND_TO_MONGO
+                        && payloadMode !== 'bufferesp'
+                        && payloadMode !== 'esp'
+                        && payloadMode !== 'esp32';
+
+                    if (shouldBufferRealtimeToMongo) {
+                        addGeneratorDataToBatch(realtimeSnapshotForBackend);
+                        logGeneratorBatchStatus('📦 gen/realtime buffered for MongoDB');
+                    }
+                } catch (backgroundError) {
+                    updateMqttIngestError(backgroundError);
+                    console.error('❌ Realtime background processing error:', backgroundError.message);
+                }
+            });
+
             return;
         }
 
