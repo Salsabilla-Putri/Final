@@ -17,7 +17,7 @@
 // SD Card pada TFT:
 // SD_CS   GPIO26
 // SD_MOSI GPIO13
-// SD_MISO GPIO12
+// SD_MISO GPIO19
 // SD_SCK  GPIO14
 // Init SD dilakukan SEBELUM TFT init untuk menghindari konflik SPI
 //
@@ -321,14 +321,14 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 // SD CARD
 // ============================================================
 // Pin SD sesuai wiring modul yang dipakai pada perangkat ini.
-#define SD_MISO 12
+#define SD_MISO 19
 #define SD_MOSI 13
 #define SD_SCK  14
 #define SD_CS   26
 
 #define SD_SPI_FREQ_INIT 400000UL
 #define SD_SPI_FREQ_FAST 1000000UL
-#define SD_AUTO_RETRY_INTERVAL_MS 5000UL
+#define SD_AUTO_RETRY_INTERVAL_MS 60000UL
 
 SPIClass sdSPI(HSPI);
 SemaphoreHandle_t sdMutex = NULL;
@@ -366,10 +366,10 @@ const char* FFT_CSV_HEADER =
 #define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
 // Pengiriman fallback tetap mengikuti interval 10 menit. Saat interval tiba,
-// buffer 600 record dipecah menjadi 2 chunk besar berisi 300 record.
+// buffer 600 record dikirim setelah 10 menit dalam chunk kecil 100 record.
 // Jeda 500 ms antar chunk memberi waktu broker/backend memproses payload sebelum
 // chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 300
+#define MONGODB_UPLOAD_CHUNK_RECORDS 100
 #define MONGODB_UPLOAD_CHUNK_DELAY_MS 500UL
 
 // Mode pengiriman data ke MongoDB:
@@ -2967,7 +2967,7 @@ void sendMongoDbBufferToMongoDB() {
   // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
   // Implementasi:
   // - mengirim fallback buffer sampai 600 record setiap 10 menit atau saat diminta,
-  // - default MQTT dipecah 300 record/publish dengan jeda 500 ms antar chunk,
+  // - default MQTT dipecah 100 record/publish dengan jeda 500 ms antar chunk,
   // - tiap publish berisi payload.records[],
   // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
   // - record yang gagal tetap disimpan untuk retry berikutnya.
@@ -3187,7 +3187,7 @@ void MongoBufferTask(void *pvParameters) {
 
     bool intervalReached = (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS);
     // Pengiriman otomatis tetap setiap 10 menit atau saat buffer penuh 600 record.
-    // Chunk 300 record hanya dipakai untuk memecah payload saat siklus upload berjalan.
+    // Chunk 100 record hanya dipakai untuk memecah payload saat siklus upload berjalan.
     bool bufferFull = (bufferCountSnapshot >= MONGODB_BUFFER_RECORDS);
 
     if ((intervalReached || bufferFull || manualRequest) && bufferCountSnapshot > 0) {
@@ -3471,58 +3471,46 @@ void initSDCard() {
 
   sdOK = false;
   SD.end();
+
+  // Ikuti urutan init yang terbukti stabil pada test sketch:
+  // 1) pastikan TFT dan SD sama-sama deselect,
+  // 2) beri waktu modul SD settle sebelum HSPI begin,
+  // 3) init lambat 400 kHz sampai kartu benar-benar terdeteksi,
+  // 4) langsung uji open/write agar dari awal terbukti siap dipakai.
   deselectAllSPI();
-  delay(300);
+  delay(1000);
   sdSPI.end();
   delay(50);
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  delay(900); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
+  delay(300);
 
   bool begun = false;
-  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
+  for (uint8_t attempt = 1; attempt <= 10; attempt++) {
     Serial.print(F("[SD] Init attempt "));
     Serial.print(attempt);
-    Serial.println(F("/5..."));
+    Serial.print(F("/10 ... "));
     SD.end();
     deselectAllSPI();
-    delay(150 + attempt * 100);
+    delay(100);
     if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
       begun = true;
+      Serial.println(F("OK"));
       break;
     }
-    delay(700);
+    Serial.println(F("FAILED"));
+    SD.end();
+    delay(500);
   }
 
   if (!begun) {
     sdOK = false;
-    Serial.println("[SD] GAGAL. Cek CS=26, MOSI=13, MISO=12, SCK=14, FAT32.");
+    Serial.println("[SD] GAGAL FINAL. Cek CS=26, MOSI=13, MISO=19, SCK=14, FAT32.");
     Serial.println("══════════════════════════════════════");
     return;
   }
 
-  delay(500);
   sdOK = true;
   Serial.println("[SD] OK.");
-
-  // Setelah mount stabil di 400 kHz, naikkan SPI SD secara konservatif.
-  // Jika kartu/modul sensitif, operasi file tetap aman karena setiap akses
-  // diawali deselectAllSPI() dan retry runtime akan kembali ke init lambat.
-  SD.end();
-  delay(50);
-  if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_FAST) && SD.cardType() != CARD_NONE) {
-    Serial.println(F("[SD] SPI switched to stable fast mode."));
-  } else {
-    Serial.println(F("[SD] Fast mode failed, remounting at init speed."));
-    SD.end();
-    delay(50);
-    sdOK = SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE;
-  }
-
-  if (!sdOK) {
-    Serial.println(F("[SD] Remount after speed switch failed; SD marked offline."));
-    Serial.println("══════════════════════════════════════");
-    return;
-  }
 
   if (sdMutex == NULL || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000)) == pdTRUE) {
     ensureDatabaseCsvHeader();
@@ -3532,6 +3520,20 @@ void initSDCard() {
   }
 
   updateStorageCache();
+
+  if (sdOK) {
+    File testFile = SD.open("/sd_boot_test.txt", FILE_WRITE);
+    if (testFile) {
+      testFile.println(F("SD boot write OK"));
+      testFile.close();
+      Serial.println(F("[SD] Boot write test OK."));
+    } else {
+      sdOK = false;
+      sdLastFileErrorMs = millis();
+      Serial.println(F("[SD] Boot write test FAILED; SD marked offline."));
+    }
+  }
+
   Serial.println("══════════════════════════════════════");
 }
 
@@ -3612,16 +3614,16 @@ String buildFftCsvLine(const StorageRecord &r) {
 bool retrySDCardOnceFast() {
   if (sdOK) return true;
 
-  // Retry runtime dibuat cepat/non-spam agar kegagalan SD tidak membekukan
-  // display 7 detik seperti init penuh 10x attempt. Init penuh tetap dipakai saat
-  // boot/command manual; loop runtime hanya mencoba 1 kali lalu kembali ke UI.
+  // Retry runtime dibuat jarang dan hanya 1 attempt agar tidak terjadi retry cepat
+  // terus-menerus saat kartu belum terpasang/tegangan belum stabil.
   if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
     return false;
   }
 
+  SD.end();
   deselectAllSPI();
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  delay(20);
+  delay(300);
 
   bool ok = false;
   if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
@@ -6828,7 +6830,7 @@ void loop() {
 
   if (!sdOK && millis() - lastSDRetry >= SD_AUTO_RETRY_INTERVAL_MS) {
     lastSDRetry = millis();
-    Serial.println("[SD] Runtime retry cepat (1 attempt, non-blocking panjang)...");
+    Serial.println("[SD] Runtime retry terjadwal 60 detik (1 attempt, non-spam)...");
     retrySDCardOnceFast();
     displayUpdateNow = true;
   }
