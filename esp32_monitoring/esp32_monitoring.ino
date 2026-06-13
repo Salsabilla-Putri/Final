@@ -355,7 +355,7 @@ const char* FFT_CSV_HEADER =
 // ============================================================
 #define SENSOR_SAMPLE_HZ          50
 #define SENSOR_SAMPLE_INTERVAL_MS 20
-#define AGGREGATION_INTERVAL_MS   500
+#define AGGREGATION_INTERVAL_MS   1000
 #define STORAGE_BATCH_SIZE        1
 // ============================================================
 // MONGODB BATCH CONFIG
@@ -397,9 +397,9 @@ const char* FFT_CSV_HEADER =
 // Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
 // saat EAP handshake dan MQTT fallback batch publish.
 
-const unsigned long publishInterval   = 500;
+const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
-const unsigned long drawInterval      = 500;   // LCD partial update tiap 0,5 detik mengikuti agregasi cepat
+const unsigned long drawInterval      = 1000;   // LCD partial update tiap 0,5 detik mengikuti agregasi cepat
 
 // ============================================================
 // FFT EDGE
