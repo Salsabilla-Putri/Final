@@ -1227,6 +1227,7 @@ mqttClient.on('error', (error) => {
 // ============================================================
 
 const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
+const DATA_SEND_MODE = cleanEnvValue(process.env.DATA_SEND_MODE || process.env.GEN_DATA_SEND_MODE || 'auto').toLowerCase();
 const REALTIME_BUFFER_BACKEND_TO_MONGO = process.env.REALTIME_BUFFER_BACKEND_TO_MONGO !== 'false';
 
 let generatorBatchBuffer = [];
@@ -1844,6 +1845,8 @@ app.get('/api/ingest/status', (req, res) => {
         dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
         dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
         nextFlushAt: mqttIngestStats.nextFlushAt,
+        dataSendMode: DATA_SEND_MODE,
+        realtimeBufferBackendToMongo: REALTIME_BUFFER_BACKEND_TO_MONGO,
         bufferedGeneratorRecords: generatorBatchBuffer.length,
         bufferedFftRecords: fftBatchBuffer.length,
         isFlushingGeneratorBatch
@@ -2090,7 +2093,14 @@ mqttClient.on('message', async (topic, message) => {
         // record 1 detik juga ditahan di RAM server dan baru di-flush ke MongoDB tiap 10 menit.
         if (topic === 'gen/realtime') {
             await checkAndSaveAlerts(latestData);
-            if (REALTIME_BUFFER_BACKEND_TO_MONGO) {
+
+            const payloadMode = String(parsed.dataSendMode || parsed.sendMode || DATA_SEND_MODE || 'auto').toLowerCase();
+            const shouldBufferRealtimeToMongo = REALTIME_BUFFER_BACKEND_TO_MONGO
+                && payloadMode !== 'bufferesp'
+                && payloadMode !== 'esp'
+                && payloadMode !== 'esp32';
+
+            if (shouldBufferRealtimeToMongo) {
                 addGeneratorDataToBatch({
                     ...latestData,
                     recordId: parsed.recordId || latestData.recordId,
