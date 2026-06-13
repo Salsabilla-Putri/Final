@@ -3687,6 +3687,7 @@ void saveSnapshotToSD() {
       }
     }
   }
+#endif
 
   bool backupNeeded = true; // User requirement: sdDatabase.csv ditulis tiap 1 detik walaupun online.
   uint8_t validRecords = 0;
