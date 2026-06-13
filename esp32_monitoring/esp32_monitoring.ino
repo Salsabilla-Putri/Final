@@ -157,6 +157,18 @@
 #define EDUROAM_TIMEOUT_MS 25000UL
 #endif
 
+#ifndef FALLBACK_WIFI_SSID
+#define FALLBACK_WIFI_SSID "hai"
+#endif
+
+#ifndef FALLBACK_WIFI_PASS
+#define FALLBACK_WIFI_PASS "hello123"
+#endif
+
+#ifndef FALLBACK_WIFI_TIMEOUT_MS
+#define FALLBACK_WIFI_TIMEOUT_MS 20000UL
+#endif
+
 // ============================================================
 // MQTT
 // ============================================================
@@ -359,6 +371,22 @@ const char* FFT_CSV_HEADER =
 // chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
 #define MONGODB_UPLOAD_CHUNK_RECORDS 300
 #define MONGODB_UPLOAD_CHUNK_DELAY_MS 500UL
+
+// Mode pengiriman data ke MongoDB:
+// - "buffermongo": ESP32 publish realtime ke gen/realtime; server menahan 10 menit lalu simpan MongoDB.
+// - "bufferesp"  : ESP32 buffer 10 menit, simpan CSV lokal, lalu publish batch ke gen/data; server simpan batch ke MongoDB.
+#ifndef DATA_SEND_MODE
+#define DATA_SEND_MODE "bufferesp"
+#endif
+#define DATA_SEND_MODE_BUFFERMONGO 1
+#define DATA_SEND_MODE_BUFFERESP   2
+#ifndef DATA_SEND_MODE_ID
+  #if defined(DATA_SEND_MODE_BUFFERMONGO_DEFAULT)
+    #define DATA_SEND_MODE_ID DATA_SEND_MODE_BUFFERMONGO
+  #else
+    #define DATA_SEND_MODE_ID DATA_SEND_MODE_BUFFERESP
+  #endif
+#endif
 
 // TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
 // Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
@@ -908,6 +936,53 @@ bool mqttHostHadScheme = false;
 
 String serialCmd = "";
 char tmp[24];
+
+volatile uint8_t currentDataSendMode = DATA_SEND_MODE_ID;
+
+const char* getDataSendModeText() {
+  return currentDataSendMode == DATA_SEND_MODE_BUFFERMONGO ? "buffermongo" : "bufferesp";
+}
+
+bool isBufferEspMode() {
+  return currentDataSendMode == DATA_SEND_MODE_BUFFERESP;
+}
+
+bool isBufferMongoMode() {
+  return currentDataSendMode == DATA_SEND_MODE_BUFFERMONGO;
+}
+
+void printDataSendModeStatus() {
+  Serial.println();
+  Serial.println(F("================ DATA SEND MODE ================"));
+  Serial.print  (F("  active mode    : ")); Serial.println(getDataSendModeText());
+  Serial.println(F("  bufferesp      : ESP32 buffer 10 menit CSV/RAM, lalu publish batch ke gen/data."));
+  Serial.println(F("  buffermongo    : ESP32 publish gen/realtime; server buffer 10 menit lalu simpan MongoDB."));
+  Serial.println(F("  commands       : send mode bufferesp | send mode buffermongo"));
+  Serial.println(F("================================================"));
+}
+
+void setDataSendMode(uint8_t mode) {
+  if (mode != DATA_SEND_MODE_BUFFERESP && mode != DATA_SEND_MODE_BUFFERMONGO) return;
+
+  uint8_t oldMode = currentDataSendMode;
+  currentDataSendMode = mode;
+
+  Serial.println();
+  Serial.println(F("================ DATA SEND MODE UPDATED ================"));
+  Serial.print(F("  old mode : "));
+  Serial.println(oldMode == DATA_SEND_MODE_BUFFERMONGO ? F("buffermongo") : F("bufferesp"));
+  Serial.print(F("  new mode : "));
+  Serial.println(getDataSendModeText());
+
+  if (isBufferEspMode()) {
+    Serial.println(F("  path     : ESP32 buffer 10 menit -> topic gen/data -> MongoDB."));
+  } else {
+    Serial.println(F("  path     : topic gen/realtime -> server buffer 10 menit -> MongoDB."));
+    Serial.println(F("  note     : buffer ESP tidak akan dikirim selama mode buffermongo aktif."));
+  }
+
+  Serial.println(F("========================================================"));
+}
 
 // Forward declaration untuk fungsi yang dipakai sebelum definisi aslinya.
 void printMongoBufferStatus();
@@ -2161,6 +2236,7 @@ String buildJsonRecordParametersOnly(const StorageRecord &r) {
   // Tidak memasukkan FFT besar; parameter utama generator dan grid tetap dikirim.
   String json = "{";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  json += "\"dataSendMode\":\"" + String(getDataSendModeText()) + "\",";
   json += "\"recordId\":\"" + r.recordId + "\",";
   json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
@@ -2224,6 +2300,7 @@ String buildMqttRealtimeFlatPayload() {
   const AggregatedData &a = r.agg;
   String json = "{";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
+  json += "\"dataSendMode\":\"" + String(getDataSendModeText()) + "\",";
   json += "\"recordId\":\"" + r.recordId + "\",";
   json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"samples\":" + String(a.samples) + ",";
@@ -2719,6 +2796,7 @@ uint16_t buildMongoDbBufferPayload(String &payload, uint16_t maxRecords = MONGOD
   payload += "{";
   payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   payload += "\"type\":\"mongodb_batch\",";
+  payload += "\"dataSendMode\":\"" + String(getDataSendModeText()) + "\",";
   payload += "\"source\":\"esp32_monitoring_ram_buffer\",";
   payload += "\"transport\":\"mqtt\",";
   payload += "\"topic\":\"" + String(MQTT_TOPIC) + "\",";
@@ -3100,6 +3178,11 @@ void MongoBufferTask(void *pvParameters) {
       }
     } else {
       bufferCountSnapshot = mongoDbBufferCount;
+    }
+
+    if (!isBufferEspMode()) {
+      vTaskDelay(pdMS_TO_TICKS(3000));
+      continue;
     }
 
     bool intervalReached = (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS);
@@ -3589,17 +3672,19 @@ void saveSnapshotToSD() {
 
   uint32_t saveStart = micros();
 
-  // Buffer MongoDB/history diisi setiap ada record agregasi baru.
-  // MongoBufferTask mengirim satu batch ke topic gen/data setiap 10 menit.
-  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
-    if (!storageBatch[i].valid) continue;
-    if (storageBatch[i].localSeq <= lastMongoBufferedLocalSeq) continue;
-    bool mongoAccepted = addRecordToMongoDbBuffer(storageBatch[i]);
-    if (mongoAccepted) {
-      lastMongoBufferedLocalSeq = storageBatch[i].localSeq;
-    } else {
-      sdBackupBecauseBufferFullCount++;
-      // Tetap lanjut ke SD agar record tidak hilang saat buffer penuh.
+  // Mode bufferesp: ESP32 mengisi buffer 10 menit lalu publish batch ke gen/data.
+  // Mode buffermongo: ESP32 hanya publish gen/realtime; server yang buffer 10 menit dan simpan MongoDB.
+  if (isBufferEspMode()) {
+    for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
+      if (!storageBatch[i].valid) continue;
+      if (storageBatch[i].localSeq <= lastMongoBufferedLocalSeq) continue;
+      bool mongoAccepted = addRecordToMongoDbBuffer(storageBatch[i]);
+      if (mongoAccepted) {
+        lastMongoBufferedLocalSeq = storageBatch[i].localSeq;
+      } else {
+        sdBackupBecauseBufferFullCount++;
+        // Tetap lanjut ke SD agar record tidak hilang saat buffer penuh.
+      }
     }
   }
 
@@ -4386,14 +4471,14 @@ bool connectWiFiManagerFallback() {
 
   debugScanWiFiBeforePortal();
 
-  // Portal memakai AP+STA agar halaman konfigurasi tetap aktif sambil ESP32
-  // melakukan scan jaringan sekitar. Ini membantu WiFiManager mendeteksi SSID
-  // dengan benar setelah fallback dari eduroam/EAP.
-  WiFi.mode(WIFI_AP_STA);
-  applyWiFiCountryConfig();
+  // Biarkan WiFiManager sendiri yang mengaktifkan AP+STA. Jika mode AP_STA
+  // dipaksa sebelum startConfigPortal(), beberapa core ESP32 menampilkan
+  // halaman Configure WiFi putih/kosong karena captive portal dan scan web
+  // handler tidak terpasang bersih setelah EAP eduroam gagal.
+  WiFi.mode(WIFI_STA);
   delay(300);
 
-  static WiFiManager wm;
+  WiFiManager wm;
   wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
   wm.setConnectTimeout(30);
@@ -4446,6 +4531,50 @@ bool connectWiFiManagerFallback() {
 }
 
 
+bool connectFallbackHomeWiFi() {
+  Serial.println();
+  Serial.println(F("╔════════════ STATIC WIFI FALLBACK ════════════╗"));
+  Serial.print(F("[WIFI HAI] SSID    : "));
+  Serial.println(FALLBACK_WIFI_SSID);
+  Serial.print(F("[WIFI HAI] Timeout : "));
+  Serial.print(FALLBACK_WIFI_TIMEOUT_MS / 1000UL);
+  Serial.println(F(" s"));
+
+  mqttOK = false;
+  wifiOK = false;
+
+  // Pastikan state WPA2-Enterprise sudah bersih sebelum mencoba WPA2-PSK biasa.
+  prepareNormalWiFiMode();
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  applyWiFiCountryConfig();
+  applyWiFiStabilityConfig();
+  delay(300);
+
+  WiFi.begin(FALLBACK_WIFI_SSID, FALLBACK_WIFI_PASS);
+
+  if (waitForWiFiConnection(F("[WIFI HAI]"), FALLBACK_WIFI_TIMEOUT_MS)) {
+    wifiOK = true;
+    wifiConnectionMode = WIFI_MODE_MANAGER;
+    printWiFiConnectedInfo(F("[WIFI HAI]"));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return true;
+  }
+
+  WiFi.disconnect(false, false);
+  wifiOK = false;
+  wifiConnectionMode = WIFI_MODE_OFFLINE;
+  Serial.println(F("[WIFI HAI] Gagal konek ke SSID fallback. Lanjut membuka WiFiManager."));
+  Serial.print(F("[WIFI HAI] Final status: "));
+  Serial.print((int)WiFi.status());
+  Serial.print(F(" / "));
+  Serial.println(wifiStatusText(WiFi.status()));
+  Serial.println(F("╚══════════════════════════════════════════════╝"));
+  return false;
+}
+
+
 void setupWiFiManager() {
   Serial.println();
   Serial.println(F("╔════════════ WIFI CONNECTION INIT ════════════╗"));
@@ -4468,24 +4597,36 @@ void setupWiFiManager() {
     return;
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal saat boot. Lanjut ke pilihan LCD / WiFiManager."));
+  Serial.println(F("[WIFI] Eduroam gagal saat boot. Mencoba SSID fallback hai."));
 #else
-  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung ke pilihan LCD / WiFiManager."));
-#endif
-
-  // connectEduroam() yang gagal sudah memanggil prepareNormalWiFiMode().
-  // Untuk mode tanpa eduroam, tetap bersihkan mode WiFi sebelum membuka portal.
-#if !USE_EDUROAM_FIRST
+  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, mencoba SSID fallback hai."));
   prepareNormalWiFiMode();
 #endif
 
-  Serial.println(F("[WIFI] Tidak ada pemilihan WiFi di LCD. LCD hanya menampilkan logo/loading."));
-  Serial.println(F("[WIFI] Konfigurasi WiFi dilakukan dari Serial Monitor saja:"));
-  Serial.println(F("[WIFI]   wifi portal  -> buka WiFiManager AP GenTrack-Monitor-AP"));
-  Serial.println(F("[WIFI]   wifi eduroam -> coba ulang eduroam WPA2-Enterprise"));
-  Serial.println(F("[WIFI] Sistem berjalan offline sampai command Serial dipilih."));
+  if (connectFallbackHomeWiFi()) {
+    Serial.println(F("[WIFI] Mode koneksi: FALLBACK SSID hai"));
+    activePage = PAGE_GENERATOR;
+    needFullRedraw = true;
+    Serial.println(F("[DISPLAY] Masuk ke halaman Generator/Engine setelah koneksi WiFi."));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println(F("[WIFI] SSID hai gagal. Membuka AP WiFiManager fallback otomatis."));
+  if (connectWiFiManagerFallback()) {
+    Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER FALLBACK"));
+    activePage = PAGE_GENERATOR;
+    needFullRedraw = true;
+    Serial.println(F("[DISPLAY] Masuk ke halaman Generator/Engine setelah koneksi WiFi."));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println(F("[WIFI] WiFiManager timeout/gagal. Sistem berjalan offline; halaman Generator/Engine tetap aktif."));
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
+  activePage = PAGE_GENERATOR;
+  needFullRedraw = true;
   Serial.println(F("╚══════════════════════════════════════════════╝"));
 }
 
@@ -5820,6 +5961,7 @@ void printSerialHelp() {
   Serial.println(F("GENSYS CMD: help | paper | paper start | paper ticker on/off | spec/acq | db/database | send now | perf | latest"));
   Serial.println(F("SERIAL    : monitor overview | monitor overview on/off | raw uart | db payload | db payload full"));
   Serial.println(F("SERIAL    : monitoring payload | monitoring payload full | db payload on/off | monitoring payload on/off | mongo ticker on/off"));
+  Serial.println(F("SEND MODE : send mode | send mode bufferesp | send mode buffermongo"));
   Serial.println(F("TEST CMD  : test once | test once reset | test once last | test once status | test once off | perf reset"));
   Serial.println(F("LOG CMD   : log acq on | log performance on | log aggregation on | log latest on | log off"));
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | rx monitor on/off | db reset | db reset confirm"));
@@ -5908,6 +6050,7 @@ void printMongoBufferStatus() {
 
   Serial.println();
   Serial.println(F("================ MONGODB 10-MIN BUFFER ================"));
+  Serial.print  (F("  data mode      : ")); Serial.println(getDataSendModeText());
   Serial.print  (F("  buffer records : ")); Serial.print(bufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("  interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print  (F("  topic          : ")); Serial.println(MQTT_TOPIC);
@@ -5933,7 +6076,11 @@ void printMongoBufferStatus() {
   Serial.print  (F("  last send age  : "));
   if (mongoDbLastSendMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - mongoDbLastSendMs) / 1000UL); Serial.println(F(" s ago")); }
-  Serial.println(F("STATUS: buffer disimpan 10 menit, lalu dikirim satu batch ke topic gen/data untuk MongoDB."));
+  if (isBufferEspMode()) {
+    Serial.println(F("STATUS: bufferesp aktif; ESP32 buffer 10 menit lalu publish batch ke gen/data."));
+  } else {
+    Serial.println(F("STATUS: buffermongo aktif; server buffer gen/realtime 10 menit lalu simpan MongoDB."));
+  }
   Serial.println(F("NOTE  : Serial monitor menampilkan buffer count, umur buffer, dan record terkirim ke MongoDB/backend."));
   Serial.println(F("======================================================="));
 }
@@ -6392,6 +6539,9 @@ void processSerialCommand(String cmd) {
   else if (cmd == "db create" || cmd == "database create" || cmd == "create db" || cmd == "create database") createDatabaseCsvFromCommand();
   else if (cmd == "sd reinit" || cmd == "sd retry" || cmd == "reinit sd") reinitSdFromCommand();
   else if (cmd == "mongo" || cmd == "mongo buffer" || cmd == "buffer") printMongoBufferStatus();
+  else if (cmd == "send mode" || cmd == "data mode" || cmd == "mode send") printDataSendModeStatus();
+  else if (cmd == "send mode bufferesp" || cmd == "data mode bufferesp" || cmd == "mode bufferesp" || cmd == "bufferesp") setDataSendMode(DATA_SEND_MODE_BUFFERESP);
+  else if (cmd == "send mode buffermongo" || cmd == "data mode buffermongo" || cmd == "mode buffermongo" || cmd == "buffermongo") setDataSendMode(DATA_SEND_MODE_BUFFERMONGO);
   else if (cmd == "monitor overview" || cmd == "serial monitor" || cmd == "monitor all" || cmd == "status all") printSerialMonitoringOverview();
   else if (cmd == "monitor overview on" || cmd == "serial monitor on" || cmd == "monitor all on") { serialLogEnabled = true; serialMonitorOverviewEnabled = true; Serial.println(F("[SERIAL] overview ON. Ringkasan RAW+AGG+MQTT+BUFFER tampil berkala.")); }
   else if (cmd == "monitor overview off" || cmd == "serial monitor off" || cmd == "monitor all off") { serialMonitorOverviewEnabled = false; Serial.println(F("[SERIAL] overview OFF.")); }
