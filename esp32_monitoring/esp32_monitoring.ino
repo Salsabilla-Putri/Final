@@ -3011,6 +3011,7 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.print("[EDUROAM] Identity : "); Serial.println(EDUROAM_IDENTITY);
   Serial.print("[EDUROAM] Username : "); Serial.println(EDUROAM_USERNAME);
   Serial.println("[EDUROAM] Password : ********");
+  
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -3018,22 +3019,43 @@ bool connectEduroam(bool eraseCredentials = true) {
   delay(1000);
   disableEduroamEnterpriseMode();
   delay(300);
+
+  // --- TAMBAHAN KODE FIX ---
+  // Turunkan sementara power WiFi untuk mencegah brownout (restart) karena beban kriptografi PEAP
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   WiFi.begin(EDUROAM_SSID, WPA2_AUTH_PEAP, EDUROAM_IDENTITY, EDUROAM_USERNAME, EDUROAM_PASSWORD);
 #else
+  // Bersihkan sisa identitas/sertifikat lama dari memori untuk mencegah heap crash
+  esp_wifi_sta_wpa2_ent_clear_ca_cert();
+  esp_wifi_sta_wpa2_ent_clear_cert_key();
+  esp_wifi_sta_wpa2_ent_clear_identity();
+  esp_wifi_sta_wpa2_ent_clear_username();
+  esp_wifi_sta_wpa2_ent_clear_password();
+
   esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)EDUROAM_IDENTITY, strlen(EDUROAM_IDENTITY));
   esp_wifi_sta_wpa2_ent_set_username((uint8_t *)EDUROAM_USERNAME, strlen(EDUROAM_USERNAME));
   esp_wifi_sta_wpa2_ent_set_password((uint8_t *)EDUROAM_PASSWORD, strlen(EDUROAM_PASSWORD));
   esp_wifi_sta_wpa2_ent_enable();
+  
   WiFi.begin(EDUROAM_SSID);
 #endif
+
   if (waitForWiFiConnection(F("[EDUROAM]"), EDUROAM_TIMEOUT_MS)) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_EDUROAM;
+    
+    // Kembalikan lagi power WiFi ke optimal jika sudah berhasil connect
+    WiFi.setTxPower(WIFI_POWER_19_5dBm); 
+    
     printWiFiConnectedInfo(F("[EDUROAM]"));
     Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return true;
   }
+  
+  // Jika gagal, kembalikan ke default power
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
   Serial.println("[EDUROAM] Failed / timeout.");
@@ -3560,11 +3582,12 @@ int bootLogoX = 0;
 int bootLogoY = 0;
 uint16_t bootLogoLine[480];
 
-void pngDrawBootLogo(PNGDRAW *pDraw) {
+int pngDrawBootLogo(PNGDRAW *pDraw) { // <-- Ubah void menjadi int
   int w = pDraw->iWidth;
   if (w > SW) w = SW;
   bootPng.getLineAsRGB565(pDraw, bootLogoLine, PNG_RGB565_BIG_ENDIAN, 0xFFFFFFFF);
   tft.pushImage(bootLogoX, bootLogoY + pDraw->y, w, 1, bootLogoLine);
+  return 0; // <-- Tambahkan return 0
 }
 
 bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {

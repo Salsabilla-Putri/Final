@@ -4,3 +4,5 @@ node_modules/
 database/*.json
 database/monitoring.generatordatas.json
 tempCodeRunnerFile.js
+logo.png
+esp32_monitoring/logo.png
