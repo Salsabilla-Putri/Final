@@ -157,6 +157,18 @@
 #define EDUROAM_TIMEOUT_MS 25000UL
 #endif
 
+#ifndef FALLBACK_WIFI_SSID
+#define FALLBACK_WIFI_SSID "hai"
+#endif
+
+#ifndef FALLBACK_WIFI_PASS
+#define FALLBACK_WIFI_PASS "hello123"
+#endif
+
+#ifndef FALLBACK_WIFI_TIMEOUT_MS
+#define FALLBACK_WIFI_TIMEOUT_MS 20000UL
+#endif
+
 // ============================================================
 // MQTT
 // ============================================================
@@ -4412,14 +4424,14 @@ bool connectWiFiManagerFallback() {
 
   debugScanWiFiBeforePortal();
 
-  // Portal memakai AP+STA agar halaman konfigurasi tetap aktif sambil ESP32
-  // melakukan scan jaringan sekitar. Ini membantu WiFiManager mendeteksi SSID
-  // dengan benar setelah fallback dari eduroam/EAP.
-  WiFi.mode(WIFI_AP_STA);
-  applyWiFiCountryConfig();
+  // Biarkan WiFiManager sendiri yang mengaktifkan AP+STA. Jika mode AP_STA
+  // dipaksa sebelum startConfigPortal(), beberapa core ESP32 menampilkan
+  // halaman Configure WiFi putih/kosong karena captive portal dan scan web
+  // handler tidak terpasang bersih setelah EAP eduroam gagal.
+  WiFi.mode(WIFI_STA);
   delay(300);
 
-  static WiFiManager wm;
+  WiFiManager wm;
   wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
   wm.setConnectTimeout(30);
@@ -4472,6 +4484,50 @@ bool connectWiFiManagerFallback() {
 }
 
 
+bool connectFallbackHomeWiFi() {
+  Serial.println();
+  Serial.println(F("╔════════════ STATIC WIFI FALLBACK ════════════╗"));
+  Serial.print(F("[WIFI HAI] SSID    : "));
+  Serial.println(FALLBACK_WIFI_SSID);
+  Serial.print(F("[WIFI HAI] Timeout : "));
+  Serial.print(FALLBACK_WIFI_TIMEOUT_MS / 1000UL);
+  Serial.println(F(" s"));
+
+  mqttOK = false;
+  wifiOK = false;
+
+  // Pastikan state WPA2-Enterprise sudah bersih sebelum mencoba WPA2-PSK biasa.
+  prepareNormalWiFiMode();
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  applyWiFiCountryConfig();
+  applyWiFiStabilityConfig();
+  delay(300);
+
+  WiFi.begin(FALLBACK_WIFI_SSID, FALLBACK_WIFI_PASS);
+
+  if (waitForWiFiConnection(F("[WIFI HAI]"), FALLBACK_WIFI_TIMEOUT_MS)) {
+    wifiOK = true;
+    wifiConnectionMode = WIFI_MODE_MANAGER;
+    printWiFiConnectedInfo(F("[WIFI HAI]"));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return true;
+  }
+
+  WiFi.disconnect(false, false);
+  wifiOK = false;
+  wifiConnectionMode = WIFI_MODE_OFFLINE;
+  Serial.println(F("[WIFI HAI] Gagal konek ke SSID fallback. Lanjut membuka WiFiManager."));
+  Serial.print(F("[WIFI HAI] Final status: "));
+  Serial.print((int)WiFi.status());
+  Serial.print(F(" / "));
+  Serial.println(wifiStatusText(WiFi.status()));
+  Serial.println(F("╚══════════════════════════════════════════════╝"));
+  return false;
+}
+
+
 void setupWiFiManager() {
   Serial.println();
   Serial.println(F("╔════════════ WIFI CONNECTION INIT ════════════╗"));
@@ -4494,12 +4550,22 @@ void setupWiFiManager() {
     return;
   }
 
-  Serial.println(F("[WIFI] Eduroam gagal saat boot. Membuka AP WiFiManager fallback otomatis."));
+  Serial.println(F("[WIFI] Eduroam gagal saat boot. Mencoba SSID fallback hai."));
 #else
-  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, langsung membuka WiFiManager fallback."));
+  Serial.println(F("[WIFI] USE_EDUROAM_FIRST=0, mencoba SSID fallback hai."));
   prepareNormalWiFiMode();
 #endif
 
+  if (connectFallbackHomeWiFi()) {
+    Serial.println(F("[WIFI] Mode koneksi: FALLBACK SSID hai"));
+    activePage = PAGE_GENERATOR;
+    needFullRedraw = true;
+    Serial.println(F("[DISPLAY] Masuk ke halaman Generator/Engine setelah koneksi WiFi."));
+    Serial.println(F("╚══════════════════════════════════════════════╝"));
+    return;
+  }
+
+  Serial.println(F("[WIFI] SSID hai gagal. Membuka AP WiFiManager fallback otomatis."));
   if (connectWiFiManagerFallback()) {
     Serial.println(F("[WIFI] Mode koneksi: WIFI MANAGER FALLBACK"));
     activePage = PAGE_GENERATOR;
