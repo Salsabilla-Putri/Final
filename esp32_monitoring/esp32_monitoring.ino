@@ -49,6 +49,7 @@
 #include <LittleFS.h>
 #include <PNGdec.h>
 #include <TFT_eSPI.h>
+#include "gensys_logo_200x200_rgb565.h"
 #include <time.h>
 #include <Adafruit_FT6206.h>
 #include <math.h>
@@ -187,6 +188,8 @@
 #define WIFI_RECONNECT_MIN_MS        1000UL
 #define WIFI_RECONNECT_MAX_MS        10000UL
 #define WIFI_CONNECT_POLL_MS         500UL
+#define WIFI_STACK_SETTLE_MS          1200UL
+#define WIFI_CONNECT_HEAP_GUARD_BYTES 60000UL
 
 #define WIFI_RSSI_WEAK_DBM           -75
 
@@ -275,6 +278,7 @@ const char* DB_LEGACY_FILE = "/database.csv";
 const char* BOOT_LOGO_PNG_FILE = "/logo.png";
 const char* BOOT_LOGO_FS_FILE = "/logo.png";
 bool littleFsOK = false;
+bool wifiDriverStarted = false;
 PNG bootPng;
 File bootPngFile;
 
@@ -2855,6 +2859,31 @@ void applyWiFiStabilityConfig() {
   WiFi.persistent(false);
 }
 
+bool ensureWiFiStaReady(const __FlashStringHelper* label, bool clearStaConfig = false) {
+  if (ESP.getFreeHeap() < WIFI_CONNECT_HEAP_GUARD_BYTES) {
+    Serial.print(label); Serial.print(F(" heap terlalu rendah untuk init WiFi: "));
+    Serial.println(ESP.getFreeHeap());
+    wifiOK = false;
+    wifiConnectionMode = WIFI_MODE_OFFLINE;
+    return false;
+  }
+
+  WiFi.persistent(false);
+  if (!wifiDriverStarted || WiFi.getMode() == WIFI_OFF) {
+    WiFi.mode(WIFI_STA);
+    wifiDriverStarted = true;
+    delay(WIFI_STACK_SETTLE_MS);
+  } else if (WiFi.getMode() != WIFI_STA) {
+    WiFi.mode(WIFI_STA);
+    delay(300);
+  }
+
+  applyWiFiStabilityConfig();
+  WiFi.disconnect(clearStaConfig, clearStaConfig);
+  delay(700);
+  return true;
+}
+
 void normalizeMqttEndpoint() {
   String endpoint = String(MQTT_HOST);
   endpoint.trim();
@@ -2937,12 +2966,8 @@ void stopWiFiCleanly(bool eraseCredentials) {
   mqttOK = false;
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(eraseCredentials, eraseCredentials);
-  delay(800);
-  WiFi.mode(WIFI_OFF);
   delay(WIFI_MANAGER_SETTLE_MS);
-  WiFi.mode(WIFI_STA);
-  delay(800);
-  applyWiFiStabilityConfig();
+  if (!ensureWiFiStaReady(F("[WIFI]"), false)) return;
   Serial.print(F("[WIFI] Clean state. status=")); Serial.print((int)WiFi.status()); Serial.print(F(" / ")); Serial.println(wifiStatusText(WiFi.status()));
 }
 
@@ -3012,11 +3037,8 @@ bool connectEduroam(bool eraseCredentials = true) {
   Serial.print("[EDUROAM] Username : "); Serial.println(EDUROAM_USERNAME);
   Serial.println("[EDUROAM] Password : ********");
   
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  esp_wifi_set_ps(WIFI_PS_NONE);
-  WiFi.disconnect(eraseCredentials, eraseCredentials);
-  delay(1000);
+  if (!ensureWiFiStaReady(F("[EDUROAM]"), false)) return false;
+  if (eraseCredentials) Serial.println("[EDUROAM] NVS credential tidak dihapus agar WiFi/LwIP tidak re-init berulang.");
   disableEduroamEnterpriseMode();
   delay(300);
 
@@ -3076,9 +3098,7 @@ void connectFixedWiFi() {
   Serial.println();
   Serial.println(F("╔════════════ FIXED WIFI CONNECTION ════════════╗"));
   Serial.print(F("[FIXED] Connecting to SSID: ")); Serial.println(ssid);
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);
-  delay(500);
+  if (!ensureWiFiStaReady(F("[FIXED]"), false)) return;
   WiFi.begin(ssid, password);
   if (waitForWiFiConnection(F("[FIXED]"), 15000UL)) {
     wifiOK = true;
@@ -3290,11 +3310,12 @@ bool connectWiFiManagerFallback() {
   mqttOK = false; wifiOK = false;
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
-  WiFi.mode(WIFI_STA);
+  if (!ensureWiFiStaReady(F("[WIFI MANAGER]"), false)) return false;
   applyWiFiCountryConfig();
   delay(1000);
   debugScanWiFiBeforePortal();
   WiFi.mode(WIFI_AP_STA);
+  wifiDriverStarted = true;
   applyWiFiCountryConfig();
   delay(300);
   static WiFiManager wm;
@@ -3364,7 +3385,10 @@ void setupWiFiWithMenu() {
   switch (choice) {
     case 1:
       Serial.println(F("[WIFI] Memilih Eduroam..."));
-      connectEduroam(true);
+      if (!connectEduroam(true)) {
+        Serial.println(F("[WIFI] Eduroam gagal; mencoba Fixed WiFi hai sebelum offline."));
+        connectFixedWiFi();
+      }
       break;
     case 2:
       Serial.println(F("[WIFI] Memilih Fixed WiFi..."));
@@ -3590,6 +3614,16 @@ int pngDrawBootLogo(PNGDRAW *pDraw) { // <-- Ubah void menjadi int
   return 0; // <-- Tambahkan return 0
 }
 
+bool drawBootLogoFromHeader(int cx, int cy, int maxW, int maxH) {
+  if (GENSYS_LOGO_W > maxW || GENSYS_LOGO_H > maxH || GENSYS_LOGO_W > SW || GENSYS_LOGO_H > SH) return false;
+  int x = cx - (GENSYS_LOGO_W / 2);
+  int y = cy - (GENSYS_LOGO_H / 2);
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  tft.pushImage(x, y, GENSYS_LOGO_W, GENSYS_LOGO_H, gensysLogoRgb565);
+  return true;
+}
+
 bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
   (void)maxW;
   (void)maxH;
@@ -3623,7 +3657,7 @@ void drawBootSplashStep(const char* statusText, int progress) {
   progress = constrain(progress, 0, 100);
   if (!bootBaseDrawn || progress <= 0) {
     tft.fillScreen(C_WHITE);
-    if (!drawBootLogoFromSd(SW / 2, 144, 250, 250)) {
+    if (!drawBootLogoFromSd(SW / 2, 144, 250, 250) && !drawBootLogoFromHeader(SW / 2, 144, 250, 250)) {
       drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(4);
