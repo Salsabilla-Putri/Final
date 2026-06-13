@@ -50,15 +50,6 @@
 #include <time.h>
 #include <Adafruit_FT6206.h>
 #include <math.h>
-#include "gensys_logo_200x200_rgb565.h"
-
-#if __has_include(<PNGdec.h>)
-  #include <PNGdec.h>
-  #define GENSYS_HAS_PNGDEC 1
-#else
-  #define GENSYS_HAS_PNGDEC 0
-#endif
-
 
 // ============================================================
 // USER CONFIG
@@ -76,13 +67,6 @@
 // ============================================================
 // EDUROAM WPA2-ENTERPRISE + WIFI MANAGER FALLBACK
 // ============================================================
-// Mode utama:
-// 1) ESP32 mencoba konek ke eduroam dengan WPA2-Enterprise PEAP.
-// 2) Jika eduroam gagal/timeout, mode enterprise dimatikan dengan bersih.
-// 3) Setelah itu ESP32 membuka AP portal WiFiManager sebagai fallback.
-// 4) WiFiManager memakai startConfigPortal(), bukan autoConnect(), agar
-//    tidak otomatis mencoba credential lama yang mungkin salah.
-
 #ifndef WIFI_MANAGER_AP_NAME
 #define WIFI_MANAGER_AP_NAME "GenTrack-Monitor-AP"
 #endif
@@ -99,8 +83,6 @@
 #define WIFI_MANAGER_SETTLE_MS 3000UL
 #endif
 
-// ESP32 hanya radio 2.4 GHz. Set country agar scan tidak terkunci
-// ke channel 1-11 saja; di Indonesia AP/router bisa muncul di channel 12/13.
 #ifndef WIFI_COUNTRY_CC
 #define WIFI_COUNTRY_CC "ID"
 #endif
@@ -125,15 +107,8 @@
 #define WIFI_LCD_MAX_NETWORKS 6
 #endif
 
-// Set 1 hanya jika ingin reset/portal WiFiManager dipaksa muncul.
-// Pada mode eduroam-first, nilai ini hanya berpengaruh saat fallback portal.
-#ifndef FORCE_WIFI_PORTAL
-#define FORCE_WIFI_PORTAL 0
-#endif
-
-// Default aktif: coba eduroam WPA2-Enterprise terlebih dahulu.
 #ifndef USE_EDUROAM_FIRST
-#define USE_EDUROAM_FIRST 1
+#define USE_EDUROAM_FIRST 0   // Matikan percobaan otomatis, kita pakai menu
 #endif
 
 // Konfigurasi eduroam WPA2-Enterprise PEAP.
@@ -160,9 +135,6 @@
 // ============================================================
 // MQTT
 // ============================================================
-// Default broker Shiftr.io untuk dashboard realtime.
-// PubSubClient membutuhkan host polos tanpa skema; jika build flag memberi URI
-// seperti mqtt://generatorta20.cloud.shiftr.io, kode akan menormalisasi saat runtime.
 #ifndef MQTT_HOST
 #define MQTT_HOST  "mqtt://generatorta20.cloud.shiftr.io"
 #endif
@@ -183,8 +155,6 @@
 #define MQTT_VHOST ""
 #endif
 
-// Shiftr.io memakai username langsung. MQTT_AUTH_USERNAME/build flag tetap bisa override
-// jika suatu saat broker membutuhkan format lain.
 #ifndef MQTT_AUTH_USERNAME
 #define MQTT_AUTH_USERNAME MQTT_USER
 #endif
@@ -204,15 +174,9 @@
 // ============================================================
 // MQTT + WIFI STABILITY CONFIG
 // ============================================================
-// Tujuan:
-// - Mencegah MQTT disconnected saat runtime.
-// - Mengirim data dashboard realtime setiap 0,5 detik.
-// - Menjaga koneksi WiFi lebih stabil.
-// - Mengurangi risiko heap fragmentation akibat String JSON.
-
 #define MQTT_BUFFER_SIZE_BYTES       2048
 #define MQTT_KEEPALIVE_SEC           120
-#define MQTT_SOCKET_TIMEOUT_SEC      1   // Batasi blocking mqtt.connect agar TFT tidak freeze lama
+#define MQTT_SOCKET_TIMEOUT_SEC      1
 
 #define MQTT_RECONNECT_MIN_MS        1000UL
 #define MQTT_RECONNECT_MAX_MS        10000UL
@@ -221,28 +185,14 @@
 #define WIFI_RECONNECT_MIN_MS        1000UL
 #define WIFI_RECONNECT_MAX_MS        10000UL
 #define WIFI_CONNECT_POLL_MS         500UL
-#define WIFI_EDUROAM_MAX_ATTEMPTS    1
 
-// Jika RSSI lebih lemah dari nilai ini, batch MongoDB ditunda.
-// Realtime tetap bisa jalan, tetapi history tidak dipaksa upload.
 #define WIFI_RSSI_WEAK_DBM           -75
 
-// MongoDB dikirim sebagai 1 payload batch besar via MQTT beginPublish/write/endPublish.
-// Nilai ini tetap dipakai sebagai batas payload realtime biasa.
-// Batch besar tidak memakai mqtt.publish() agar tidak perlu buffer internal PubSubClient besar.
 #define MONGO_BATCH_STREAM_CHUNK_BYTES 512
 #define MONGO_BATCH_MAX_PAYLOAD_BYTES  160000UL
 
-// Proteksi heap.
 #define HEAP_MIN_FREE_BYTES          25000UL
 #define HEAP_MIN_MAX_ALLOC_BYTES     8000UL
-
-
-// Cloud/MongoDB path:
-// Tidak memakai HTTP POST /api/ingest/batch.
-// Record parameter-only dikirim live melalui MQTT_TOPIC = gen/data setiap 0,5 detik.
-// RAM buffer tetap dipakai sebagai fallback batch/chunk saat publish live gagal.
-// Backend harus subscribe topic gen/data dan melakukan bulkWrite/updateOne ke MongoDB.
 
 // NTP WIB.
 const char* NTP_SERVER_1 = "pool.ntp.org";
@@ -260,9 +210,6 @@ static const int LINK_TX_PIN = 17;
 HardwareSerial LinkSerial(2);
 String linkRxBuffer = "";
 
-// ESP32-1 sinkronisasi mengirim frame setiap 100 ms = 10 Hz.
-// Buffer hardware/software dibuat lebih besar agar frame tidak hilang saat
-// WiFi/TFT/SD sedang sibuk atau saat fallback WiFiManager berjalan.
 #define LINK_EXPECTED_FRAME_INTERVAL_MS 100UL
 #define LINK_EXPECTED_FRAME_HZ          10
 #define LINK_SERIAL_RX_BUFFER_BYTES     4096
@@ -308,7 +255,6 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 // ============================================================
 // SD CARD
 // ============================================================
-// Pin SD sesuai wiring modul yang dipakai pada perangkat ini.
 #define SD_MISO 12
 #define SD_MOSI 13
 #define SD_SCK  14
@@ -323,55 +269,37 @@ SemaphoreHandle_t sdMutex = NULL;
 SemaphoreHandle_t dataMutex = NULL;
 
 const char* DB_FILE = "/sdDatabase.csv";
-const char* DB_LEGACY_FILE = "/database.csv";  // File lama tidak dipakai lagi agar mulai bersih dengan sdDatabase.csv.
-const char* FFT_FILE = "/fft.csv";
+const char* DB_LEGACY_FILE = "/database.csv";
 const char* BOOT_LOGO_PNG_FILE = "/logo.png";
 
 // Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
-// Data FFT dipisahkan ke /fft.csv agar database utama tetap ringan untuk arsip lokal dan upload batch.
 const char* DB_CSV_HEADER =
   "recordId,localSeq,timestamp,rpm,tps,map,iat,clt,afr,batt,fuel,"
   "freq,volt,currentA,powerKW,phase_diff,powerSource";
-
-// Header CSV FFT lokal. Format fft_bins_xy: freqHz:magnitude|freqHz:magnitude|...
-const char* FFT_CSV_HEADER =
-  "recordId,localSeq,timestamp,fft_valid,fft_source,fft_sample_rate_hz,"
-  "fft_resolution_hz,fft_peak_hz,fft_peak_magnitude,fft_rms,fft_bins_xy";
 
 // ============================================================
 // TIMING
 // ============================================================
 #define SENSOR_SAMPLE_HZ          50
 #define SENSOR_SAMPLE_INTERVAL_MS 20
-#define AGGREGATION_INTERVAL_MS   1000
+#define AGGREGATION_INTERVAL_MS   500
 #define STORAGE_BATCH_SIZE        1
+
 // ============================================================
 // MONGODB BATCH CONFIG
 // ============================================================
-// Realtime dashboard dan MongoDB/history dikirim tiap 0,5 detik tanpa batch di ESP32.
-
-#define MONGODB_BATCH_INTERVAL_MS 600000UL  // fallback buffer dikirim per 10 menit jika publish live tertahan
-#define MONGODB_BATCH_RECORDS     600        // kapasitas fallback: 1 record/detik x 10 menit
+#define MONGODB_BATCH_INTERVAL_MS 600000UL
+#define MONGODB_BATCH_RECORDS     600
 #define MONGODB_BUFFER_RECORDS    MONGODB_BATCH_RECORDS
-// Pengiriman fallback tetap mengikuti interval 10 menit. Saat interval tiba,
-// buffer 600 record dipecah menjadi 2 chunk besar berisi 300 record.
-// Jeda 500 ms antar chunk memberi waktu broker/backend memproses payload sebelum
-// chunk berikutnya dikirim, sehingga data lebih stabil masuk ke MongoDB.
-#define MONGODB_UPLOAD_CHUNK_RECORDS 100
-#define MONGODB_UPLOAD_CHUNK_DELAY_MS 50UL
+#define MONGODB_UPLOAD_CHUNK_RECORDS 600
+#define MONGODB_UPLOAD_CHUNK_DELAY_MS 1000UL
+#define MONGODB_STORAGE_OVERHEAD_FACTOR 1.5f
 
-// TEST DATABASE: tetap tulis sdDatabase.csv di SD walaupun WiFi/MQTT normal.
-// Aktifkan hanya saat pengujian agar SD tidak cepat aus pada operasi harian.
 #define SD_SAVE_ONLINE_FOR_DB_TEST 1
-
-// SAFE MODE NOTE:
-// Dipilih 10 menit/600 record untuk fallback pengiriman database jangka panjang.
-// Buffer 5 menit/300 record masih memungkinkan, tetapi heap ESP32 lebih berat
-// saat EAP handshake dan MQTT fallback batch publish.
 
 const unsigned long publishInterval   = 1000;
 const unsigned long localSaveInterval = 1000;
-const unsigned long drawInterval      = 1000;   // LCD partial update tiap 0,5 detik mengikuti agregasi cepat
+const unsigned long drawInterval      = 1000;
 
 // ============================================================
 // DATA STRUCT
@@ -384,7 +312,7 @@ struct RawData {
 
   int rpm = 0;
   int tps = 0;
-  int map = 0;   // MAP Speeduino dalam kPa
+  int map = 0;
   int iat = 0;
   int clt = 0;
 
@@ -396,16 +324,16 @@ struct RawData {
   float freqGrid = 0;
   float volt = 0;
   float voltGrid = 0;
-  float currentA = 0;   // Arus generator dari ESP32 sinkronisasi/dummy electrical
-  float powerKW = 0;    // Daya generator dari ESP32 sinkronisasi/dummy electrical
+  float currentA = 0;
+  float powerKW = 0;
   float phaseAngle = 0;
 
   bool speeduinoSync = false;
   bool gridSync = false;
   bool valid = false;
 
-  char syncText[12] = "off";       // sync/genset/grid/off dari ESP32-1
-  char syncStatus[12] = "off";     // field ke-21 payload UART
+  char syncText[12] = "off";
+  char syncStatus[12] = "off";
   char statusText[12] = "NO-DATA";
 };
 
@@ -472,17 +400,11 @@ struct StorageRecord {
   String timestamp = "";
   uint32_t timestampMs = 0;
   AggregatedData agg;
-  FFTData fft;
 };
 
 // ============================================================
 // ACQUISITION + COMPUTE PERFORMANCE MONITOR
 // ============================================================
-// Target spesifikasi:
-// - Akuisisi parameter real-time: 0.1 s sampai 1.0 s
-// - Task sampling internal ESP32-2: 20 ms
-// - Record monitoring lokal/SD: 1 s
-// - Target database online: 10 menit
 #define SPEC_ACQ_MIN_INTERVAL_MS       100UL
 #define SPEC_ACQ_MAX_INTERVAL_MS       1000UL
 #define SPEC_DATABASE_TARGET_MS        600000UL
@@ -504,7 +426,6 @@ struct AcquisitionMonitorStats {
   PerfMinMax csvParseUs;
   PerfMinMax aggregationUs;
   PerfMinMax sensorTaskUs;
-  PerfMinMax fftComputeUs;
   PerfMinMax mqttPublishUs;
   PerfMinMax sdSaveUs;
   PerfMinMax tftDrawUs;
@@ -580,7 +501,7 @@ void recordUartFrameMonitor(const String &line, bool ok, const RawData &parsed) 
   uint32_t nowMs = millis();
 
   acqMon.frameReceived++;
-  acqMon.lastRawFrameBytes = line.length() + 1; // + newline
+  acqMon.lastRawFrameBytes = line.length() + 1;
   acqMon.rxBytes += acqMon.lastRawFrameBytes;
   if (acqMon.lastRawFrameBytes > acqMon.maxRawFrameBytes) {
     acqMon.maxRawFrameBytes = acqMon.lastRawFrameBytes;
@@ -610,7 +531,6 @@ void recordUartFrameMonitor(const String &line, bool ok, const RawData &parsed) 
   }
 }
 
-
 // ============================================================
 // GLOBAL STATE
 // ============================================================
@@ -618,20 +538,10 @@ RawData latestRaw;
 AggregatedData aggData;
 AggAccumulator acc;
 
-// fftData dipertahankan sebagai hasil FFT aktif/terpilih agar kompatibel
-// dengan storage record, MQTT, dan halaman FFT lama.
-FFTData fftData;
-FFTData fftMultiData[FFT_SOURCE_COUNT];
 StorageRecord storageBatch[STORAGE_BATCH_SIZE];
-SemaphoreHandle_t fftMutex = NULL;
 SemaphoreHandle_t mongoUploadRequestSemaphore = NULL;
 SemaphoreHandle_t mongoBufferMutex = NULL;
 SemaphoreHandle_t mqttMutex = NULL;
-
-float fftBuffers[FFT_SOURCE_COUNT][FFT_SAMPLES];
-uint16_t fftIndexes[FFT_SOURCE_COUNT] = {0, 0, 0};
-bool fftBufferFulls[FFT_SOURCE_COUNT] = {false, false, false};
-uint8_t fftSelectedSource = FFT_SRC_VOLT_GEN;
 
 bool wifiOK = false;
 bool mqttOK = false;
@@ -647,7 +557,7 @@ bool sdOK = false;
 bool linkOK = false;
 bool needFullRedraw = true;
 bool displayUpdateNow = false;
-volatile uint32_t displayAggregateSeq = 0;  // naik setiap agregasi agar TFT memaksa refresh nilai
+volatile uint32_t displayAggregateSeq = 0;
 bool touchDetected = false;
 
 String wifiLcdSsids[WIFI_LCD_MAX_NETWORKS];
@@ -689,9 +599,6 @@ unsigned long lastMongoBatchSend = 0;
 unsigned long lastReconnect = 0;
 unsigned long lastWifiCheck = 0;
 
-// ============================================================
-// NETWORK RUNTIME STABILITY STATE
-// ============================================================
 unsigned long mqttReconnectBackoffMs = MQTT_RECONNECT_MIN_MS;
 unsigned long wifiReconnectBackoffMs = WIFI_RECONNECT_MIN_MS;
 unsigned long lastRuntimeWifiReconnect = 0;
@@ -712,7 +619,6 @@ uint8_t storageBatchCount = 0;
 uint32_t localRecordSeq = 0;
 uint32_t lastSdSavedLocalSeq = 0;
 uint32_t lastMongoBufferedLocalSeq = 0;
-uint32_t lastMqttHistoryPublishedLocalSeq = 0;
 
 unsigned long sdSaveSuccessCount = 0;
 unsigned long sdSaveFailCount = 0;
@@ -739,8 +645,6 @@ uint64_t sdCachedUsedBytes = 0;
 uint64_t sdCachedFreeBytes = 0;
 unsigned long dbCachedAtMs = 0;
 
-// Statistik pengiriman buffer RAM MongoDB 10 menit.
-// Tidak ada sinkronisasi SD -> MongoDB; MongoDB hanya memakai buffer RAM baru.
 uint32_t mongoUploadLastBatchRecords = 0;
 uint32_t mongoUploadLastPayloadBytes = 0;
 uint16_t mongoUploadLastRunChunks = 0;
@@ -758,26 +662,15 @@ uint32_t mongoDbLastPayloadBytes = 0;
 uint16_t mongoDbLastAckResponseRecords = 0;
 unsigned long mongoDbLastSendMs = 0;
 
-// Statistik SD sebagai backup saja. SD tidak ditulis saat WiFi+MQTT normal dan buffer MongoDB sehat.
 uint32_t sdBackupRecordCount = 0;
 uint32_t sdBackupSkipOnlineCount = 0;
 uint32_t sdBackupBecauseNetworkCount = 0;
 uint32_t sdBackupBecauseBufferFullCount = 0;
 uint32_t sdBackupBecauseMongoFailCount = 0;
 
-
-// ── DB size ticker (setiap detik) ──────────────────────────────
 bool     dbSizeTickerEnabled  = false;
 unsigned long lastDbSizeTickMs = 0;
 
-// ── Test-once mode untuk pengujian end-to-end ─────────────────
-// Alur sekali uji:
-// 1) Terima 1 frame UART valid dari ESP32-1.
-// 2) Bekukan RX agar data berikutnya tidak ikut masuk.
-// 3) Agregasi 1 record monitoring.
-// 4) Simpan 1 record ke SD/local database.
-// 5) Publish 1 payload ke MQTT/cloud database.
-// 6) Render 1 kali ke TFT, lalu monitoring berhenti pada data tersebut.
 bool     testOnceMode          = false;
 bool     testOnceDone          = false;
 bool     testOnceRxDone        = false;
@@ -789,18 +682,12 @@ uint32_t testOnceSeq           = 0;
 uint32_t testOnceLocalSeq      = 0;
 unsigned long testOnceTriggeredMs = 0;
 
-// ── Cache RX terakhir untuk mode test-once ───────────────────
-// Tujuan:
-// - Setelah 1 frame valid diterima, data dibekukan.
-// - Serial Monitor dapat menampilkan ulang raw RX + parameter terakhir.
-// - seq dan timestampMs tidak berubah sampai command "test once reset".
 bool     hasLastRxReport       = false;
 String   lastRxRawLineCache    = "";
 RawData  lastRxDataCache;
 bool     lastRxParseOkCache    = false;
 uint32_t lastRxCachedAtMs      = 0;
 
-// ── Konfirmasi reset SD database ──────────────────────────────
 bool     sdResetPending      = false;
 unsigned long sdResetPendingMs = 0;
 
@@ -822,7 +709,6 @@ volatile uint32_t perfMqttPublishUs = 0;
 volatile uint32_t perfSdSaveUs = 0;
 volatile uint32_t perfTftDrawUs = 0;
 volatile uint32_t perfSensorTaskUs = 0;
-volatile uint32_t perfFftComputeUs = 0;
 volatile uint32_t perfLastRxAgeMs = 0;
 
 unsigned long lastUartReceiveMs = 0;
@@ -830,17 +716,15 @@ unsigned long lastAggReadyMs = 0;
 unsigned long lastMqttPublishMs = 0;
 unsigned long lastTftDrawMs = 0;
 
-// MQTT / MongoDB payload statistics.
-uint32_t mqttLastPayloadBytes = 0;          // payload aktual yang dikirim (saat ini masih mencakup FFT)
+uint32_t mqttLastPayloadBytes = 0;
 uint64_t mqttTotalPayloadBytes = 0;
-uint32_t mqttLastParameterPayloadBytes = 0; // estimasi cloud DB hanya parameter generator, tanpa FFT
+uint32_t mqttLastParameterPayloadBytes = 0;
 uint64_t mqttTotalParameterPayloadBytes = 0;
 uint32_t mqttPublishSuccessCount = 0;
 uint32_t mqttPublishFailCount = 0;
 uint32_t mqttTotalRecordsSent = 0;
 uint32_t mqttLastRecordsSent = 0;
 
-// ── MQTT payload/json monitor ────────────────────────────────
 bool serialMqttPayloadEnabled = false;
 
 bool hasLastMqttPayloadCache = false;
@@ -854,8 +738,6 @@ bool lastMqttHistoryOkCache = false;
 uint32_t lastMqttPayloadCacheAtMs = 0;
 uint32_t lastMqttPayloadRecordsCache = 0;
 
-// ── SD database/cloud queue payload monitor ─────────────────
-// Cache ini dipakai agar command Serial tidak perlu membuka/membaca file SD besar.
 bool hasLastDatabasePayloadCache = false;
 String lastSdCsvLineCache = "";
 String lastSdQueueJsonCache = "";
@@ -864,11 +746,10 @@ uint32_t lastDatabaseLocalSeqCache = 0;
 uint32_t lastDatabaseCsvBytesCache = 0;
 uint32_t lastDatabaseJsonBytesCache = 0;
 
-// Monitor Serial opsional. Default OFF agar tidak membanjiri Serial Monitor.
-bool serialDatabasePayloadEnabled = false;     // print payload database saat SD save
-bool serialRealtimePayloadEnabled = false;     // print payload monitoring saat MQTT publish
-bool serialMongoBufferTickerEnabled = false;    // print ringkas status buffer MongoDB
-bool serialMonitorOverviewEnabled = false;     // print ringkas RAW+AGG+MQTT+BUFFER
+bool serialDatabasePayloadEnabled = false;
+bool serialRealtimePayloadEnabled = false;
+bool serialMongoBufferTickerEnabled = false;
+bool serialMonitorOverviewEnabled = false;
 
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
@@ -879,11 +760,10 @@ bool mqttHostHadScheme = false;
 String serialCmd = "";
 char tmp[24];
 
-// Forward declaration untuk fungsi yang dipakai sebelum definisi aslinya.
+// Forward declaration
 void printMongoBufferStatus();
 void sendMongoDbBufferToMongoDB();
 void MongoBufferTask(void *pvParameters);
-
 void updateHeapMonitor();
 bool isWiFiUsableForMongoUpload();
 void applyWiFiStabilityConfig();
@@ -893,14 +773,14 @@ void checkWiFiStatus();
 bool retrySDCardOnceFast();
 void serviceDisplayAndTouch();
 bool publishMongoBufferBatchToMqtt(const String &batchPayload);
-
+void printPaperValidationReport();
+void resetPaperValidationCounters();
+void connectFixedWiFi();
+void setupWiFiWithMenu();
 
 // ============================================================
 // PAPER VALIDATION SERIAL REPORT
 // ============================================================
-// Dipakai untuk mengambil angka pengujian yang langsung cocok dengan tabel paper:
-// Functional Test, Communication Performance, Data Management Evaluation,
-// dan Local/Remote Interface Evaluation.
 bool paperValidationActive = false;
 uint32_t paperValidationStartMs = 0;
 uint32_t paperStartFrameReceived = 0;
@@ -921,14 +801,6 @@ unsigned long lastPaperTickerMs = 0;
 // ============================================================
 // SERIAL LOG CONFIG
 // ============================================================
-// Prinsip: serial print lama tidak dihapus.
-// Default tetap tidak spam agar Serial Monitor mudah dipakai.
-// Jika ingin melihat log lama/continuous, gunakan command:
-//   log on
-//   log all
-//   rx raw on
-//   rx ok on
-//   log interval 1000
 bool serialLogEnabled = false;
 bool serialLogAllEnabled = false;
 bool serialLogDatabaseEnabled = false;
@@ -937,7 +809,6 @@ bool serialLogSensorEnabled = false;
 bool serialLogNetworkEnabled = false;
 bool serialLogAggregationEnabled = false;
 bool serialLogStorageEnabled = false;
-bool serialLogFFTEnabled = false;
 bool serialLogLatestEnabled = false;
 bool runtimeDebugRxRaw = DEBUG_RX_RAW;
 bool runtimeDebugRxOK = DEBUG_RX_OK;
@@ -947,7 +818,6 @@ unsigned long lastSerialLogMs = 0;
 // ============================================================
 // THRESHOLD WARNA LCD
 // ============================================================
-// Normal = hijau, warning = kuning, kritis = merah.
 #define THRESH_VOLT_WARN_HI     240.0f
 #define THRESH_VOLT_CRIT_HI     250.0f
 #define THRESH_VOLT_WARN_LO     200.0f
@@ -1007,14 +877,10 @@ bool changedFloat(float oldValue, float newValue, float threshold) {
 }
 
 float estimateGeneratorCurrentA(float rpm, float tps, float mapKpa, float volt) {
-  // Belum ada sensor arus pada frame UART, sehingga arus dihitung sebagai estimasi beban.
-  // Jika nanti ada sensor arus asli, ganti fungsi ini dengan pembacaan sensor current.
   if (rpm < 100.0f || volt < 20.0f) return 0.0f;
-
   float loadFromTps = tps * 0.18f;
   float loadFromMap = (mapKpa - 35.0f) * 0.08f;
   if (loadFromMap < 0.0f) loadFromMap = 0.0f;
-
   float current = 1.5f + loadFromTps + loadFromMap;
   if (current < 0.0f) current = 0.0f;
   if (current > 60.0f) current = 60.0f;
@@ -1024,20 +890,6 @@ float estimateGeneratorCurrentA(float rpm, float tps, float mapKpa, float volt) 
 float estimateGeneratorPowerKW(float volt, float currentA) {
   if (volt < 20.0f || currentA <= 0.0f) return 0.0f;
   return (volt * currentA) / 1000.0f;
-}
-
-float estimateMAPkPa(float tps, float rpm) {
-  // Fallback hanya untuk kompatibilitas frame lama tanpa MAP.
-  // Pada format baru, UI dan database memakai MAP real dari ESP32-1.
-  float rpmFactor = rpm / 6000.0f;
-  if (rpmFactor < 0.0f) rpmFactor = 0.0f;
-  if (rpmFactor > 1.0f) rpmFactor = 1.0f;
-
-  float tpsFactor = tps / 100.0f;
-  if (tpsFactor < 0.0f) tpsFactor = 0.0f;
-  if (tpsFactor > 1.0f) tpsFactor = 1.0f;
-
-  return 25.0f + 65.0f * tpsFactor + 10.0f * rpmFactor;
 }
 
 String getIsoTimestampWIBms() {
@@ -1108,37 +960,6 @@ void deselectAllSPI() {
   delayMicroseconds(50);
 }
 
-float getFFTInputSignalBySource(const RawData &d, uint8_t source) {
-  switch (source) {
-    case FFT_SRC_VOLT_GEN:  return d.volt;
-    case FFT_SRC_VOLT_GRID: return d.voltGrid;
-    case FFT_SRC_RPM:       return (float)d.rpm;
-    default:                return d.volt;
-  }
-}
-
-const char* getFFTSourceNameById(uint8_t source) {
-  switch (source) {
-    case FFT_SRC_VOLT_GEN:  return "VOLT_GEN";
-    case FFT_SRC_VOLT_GRID: return "VOLT_GRID";
-    case FFT_SRC_RPM:       return "RPM";
-    default:                return "VOLT_GEN";
-  }
-}
-
-const char* getFFTSourceUnitById(uint8_t source) {
-  switch (source) {
-    case FFT_SRC_VOLT_GEN:  return "V";
-    case FFT_SRC_VOLT_GRID: return "V";
-    case FFT_SRC_RPM:       return "rpm";
-    default:                return "";
-  }
-}
-
-const char* getFFTSourceName() {
-  return getFFTSourceNameById(fftSelectedSource);
-}
-
 const char* normalizeSyncStatusText(const char *status) {
   if (status == NULL) return "off";
   if (strcasecmp(status, "sync") == 0) return "sync";
@@ -1149,10 +970,8 @@ const char* normalizeSyncStatusText(const char *status) {
 
 const char* deriveSyncStatusFromRaw(const RawData &d) {
   if (!d.valid) return "off";
-
   bool gensetOn = d.speeduinoSync || d.rpm > 0 || d.volt > 20.0f || d.freq > 5.0f;
   bool gridOn = d.gridSync || d.voltGrid > 20.0f || d.freqGrid > 5.0f;
-
   if (gensetOn && gridOn) return "sync";
   if (gensetOn && !gridOn) return "genset";
   if (!gensetOn && gridOn) return "grid";
@@ -1194,15 +1013,6 @@ bool parseBridgeCsv(const String &line, RawData &out) {
   if (!line.startsWith("$")) return false;
 
   String data = line.substring(1);
-
-  // Format baru dari ESP32-1 sinkronisasi setelah penambahan MAP:
-  // 21 field baru:
-  // $seq,timestampMs,rpm,tps,map,iat,clt,afr,batt,fuel,
-  // freq,freqGrid,volt,voltGrid,currentA,powerKW,phaseAngle,engineSync,gridSync,valid,syncStatus
-  //
-  // Backward compatibility:
-  // 18 field lama dengan MAP tetapi tanpa arus/power tetap diterima.
-  // 17 field lama tanpa MAP tetap diterima, tetapi MAP/arus/power diisi estimasi.
   String fields[21];
   int fieldIndex = 0;
   int start = 0;
@@ -1228,7 +1038,6 @@ bool parseBridgeCsv(const String &line, RawData &out) {
   out.tps = fields[3].toInt();
 
   if (fieldIndex >= 20) {
-    // Format baru dengan MAP, arus, dan power dari ESP32 sinkronisasi.
     out.map = fields[4].toInt();
     out.iat = fields[5].toInt();
     out.clt = fields[6].toInt();
@@ -1255,7 +1064,6 @@ bool parseBridgeCsv(const String &line, RawData &out) {
       strlcpy(out.syncStatus, deriveSyncStatusFromRaw(out), sizeof(out.syncStatus));
     }
   } else if (fieldIndex >= 18) {
-    // Format lama dengan MAP, tetapi belum ada arus/power.
     out.map = fields[4].toInt();
     out.iat = fields[5].toInt();
     out.clt = fields[6].toInt();
@@ -1277,8 +1085,7 @@ bool parseBridgeCsv(const String &line, RawData &out) {
     out.gridSync = fields[16].toInt() == 1;
     out.valid = fields[17].toInt() == 1;
   } else {
-    // Format lama tanpa MAP.
-    out.map = (int)estimateMAPkPa(out.tps, out.rpm);
+    out.map = (int)estimateGeneratorCurrentA(out.rpm, out.tps, out.map, out.volt); // fallback
     out.iat = fields[4].toInt();
     out.clt = fields[5].toInt();
 
@@ -1304,7 +1111,6 @@ bool parseBridgeCsv(const String &line, RawData &out) {
     out.valid = true;
   }
 
-  // Untuk frame lama 17/18/20 field, syncStatus diturunkan dari status generator/grid.
   if (fieldIndex < 21) {
     strlcpy(out.syncStatus, deriveSyncStatusFromRaw(out), sizeof(out.syncStatus));
   }
@@ -1320,20 +1126,16 @@ void printRxParameterReport(const String &rawLine, const RawData &d, bool parseO
   Serial.println();
   Serial.print(F("║ RAW UART      : "));
   Serial.println(rawLine);
-
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.print(F("║ Parse Status  : "));
   Serial.println(parseOk ? F("OK") : F("FAILED"));
-
   if (!parseOk) {
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return;
   }
-
   Serial.println(F("╟─────────────────── FRAME METADATA ────────────────────────╢"));
   Serial.printf("║ %-14s: %lu\n", "seq", (unsigned long)d.seq);
   Serial.printf("║ %-14s: %lu ms\n", "timestampMs", (unsigned long)d.timestampMs);
-
   Serial.println(F("╟─────────────────── ENGINE PARAMETER ──────────────────────╢"));
   Serial.printf("║ %-14s: %d rpm\n", "rpm", d.rpm);
   Serial.printf("║ %-14s: %d %%\n", "tps", d.tps);
@@ -1343,7 +1145,6 @@ void printRxParameterReport(const String &rawLine, const RawData &d, bool parseO
   Serial.printf("║ %-14s: %.2f\n", "afr", d.afr);
   Serial.printf("║ %-14s: %.2f V\n", "batt", d.batt);
   Serial.printf("║ %-14s: %.1f %%\n", "fuel", d.fuel);
-
   Serial.println(F("╟──────────────── ELECTRICAL PARAMETER ─────────────────────╢"));
   Serial.printf("║ %-14s: %.3f Hz\n", "freq", d.freq);
   Serial.printf("║ %-14s: %.3f Hz\n", "freqGrid", d.freqGrid);
@@ -1352,7 +1153,6 @@ void printRxParameterReport(const String &rawLine, const RawData &d, bool parseO
   Serial.printf("║ %-14s: %.2f A\n", "currentA", d.currentA);
   Serial.printf("║ %-14s: %.3f kW\n", "powerKW", d.powerKW);
   Serial.printf("║ %-14s: %.2f deg\n", "phaseAngle", d.phaseAngle);
-
   Serial.println(F("╟──────────────────── STATUS PARAMETER ─────────────────────╢"));
   Serial.printf("║ %-14s: %d\n", "engineSync", d.speeduinoSync ? 1 : 0);
   Serial.printf("║ %-14s: %d\n", "gridSync", d.gridSync ? 1 : 0);
@@ -1360,7 +1160,6 @@ void printRxParameterReport(const String &rawLine, const RawData &d, bool parseO
   Serial.printf("║ %-14s: %s\n", "syncText", d.syncText);
   Serial.printf("║ %-14s: %s\n", "syncStatus", d.syncStatus);
   Serial.printf("║ %-14s: %s\n", "statusText", d.statusText);
-
   Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
 }
 
@@ -1369,20 +1168,16 @@ void printAggregatedParameterReport(const AggregatedData &a) {
   Serial.println(F("║----------------AGGREGATED PARAMETER MONITOR----------------║"));
   Serial.println();
   Serial.println(F("║ RAW UART      : hasil rata-rata agregasi 0,5 detik"));
-
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.print(F("║ Parse Status  : "));
   Serial.println(a.valid ? F("OK") : F("NO VALID AGGREGATE"));
-
   if (!a.valid) {
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return;
   }
-
   Serial.println(F("╟─────────────────── FRAME METADATA ────────────────────────╢"));
   Serial.printf("║ %-14s: %u sample\n", "samples", a.samples);
   Serial.printf("║ %-14s: %lu ms\n", "interval", (unsigned long)lastFastAggIntervalMs);
-
   Serial.println(F("╟─────────────────── ENGINE PARAMETER ──────────────────────╢"));
   Serial.printf("║ %-14s: %.1f rpm\n", "rpmAvg", a.rpmAvg);
   Serial.printf("║ %-14s: %.1f %%\n", "tpsAvg", a.tpsAvg);
@@ -1392,7 +1187,6 @@ void printAggregatedParameterReport(const AggregatedData &a) {
   Serial.printf("║ %-14s: %.2f\n", "afrAvg", a.afrAvg);
   Serial.printf("║ %-14s: %.2f V\n", "battAvg", a.battAvg);
   Serial.printf("║ %-14s: %.1f %%\n", "fuelAvg", a.fuelAvg);
-
   Serial.println(F("╟──────────────── ELECTRICAL PARAMETER ─────────────────────╢"));
   Serial.printf("║ %-14s: %.3f Hz\n", "freqAvg", a.freqAvg);
   Serial.printf("║ %-14s: %.3f Hz\n", "freqGridAvg", a.freqGridAvg);
@@ -1401,11 +1195,9 @@ void printAggregatedParameterReport(const AggregatedData &a) {
   Serial.printf("║ %-14s: %.2f A\n", "currentAvg", a.currentAvg);
   Serial.printf("║ %-14s: %.3f kW\n", "powerAvg", a.powerAvg);
   Serial.printf("║ %-14s: %.2f deg\n", "phaseAvg", a.phaseAngleAvg);
-
   Serial.println(F("╟──────────────────── STATUS PARAMETER ─────────────────────╢"));
   Serial.printf("║ %-14s: %d\n", "synced", a.synced ? 1 : 0);
   Serial.printf("║ %-14s: %d\n", "valid", a.valid ? 1 : 0);
-
   Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
 }
 
@@ -1427,7 +1219,6 @@ void printLastRxReportFromCache() {
     Serial.println(F("╚════════════════════════════════════════════╝"));
     return;
   }
-
   Serial.println();
   Serial.println(F("╔════════════ LAST UART RX FRAME ════════════╗"));
   Serial.println(F("║ Menampilkan data RX terakhir dari cache.   ║"));
@@ -1436,7 +1227,6 @@ void printLastRxReportFromCache() {
   Serial.println(F("║ command: test once reset.                  ║"));
   Serial.printf("[CACHE] cachedAge=%lu ms\n", (unsigned long)(millis() - lastRxCachedAtMs));
   Serial.println(F("╚════════════════════════════════════════════╝"));
-
   printRxParameterReport(lastRxRawLineCache, lastRxDataCache, lastRxParseOkCache);
 }
 
@@ -1444,10 +1234,6 @@ void handleCompleteRxLine(String line) {
   line.trim();
   if (line.length() == 0) return;
 
-  // Dalam mode test-once, hanya frame UART valid pertama yang diproses.
-  // Frame berikutnya diabaikan agar data pengujian tidak berubah.
-  // latestRaw, seq, timestampMs, agregasi, SD, MQTT, dan TFT tetap menggunakan
-  // data terakhir yang sudah tersimpan di cache sampai "test once reset".
   if (testOnceMode && testOnceRxDone) {
     if (runtimeDebugRxOK || runtimeDebugRxRaw) {
       printLastRxReportFromCache();
@@ -1464,12 +1250,10 @@ void handleCompleteRxLine(String line) {
 
   if (ok) {
     cacheLastRxReport(line, parsed, true);
-
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
       latestRaw = parsed;
       xSemaphoreGive(dataMutex);
     }
-
     lastUartReceiveMs = millis();
     lastLinkFrameMs = millis();
     linkOK = true;
@@ -1492,7 +1276,6 @@ void handleCompleteRxLine(String line) {
     }
   } else {
     parseFailCount++;
-
     if (runtimeDebugRxOK) {
       printRxParameterReport(line, parsed, false);
     } else {
@@ -1503,8 +1286,6 @@ void handleCompleteRxLine(String line) {
 }
 
 void handleLinkSerialChar(char c) {
-  // Terima '\n', '\r', atau '\r\n' sebagai terminator agar kompatibel
-  // dengan Serial.print(), Serial.println(), dan pengirim UART custom.
   if (c == '\n' || c == '\r') {
     if (linkRxBuffer.length() > 0) {
       handleCompleteRxLine(linkRxBuffer);
@@ -1512,9 +1293,6 @@ void handleLinkSerialChar(char c) {
     }
     return;
   }
-
-  // '$' adalah start-of-frame. Jika ada buffer parsial, berarti frame lama
-  // terpotong; resync ke frame baru tanpa menunggu overflow.
   if (c == '$') {
     if (linkRxBuffer.length() > 0) {
       acqMon.rxResyncCount++;
@@ -1522,22 +1300,15 @@ void handleLinkSerialChar(char c) {
     linkRxBuffer = "$";
     return;
   }
-
-  // Abaikan byte noise sebelum start-of-frame agar parser tidak gagal terus.
   if (linkRxBuffer.length() == 0) {
     acqMon.rxNoiseBytes++;
     return;
   }
-
-  // Hanya simpan karakter printable ASCII CSV. Byte lain dianggap noise.
   if ((uint8_t)c < 32 || (uint8_t)c > 126) {
     acqMon.rxNoiseBytes++;
     return;
   }
-
   linkRxBuffer += c;
-
-  // Proteksi jika terminator hilang: reset buffer dan tunggu '$' berikutnya.
   if (linkRxBuffer.length() > LINK_LINE_BUFFER_MAX_CHARS) {
     linkRxBuffer = "";
     rxBufferResetCount++;
@@ -1548,33 +1319,26 @@ void handleLinkSerialChar(char c) {
 
 void readLinkSerialManual() {
   uint32_t readStart = micros();
-
-  // Mode test-once: setelah 1 frame valid diterima, kosongkan UART buffer
-  // supaya frame baru tidak mengubah latestRaw/aggregate pengujian.
   if (testOnceMode && testOnceRxDone) {
     while (LinkSerial.available()) LinkSerial.read();
     perfUartReadUs = micros() - readStart;
     perfUpdateStat(acqMon.uartReadUs, perfUartReadUs);
     return;
   }
-
   while (LinkSerial.available()) {
     handleLinkSerialChar((char)LinkSerial.read());
   }
-
   perfUartReadUs = micros() - readStart;
   perfUpdateStat(acqMon.uartReadUs, perfUartReadUs);
 }
 
 void UartRxTask(void *pvParameters) {
   (void)pvParameters;
-
   while (true) {
     readLinkSerialManual();
     vTaskDelay(pdMS_TO_TICKS(LINK_RX_TASK_DELAY_MS));
   }
 }
-
 
 // ============================================================
 // AGGREGATION
@@ -1612,7 +1376,6 @@ void printTestOnceStatus() {
 
 void updateTestOnceCompletion() {
   if (!testOnceMode || testOnceDone) return;
-
   if (testOnceRxDone && testOnceAggDone && testOnceSdDone && testOnceMqttDone && testOnceDisplayDone) {
     testOnceDone = true;
     Serial.println();
@@ -1628,9 +1391,6 @@ void updateTestOnceCompletion() {
 }
 
 void startTestOnceMode() {
-  // Jika test-once sudah pernah menerima/memproses frame, jangan membuat data baru.
-  // Command "test once" setelah selesai hanya menampilkan data terakhir yang dibekukan.
-  // Data baru hanya dibuat dengan command "test once reset".
   if (testOnceMode && (testOnceRxDone || testOnceDone || hasLastRxReport)) {
     Serial.println();
     Serial.println(F("╔════════════ TEST-ONCE HOLD LAST DATA ════════════╗"));
@@ -1643,7 +1403,6 @@ void startTestOnceMode() {
     printTestOnceStatus();
     return;
   }
-
   testOnceMode = true;
   testOnceDone = false;
   testOnceRxDone = false;
@@ -1654,17 +1413,14 @@ void startTestOnceMode() {
   testOnceSeq = 0;
   testOnceLocalSeq = 0;
   testOnceTriggeredMs = millis();
-
   hasLastRxReport = false;
   lastRxRawLineCache = "";
   lastRxDataCache = RawData();
   lastRxParseOkCache = false;
   lastRxCachedAtMs = 0;
-
   linkRxBuffer = "";
   resetAccumulator();
   clearStorageBatchForTestOnce();
-
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     latestRaw = RawData();
     aggData = AggregatedData();
@@ -1673,14 +1429,10 @@ void startTestOnceMode() {
     strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
     xSemaphoreGive(dataMutex);
   }
-
-  // Paksa siklus berikutnya segera mencoba publish, save, dan update nilai TFT
-  // setelah aggregate pertama tersedia tanpa full redraw halaman.
   lastPublish = 0;
   lastLocalSave = 0;
   lastDraw = 0;
   displayUpdateNow = true;
-
   Serial.println();
   Serial.println(F("╔════════════ TEST-ONCE STARTED ════════════╗"));
   Serial.println(F("║ ESP32-2 akan menerima 1 frame UART valid. ║"));
@@ -1701,19 +1453,15 @@ void resetTestOnceMode() {
   testOnceSeq = 0;
   testOnceLocalSeq = 0;
   testOnceTriggeredMs = millis();
-
   hasLastRxReport = false;
   lastRxRawLineCache = "";
   lastRxDataCache = RawData();
   lastRxParseOkCache = false;
   lastRxCachedAtMs = 0;
-
   linkRxBuffer = "";
   while (LinkSerial.available()) LinkSerial.read();
-
   resetAccumulator();
   clearStorageBatchForTestOnce();
-
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     latestRaw = RawData();
     aggData = AggregatedData();
@@ -1722,12 +1470,10 @@ void resetTestOnceMode() {
     strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
     xSemaphoreGive(dataMutex);
   }
-
   lastPublish = 0;
   lastLocalSave = 0;
   lastDraw = 0;
   displayUpdateNow = true;
-
   Serial.println();
   Serial.println(F("╔════════════ TEST-ONCE RESET ════════════╗"));
   Serial.println(F("║ Cache lama dihapus.                     ║"));
@@ -1752,28 +1498,18 @@ void stopTestOnceMode() {
 
 void addSampleToAccumulator(const RawData &d) {
   if (!d.valid) return;
-
-  // Terima juga mode GRID-only dari ESP32 sinkronisasi. Sebelumnya sample
-  // dibuang ketika rpm/freq/volt generator = 0, sehingga agregasi 0,5 detik
-  // tidak bergerak saat hanya PLN/grid yang hidup. Parameter grid wajib ikut
-  // dihitung supaya LCD, MQTT dashboard, dan database tetap berubah tiap
-  // window agregasi 0,5 detik sesuai status sumber daya aktual.
   bool hasGeneratorData = d.rpm != 0 || d.freq != 0.0f || d.volt != 0.0f;
   bool hasGridData = d.freqGrid != 0.0f || d.voltGrid != 0.0f;
   if (!hasGeneratorData && !hasGridData) return;
-
   acc.count++;
-
   acc.rpmSum += d.rpm; acc.rpmMin = min(acc.rpmMin, d.rpm); acc.rpmMax = max(acc.rpmMax, d.rpm);
   acc.tpsSum += d.tps; acc.tpsMin = min(acc.tpsMin, d.tps); acc.tpsMax = max(acc.tpsMax, d.tps);
   acc.mapSum += d.map; acc.mapMin = min(acc.mapMin, d.map); acc.mapMax = max(acc.mapMax, d.map);
   acc.iatSum += d.iat; acc.iatMin = min(acc.iatMin, d.iat); acc.iatMax = max(acc.iatMax, d.iat);
   acc.cltSum += d.clt; acc.cltMin = min(acc.cltMin, d.clt); acc.cltMax = max(acc.cltMax, d.clt);
-
   acc.afrSum += d.afr; acc.afrMin = min(acc.afrMin, d.afr); acc.afrMax = max(acc.afrMax, d.afr);
   acc.battSum += d.batt; acc.battMin = min(acc.battMin, d.batt); acc.battMax = max(acc.battMax, d.batt);
   acc.fuelSum += d.fuel; acc.fuelMin = min(acc.fuelMin, d.fuel); acc.fuelMax = max(acc.fuelMax, d.fuel);
-
   acc.freqSum += d.freq; acc.freqMin = min(acc.freqMin, d.freq); acc.freqMax = max(acc.freqMax, d.freq);
   acc.freqGridSum += d.freqGrid; acc.freqGridMin = min(acc.freqGridMin, d.freqGrid); acc.freqGridMax = max(acc.freqGridMax, d.freqGrid);
   acc.voltSum += d.volt; acc.voltMin = min(acc.voltMin, d.volt); acc.voltMax = max(acc.voltMax, d.volt);
@@ -1781,9 +1517,7 @@ void addSampleToAccumulator(const RawData &d) {
   acc.currentSum += d.currentA; acc.currentMin = min(acc.currentMin, d.currentA); acc.currentMax = max(acc.currentMax, d.currentA);
   acc.powerSum += d.powerKW; acc.powerMin = min(acc.powerMin, d.powerKW); acc.powerMax = max(acc.powerMax, d.powerKW);
   acc.phaseAngleSum += d.phaseAngle; acc.phaseAngleMin = min(acc.phaseAngleMin, d.phaseAngle); acc.phaseAngleMax = max(acc.phaseAngleMax, d.phaseAngle);
-
   if (d.gridSync) acc.syncedCount++;
-
   const char *st = normalizeSyncStatusText(d.syncStatus);
   if (strcmp(st, "sync") == 0) acc.statusSyncCount++;
   else if (strcmp(st, "genset") == 0) acc.statusGensetCount++;
@@ -1797,19 +1531,15 @@ AggregatedData makeAggregateFromAccumulator() {
     out.valid = false;
     return out;
   }
-
   out.samples = acc.count;
-
   out.rpmAvg = acc.rpmSum / acc.count; out.rpmMin = acc.rpmMin; out.rpmMax = acc.rpmMax;
   out.tpsAvg = acc.tpsSum / acc.count; out.tpsMin = acc.tpsMin; out.tpsMax = acc.tpsMax;
   out.mapAvg = acc.mapSum / acc.count; out.mapMin = acc.mapMin; out.mapMax = acc.mapMax;
   out.iatAvg = acc.iatSum / acc.count; out.iatMin = acc.iatMin; out.iatMax = acc.iatMax;
   out.cltAvg = acc.cltSum / acc.count; out.cltMin = acc.cltMin; out.cltMax = acc.cltMax;
-
   out.afrAvg = acc.afrSum / acc.count; out.afrMin = acc.afrMin; out.afrMax = acc.afrMax;
   out.battAvg = acc.battSum / acc.count; out.battMin = acc.battMin; out.battMax = acc.battMax;
   out.fuelAvg = acc.fuelSum / acc.count; out.fuelMin = acc.fuelMin; out.fuelMax = acc.fuelMax;
-
   out.freqAvg = acc.freqSum / acc.count; out.freqMin = acc.freqMin; out.freqMax = acc.freqMax;
   out.freqGridAvg = acc.freqGridSum / acc.count; out.freqGridMin = acc.freqGridMin; out.freqGridMax = acc.freqGridMax;
   out.voltAvg = acc.voltSum / acc.count; out.voltMin = acc.voltMin; out.voltMax = acc.voltMax;
@@ -1817,24 +1547,19 @@ AggregatedData makeAggregateFromAccumulator() {
   out.currentAvg = acc.currentSum / acc.count; out.currentMin = acc.currentMin; out.currentMax = acc.currentMax;
   out.powerAvg = acc.powerSum / acc.count; out.powerMin = acc.powerMin; out.powerMax = acc.powerMax;
   out.phaseAngleAvg = acc.phaseAngleSum / acc.count; out.phaseAngleMin = acc.phaseAngleMin; out.phaseAngleMax = acc.phaseAngleMax;
-
   out.synced = acc.syncedCount > (acc.count / 2);
-
-  // Ambil status mayoritas selama window agregasi 0,5 detik.
   uint16_t bestCount = acc.statusOffCount;
   const char *bestStatus = "off";
   if (acc.statusGridCount > bestCount) { bestCount = acc.statusGridCount; bestStatus = "grid"; }
   if (acc.statusGensetCount > bestCount) { bestCount = acc.statusGensetCount; bestStatus = "genset"; }
   if (acc.statusSyncCount > bestCount) { bestCount = acc.statusSyncCount; bestStatus = "sync"; }
   strlcpy(out.syncStatus, bestStatus, sizeof(out.syncStatus));
-
   out.valid = true;
   return out;
 }
 
 void pushStorageRecord(const AggregatedData &a) {
   if (!a.valid) return;
-
   StorageRecord rec;
   rec.valid = true;
   rec.batchSeq = storageBatchSeq;
@@ -1844,10 +1569,8 @@ void pushStorageRecord(const AggregatedData &a) {
   rec.timestampMs = millis();
   rec.recordId = String(DEVICE_ID) + "-" + String(rec.localSeq) + "-" + String(rec.timestampMs);
   rec.agg = a;
-
   storageBatch[storageBatchCount] = rec;
   storageBatchCount++;
-
   if (storageBatchCount >= STORAGE_BATCH_SIZE) {
     storageBatchCount = 0;
     storageBatchSeq++;
@@ -1856,25 +1579,20 @@ void pushStorageRecord(const AggregatedData &a) {
 
 void finalizeFastAggregate() {
   uint32_t aggStart = micros();
-
   AggregatedData out = makeAggregateFromAccumulator();
-
   static unsigned long prevAggMs = 0;
   unsigned long nowMs = millis();
   if (prevAggMs > 0) {
     lastFastAggIntervalMs = nowMs - prevAggMs;
   }
   prevAggMs = nowMs;
-
   if (out.valid) {
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       aggData = out;
       xSemaphoreGive(dataMutex);
     }
-
     pushStorageRecord(out);
     displayAggregateSeq++;
-
     if (testOnceMode && testOnceRxDone && !testOnceAggDone) {
       testOnceAggDone = true;
       testOnceLocalSeq = localRecordSeq;
@@ -1884,183 +1602,28 @@ void finalizeFastAggregate() {
                     (unsigned long)testOnceLocalSeq, out.samples);
       Serial.println(F("╚════════════════════════════════════════════════╝"));
       printAggregatedParameterReport(out);
-
-      // Paksa loop utama segera menjalankan SD save, MQTT publish, dan update nilai TFT
-      // tanpa menunggu sisa interval sebelumnya dan tanpa full redraw halaman.
       lastLocalSave = 0;
       lastPublish = 0;
       lastDraw = 0;
       displayUpdateNow = true;
     }
-
-    // Aggregate baru harus segera muncul di LCD dan server. Jangan tunggu sisa
-    // interval publish/draw sebelumnya; loop utama akan menjalankan publish
-    // realtime MQTT, simpan lokal, dan update nilai berubah pada siklus berikutnya.
     lastPublish = millis() - publishInterval;
-    // SD tetap mengikuti localSaveInterval agar kartu tidak dipaksa write 2x/detik.
-    // Realtime MQTT dan LCD tetap dipercepat oleh lastPublish/lastDraw.
     if (millis() - lastLocalSave >= localSaveInterval) {
       lastLocalSave = millis() - localSaveInterval;
     }
     lastDraw = millis() - drawInterval;
     displayUpdateNow = true;
-
     fastAggCompleted++;
     lastFastAggSamples = out.samples;
     lastAggReadyMs = nowMs;
-
     if (out.samples < 3) fastAggUnderfilled++;
-
     if (serialLogAggregationEnabled) {
       printAggregatedParameterReport(out);
     }
   }
-
   resetAccumulator();
   perfAggregationUs = micros() - aggStart;
   perfUpdateStat(acqMon.aggregationUs, perfAggregationUs);
-}
-
-// ============================================================
-// FFT - simple DFT, tidak bergantung versi arduinoFFT
-// ============================================================
-void addSampleToFFTBuffer(const RawData &d) {
-#if ENABLE_FFT_EDGE
-  if (!d.valid) return;
-
-  // Hanya push sample ke buffer FFT. Komputasi FFT dilakukan di FFTTask,
-  // sehingga SensorTask50Hz tidak terbebani DFT manual.
-  if (fftMutex && xSemaphoreTake(fftMutex, pdMS_TO_TICKS(2)) != pdTRUE) return;
-
-  for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) {
-    float signal = getFFTInputSignalBySource(d, source);
-    if (isnan(signal) || isinf(signal)) continue;
-
-    fftBuffers[source][fftIndexes[source]] = signal;
-    fftIndexes[source]++;
-
-    if (fftIndexes[source] >= FFT_SAMPLES) {
-      fftIndexes[source] = 0;
-      fftBufferFulls[source] = true;
-    }
-  }
-
-  if (fftMutex) xSemaphoreGive(fftMutex);
-#endif
-}
-
-FFTData computeFFTForSource(uint8_t source) {
-  FFTData local;
-  local.source = source;
-  if (source >= FFT_SOURCE_COUNT || !fftBufferFulls[source]) {
-    local.valid = false;
-    return local;
-  }
-
-  float ordered[FFT_SAMPLES];
-  for (uint16_t i = 0; i < FFT_SAMPLES; i++) {
-    uint16_t idx = (fftIndexes[source] + i) % FFT_SAMPLES;
-    ordered[i] = fftBuffers[source][idx];
-  }
-
-  float mean = 0;
-  for (uint16_t i = 0; i < FFT_SAMPLES; i++) mean += ordered[i];
-  mean /= FFT_SAMPLES;
-
-  float sumSq = 0;
-  for (uint16_t i = 0; i < FFT_SAMPLES; i++) {
-    float x = ordered[i] - mean;
-    sumSq += x * x;
-  }
-
-  local.valid = true;
-  local.samples = FFT_SAMPLES;
-  local.sampleRateHz = FFT_SAMPLE_RATE_HZ;
-  local.resolutionHz = FFT_SAMPLE_RATE_HZ / FFT_SAMPLES;
-  local.rms = sqrt(sumSq / FFT_SAMPLES);
-
-  // X axis = frequency bin dalam Hz.
-  // Y axis = magnitude spektrum dari sinyal terpilih.
-  for (uint16_t k = 0; k < FFT_BINS_TO_SEND; k++) {
-    float re = 0;
-    float im = 0;
-
-    for (uint16_t n = 0; n < FFT_SAMPLES; n++) {
-      float x = ordered[n] - mean;
-      float angle = 2.0f * PI * k * n / FFT_SAMPLES;
-      re += x * cos(angle);
-      im -= x * sin(angle);
-    }
-
-    float mag = sqrt(re * re + im * im) / FFT_SAMPLES;
-    local.freqBins[k] = k * local.resolutionHz;
-    local.magBins[k] = mag;
-
-    if (k > 0 && mag > local.peakMagnitude) {
-      local.peakMagnitude = mag;
-      local.peakHz = local.freqBins[k];
-    }
-  }
-
-  return local;
-}
-
-void computeFFTIfReady() {
-#if ENABLE_FFT_EDGE
-  bool anyReady = false;
-
-  if (fftMutex && xSemaphoreTake(fftMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
-
-  for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) {
-    if (fftBufferFulls[source]) {
-      anyReady = true;
-      break;
-    }
-  }
-
-  if (!anyReady) {
-    if (fftMutex) xSemaphoreGive(fftMutex);
-    return;
-  }
-
-  uint32_t fftStart = micros();
-
-  FFTData localResults[FFT_SOURCE_COUNT];
-  for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) {
-    localResults[source] = computeFFTForSource(source);
-  }
-
-  if (fftMutex) xSemaphoreGive(fftMutex);
-
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) {
-      fftMultiData[source] = localResults[source];
-    }
-
-    // fftData = data FFT yang sedang dipilih untuk halaman FFT, storage, dan payload MQTT.
-    if (fftSelectedSource < FFT_SOURCE_COUNT) {
-      fftData = fftMultiData[fftSelectedSource];
-    }
-
-    xSemaphoreGive(dataMutex);
-  }
-
-  perfFftComputeUs = micros() - fftStart;
-  perfUpdateStat(acqMon.fftComputeUs, perfFftComputeUs);
-#endif
-}
-
-void FFTTask(void *pvParameters) {
-#if ENABLE_FFT_EDGE
-  TickType_t lastWake = xTaskGetTickCount();
-
-  while (true) {
-    computeFFTIfReady();
-    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(FFT_COMPUTE_INTERVAL_MS));
-  }
-#else
-  vTaskDelete(NULL);
-#endif
 }
 
 // ============================================================
@@ -2069,26 +1632,18 @@ void FFTTask(void *pvParameters) {
 void SensorTask50Hz(void *pvParameters) {
   TickType_t lastWake = xTaskGetTickCount();
   uint32_t lastAggMs = millis();
-
   resetAccumulator();
-
   while (true) {
     recordSensorIntervalTick();
     uint32_t taskStart = micros();
-
     RawData sample;
     bool hasSample = false;
-
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
       sample = latestRaw;
       hasSample = sample.valid;
       xSemaphoreGive(dataMutex);
     }
-
     static uint32_t lastAggregatedSeq = 0xFFFFFFFF;
-
-    // UART dari ESP32-1 sekarang 100 ms (10 Hz), sedangkan task ini tetap 20 ms.
-    // Agar satu frame UART tidak dihitung 5 kali, agregasi hanya mengambil seq baru.
     if (hasSample && sample.seq != lastAggregatedSeq) {
       addSampleToAccumulator(sample);
       acqMon.newSeqSamples++;
@@ -2096,27 +1651,20 @@ void SensorTask50Hz(void *pvParameters) {
     } else if (!hasSample) {
       acqMon.noDataCycles++;
     }
-
     if (millis() - lastAggMs >= AGGREGATION_INTERVAL_MS) {
       lastAggMs = millis();
       finalizeFastAggregate();
-      // FFT tidak dihitung di SensorTask50Hz agar deadline 20 ms tidak terlewati.
-      // Komputasi FFT berjalan di FFTTask terpisah setiap FFT_COMPUTE_INTERVAL_MS.
     }
-
     if (millis() - lastLinkFrameMs > 2000) {
       linkOK = false;
     }
-
     perfLastRxAgeMs = lastUartReceiveMs > 0 ? millis() - lastUartReceiveMs : 999999;
     sensorExecutions++;
     perfSensorTaskUs = micros() - taskStart;
     perfUpdateStat(acqMon.sensorTaskUs, perfSensorTaskUs);
-
     if (perfSensorTaskUs > SENSOR_SAMPLE_INTERVAL_MS * 1000UL) {
       sensorMissedDeadlines++;
     }
-
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(SENSOR_SAMPLE_INTERVAL_MS));
   }
 }
@@ -2126,58 +1674,44 @@ void SensorTask50Hz(void *pvParameters) {
 // ============================================================
 String buildJsonRecordParametersOnly(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
-
-  // Database cloud dihitung hanya dari parameter utama generator/mesin.
-  // Tidak memasukkan FFT besar; parameter utama generator dan grid tetap dikirim.
-  String json = "{";
-  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-  json += "\"recordId\":\"" + r.recordId + "\",";
-  json += "\"localSeq\":" + String(r.localSeq) + ",";
-  json += "\"timestamp\":\"" + r.timestamp + "\",";
-  json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
-  json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
-  json += "\"map\":" + String(a.mapAvg, 1) + ",";
-  json += "\"iat\":" + String(a.iatAvg, 1) + ",";
-  json += "\"clt\":" + String(a.cltAvg, 1) + ",";
-  json += "\"afr\":" + String(a.afrAvg, 2) + ",";
-  json += "\"batt\":" + String(a.battAvg, 2) + ",";
-  json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
-  json += "\"freq\":" + String(a.freqAvg, 3) + ",";
-  json += "\"freqGrid\":" + String(a.freqGridAvg, 3) + ",";
-  json += "\"volt\":" + String(a.voltAvg, 2) + ",";
-  json += "\"voltGrid\":" + String(a.voltGridAvg, 2) + ",";
-  json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
-  json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
-  json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
-  json += "}";
-  return json;
+  
+  // Format urutan wajib sama dengan parser di server.js (21 kolom)
+  String csv = String(DEVICE_ID) + ",";
+  csv += r.recordId + ",";
+  csv += String(r.localSeq) + ",";
+  csv += r.timestamp + ",";
+  csv += String(a.rpmAvg, 1) + ",";
+  csv += String(a.tpsAvg, 1) + ",";
+  csv += String(a.mapAvg, 1) + ",";
+  csv += String(a.iatAvg, 1) + ",";
+  csv += String(a.cltAvg, 1) + ",";
+  csv += String(a.afrAvg, 2) + ",";
+  csv += String(a.battAvg, 2) + ",";
+  csv += String(a.fuelAvg, 1) + ",";
+  csv += String(a.freqAvg, 3) + ",";
+  csv += String(a.freqGridAvg, 3) + ",";
+  csv += String(a.voltAvg, 2) + ",";
+  csv += String(a.voltGridAvg, 2) + ",";
+  csv += String(a.currentAvg, 2) + ",";
+  csv += String(a.powerAvg, 3) + ",";
+  csv += String(a.phaseAngleAvg, 2) + ",";
+  csv += String(getSyncTextFromAggregate(a)) + ",";
+  csv += String(getPowerSourceFromAggregate(a));
+  
+  return csv;
 }
 
 String buildJsonParameterBatchPayload() {
-  // Untuk estimasi database, cukup hitung record parameter utama yang benar-benar disimpan.
-  // STORAGE_BATCH_SIZE saat ini = 1, sehingga output ini adalah 1 dokumen database.
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (storageBatch[i].valid) return buildJsonRecordParametersOnly(storageBatch[i]);
   }
   return "{}";
 }
 
-
-String buildJsonRecord(const StorageRecord &r) {
-  // FFT dihapus dari payload ESP32; record history memakai parameter utama saja.
-  return buildJsonRecordParametersOnly(r);
-}
-
 String buildMqttRealtimeFlatPayload() {
-  // Payload khusus MQTT realtime ke dashboard.
-  // Format dibuat flat: timestamp + parameter langsung di root JSON tanpa FFT.
   uint32_t buildStart = micros();
-
   StorageRecord r;
   bool found = false;
-
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (storageBatch[i].valid) {
       r = storageBatch[i];
@@ -2185,12 +1719,10 @@ String buildMqttRealtimeFlatPayload() {
       break;
     }
   }
-
   if (!found) {
     perfJsonBuildUs = micros() - buildStart;
     return "{}";
   }
-
   const AggregatedData &a = r.agg;
   String json = "{";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
@@ -2198,7 +1730,6 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"localSeq\":" + String(r.localSeq) + ",";
   json += "\"samples\":" + String(a.samples) + ",";
   json += "\"timestamp\":\"" + r.timestamp + "\",";
-
   json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
   json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
   json += "\"map\":" + String(a.mapAvg, 1) + ",";
@@ -2207,7 +1738,6 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"afr\":" + String(a.afrAvg, 2) + ",";
   json += "\"batt\":" + String(a.battAvg, 2) + ",";
   json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
-
   json += "\"freq\":" + String(a.freqAvg, 3) + ",";
   json += "\"freqGrid\":" + String(a.freqGridAvg, 3) + ",";
   json += "\"volt\":" + String(a.voltAvg, 2) + ",";
@@ -2217,42 +1747,28 @@ String buildMqttRealtimeFlatPayload() {
   json += "\"phaseAngle\":" + String(a.phaseAngleAvg, 2) + ",";
   json += "\"sync\":\"" + String(getSyncTextFromAggregate(a)) + "\",";
   json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
-
   json += "}";
-
   perfJsonBuildUs = micros() - buildStart;
   return json;
 }
 
 String buildMqttHistoryWrapperPayload() {
-  // Payload wrapper lama dipertahankan hanya untuk kompatibilitas command/debug.
-  // Pengiriman utama ke MongoDB memakai record tunggal realtime tiap 1 detik.
   uint32_t buildStart = micros();
-
   String json = "{";
   json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
   json += "\"type\":\"record_1s\",";
   json += "\"publishedAt\":\"" + getIsoTimestampWIBms() + "\",";
   json += "\"records\":[";
-
   bool first = true;
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
     if (!first) json += ",";
-    json += buildJsonRecord(storageBatch[i]);
+    json += buildJsonRecordParametersOnly(storageBatch[i]);
     first = false;
   }
-
   json += "]}";
-
   perfJsonBuildUs = micros() - buildStart;
   return json;
-}
-
-String buildJsonBatchPayload() {
-  // Backward compatibility untuk command/fungsi lama.
-  // Setelah implementasi split payload, fungsi ini mengembalikan payload realtime flat.
-  return buildMqttRealtimeFlatPayload();
 }
 
 void printMqttPayloadReport(const String &payload,
@@ -2263,37 +1779,19 @@ void printMqttPayloadReport(const String &payload,
                             bool fromCache) {
   Serial.println();
   Serial.println(F("╔════════════════ MQTT JSON PAYLOAD MONITOR ════════════════╗"));
-
-  Serial.print(F("║ Source          : "));
-  Serial.println(fromCache ? F("LAST SENT CACHE") : F("CURRENT BUILD / LAST PUBLISH"));
-
-  Serial.print(F("║ MQTT host       : "));
-  Serial.println(MQTT_HOST);
-
-  Serial.print(F("║ Realtime topic  : "));
-  Serial.println(MQTT_REALTIME_TOPIC);
-
-  Serial.print(F("║ History/cloud   : "));
-  Serial.println(F("MQTT topic gen/data realtime every 0.5 sec"));
-
-  Serial.print(F("║ Realtime status : "));
-  Serial.println(realtimeOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
-
-  Serial.print(F("║ MongoDB realtime: "));
-  Serial.println(historyOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
-
+  Serial.print(F("║ Source          : ")); Serial.println(fromCache ? F("LAST SENT CACHE") : F("CURRENT BUILD / LAST PUBLISH"));
+  Serial.print(F("║ MQTT host       : ")); Serial.println(MQTT_HOST);
+  Serial.print(F("║ Realtime topic  : ")); Serial.println(MQTT_REALTIME_TOPIC);
+  Serial.print(F("║ History/cloud   : ")); Serial.println(F("MQTT topic gen/data realtime every 0.5 sec"));
+  Serial.print(F("║ Realtime status : ")); Serial.println(realtimeOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
+  Serial.print(F("║ MongoDB realtime: ")); Serial.println(historyOk ? F("PUBLISH OK") : F("PUBLISH FAIL / NOT SENT"));
   if (fromCache && lastMqttPayloadCacheAtMs > 0) {
-    Serial.print(F("║ Cache age       : "));
-    Serial.print(millis() - lastMqttPayloadCacheAtMs);
-    Serial.println(F(" ms"));
+    Serial.print(F("║ Cache age       : ")); Serial.print(millis() - lastMqttPayloadCacheAtMs); Serial.println(F(" ms"));
   }
-
   Serial.println(F("╠════════════ REALTIME FLAT MQTT JSON PAYLOAD ═══════════════╣"));
   Serial.println(payload);
-
   Serial.println(F("╠════════════ MONGODB BUFFER RECORD PREVIEW ═════════════════╣"));
   Serial.println(parameterOnlyPayload);
-
   Serial.println(F("╚═════════════════════════════════════════════════════════════╝"));
 }
 
@@ -2307,7 +1805,6 @@ void printLastMqttPayloadCache() {
     Serial.println(F("╚════════════════════════════════════╝"));
     return;
   }
-
   printMqttPayloadReport(
     lastMqttPayloadCache,
     lastMqttParameterOnlyPayloadCache,
@@ -2321,14 +1818,12 @@ void printLastMqttPayloadCache() {
 void printCurrentMqttPayloadBuild() {
   bool hasData = false;
   uint32_t recordsInPayload = 0;
-
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (storageBatch[i].valid) {
       hasData = true;
       recordsInPayload++;
     }
   }
-
   if (!hasData) {
     Serial.println();
     Serial.println(F("╔════════ MQTT PAYLOAD BUILD ════════╗"));
@@ -2337,20 +1832,10 @@ void printCurrentMqttPayloadBuild() {
     Serial.println(F("╚════════════════════════════════════╝"));
     return;
   }
-
   String payload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildMqttHistoryWrapperPayload();
-
-  printMqttPayloadReport(
-    payload,
-    parameterOnlyPayload,
-    recordsInPayload,
-    false,
-    false,
-    false
-  );
+  printMqttPayloadReport(payload, parameterOnlyPayload, recordsInPayload, false, false, false);
 }
-
 
 void cacheLastDatabasePayload(const StorageRecord &r, const String &csvLine, const String &queueJson) {
   hasLastDatabasePayloadCache = true;
@@ -2358,7 +1843,7 @@ void cacheLastDatabasePayload(const StorageRecord &r, const String &csvLine, con
   lastSdQueueJsonCache = queueJson;
   lastDatabasePayloadCacheAtMs = millis();
   lastDatabaseLocalSeqCache = r.localSeq;
-  lastDatabaseCsvBytesCache = csvLine.length() + 2; // CR/LF saat println
+  lastDatabaseCsvBytesCache = csvLine.length() + 2;
   lastDatabaseJsonBytesCache = queueJson.length() + 2;
 }
 
@@ -2366,35 +1851,24 @@ void printDatabasePayloadReport(bool fullPayload) {
   Serial.println();
   Serial.println(F("╔════════════ SD DATABASE + MONGODB BUFFER PAYLOAD ═════════╗"));
   Serial.print(F("║ CSV file        : ")); Serial.println(DB_FILE);
-  Serial.print(F("║ FFT file        : ")); Serial.println(FFT_FILE);
   Serial.print(F("║ Mongo topic     : ")); Serial.println(MQTT_TOPIC);
   Serial.print(F("║ Save interval   : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
   Serial.print(F("║ Mongo interval  : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
   Serial.print(F("║ Target batch    : ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print(F("║ Buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-
   if (!hasLastDatabasePayloadCache) {
     Serial.println(F("║ Status          : belum ada record agregasi yang disimpan."));
     Serial.println(F("║ Tunggu minimal 0,5 detik setelah RX UART valid."));
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return;
   }
-
   Serial.print(F("║ LocalSeq        : ")); Serial.println(lastDatabaseLocalSeqCache);
   Serial.print(F("║ Cache age       : ")); Serial.print(millis() - lastDatabasePayloadCacheAtMs); Serial.println(F(" ms"));
   Serial.print(F("║ CSV row bytes   : ")); Serial.println(lastDatabaseCsvBytesCache);
   Serial.print(F("║ JSON row bytes  : ")); Serial.println(lastDatabaseJsonBytesCache);
-  {
-    uint32_t recBytes = getMongoRecordBytesNoFft();
-    uint32_t avgSentBytes = getMongoAvgSentRecordBytesNoFft();
-    Serial.print(F("║ Mongo record    : ")); Serial.print(recBytes); Serial.println(F(" B/record"));
-    Serial.print(F("║ Avg sent record : ")); Serial.print(avgSentBytes); Serial.println(F(" B/record"));
-    Serial.print(F("║ Est. storage 10y: ")); Serial.println(formatBytes(estimateMongoPayloadBytesNoFft10Years(avgSentBytes)));
-  }
   Serial.print(F("║ Buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print(F("║ MQTT state   : ")); Serial.println(mongoUploadLastHttpCode);
   Serial.print(F("║ Send busy       : ")); Serial.println(mongoUploadBusy ? F("YES") : F("NO"));
-
   if (fullPayload) {
     Serial.println(F("╠════════════ LAST CSV ROW WRITTEN TO SD ════════════════════╣"));
     Serial.println(lastSdCsvLineCache);
@@ -2413,20 +1887,17 @@ void printRealtimeMonitoringPayloadReport(bool fullPayload) {
   Serial.print(F("║ Interval        : ")); Serial.print(publishInterval); Serial.println(F(" ms"));
   Serial.print(F("║ WiFi/MQTT       : ")); Serial.print(wifiOK ? F("WiFi OK") : F("WiFi FAIL"));
   Serial.print(F(" / ")); Serial.println(mqtt.connected() ? F("MQTT CONNECTED") : F("MQTT DISCONNECTED"));
-
   if (!hasLastMqttPayloadCache) {
     Serial.println(F("║ Status          : belum ada payload realtime terkirim."));
     Serial.println(F("║ Tunggu publish 0,5 detik setelah agregasi valid."));
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return;
   }
-
   Serial.print(F("║ Last publish age: ")); Serial.print(millis() - lastMqttPayloadCacheAtMs); Serial.println(F(" ms"));
   Serial.print(F("║ Last payload    : ")); Serial.print(lastMqttPayloadCache.length()); Serial.println(F(" B"));
   Serial.print(F("║ Records         : ")); Serial.println(lastMqttPayloadRecordsCache);
   Serial.print(F("║ Realtime status : ")); Serial.println(lastMqttRealtimeOkCache ? F("PUBLISH OK") : F("PUBLISH FAIL"));
   Serial.println(F("║ History/MongoDB : REALTIME MQTT gen/data tiap 0,5 detik."));
-
   if (fullPayload) {
     Serial.println(F("╠════════════ LAST REALTIME MQTT JSON PAYLOAD ══════════════╣"));
     Serial.println(lastMqttPayloadCache);
@@ -2443,7 +1914,6 @@ void printSerialMonitoringOverview() {
     a = aggData;
     xSemaphoreGive(dataMutex);
   }
-
   Serial.println();
   Serial.println(F("╔════════════ GENSYS SERIAL MONITOR OVERVIEW ═══════════════╗"));
   Serial.println(F("║ 1) RAW UART TERAKHIR                                      ║"));
@@ -2453,7 +1923,6 @@ void printSerialMonitoringOverview() {
   } else {
     Serial.println(F("║ Raw line       : belum ada frame UART."));
   }
-
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.println(F("║ 2) HASIL AGREGASI 1 DETIK / DATA DATABASE                 ║"));
   Serial.printf("║ samples=%u rpm=%.1f tps=%.1f map=%.1f freq=%.3f volt=%.2f\n",
@@ -2466,14 +1935,12 @@ void printSerialMonitoringOverview() {
   } else {
     Serial.println(F("║ last CSV bytes : belum ada record SD."));
   }
-
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.println(F("║ 3) REALTIME MONITORING / MQTT DASHBOARD                   ║"));
   Serial.print(F("║ MQTT topic     : ")); Serial.println(MQTT_REALTIME_TOPIC);
   Serial.print(F("║ MQTT status    : ")); Serial.println(mqtt.connected() ? F("CONNECTED") : F("DISCONNECTED"));
   Serial.print(F("║ last publish   : ")); Serial.print(hasLastMqttPayloadCache ? String(millis() - lastMqttPayloadCacheAtMs) + " ms ago" : String("never")); Serial.println();
   Serial.print(F("║ last bytes     : ")); Serial.println(hasLastMqttPayloadCache ? lastMqttPayloadCache.length() : 0);
-
   Serial.println(F("╟────────────────────────────────────────────────────────────╢"));
   Serial.println(F("║ 4) MONGODB REALTIME 1S                              ║"));
   Serial.print(F("║ buffer count   : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
@@ -2492,20 +1959,13 @@ void publishRealtimeData() {
     mqttOK = false;
     return;
   }
-
   wifiOK = true;
-
   if (!mqtt.connected()) {
     mqttOK = false;
     reconnectMQTT();
-
-    if (!mqtt.connected()) {
-      return;
-    }
+    if (!mqtt.connected()) return;
   }
-  // Test-once mode: MQTT realtime hanya 1 kali setelah aggregate tersedia.
   if (testOnceMode && (!testOnceAggDone || testOnceMqttDone)) return;
-
   bool hasData = false;
   uint32_t recordsInPayload = 0;
   uint32_t latestPayloadSeq = 0;
@@ -2517,36 +1977,28 @@ void publishRealtimeData() {
     }
   }
   if (!hasData) return;
-
-  // MQTT publish langsung hanya untuk dashboard realtime.
-  // History/cloud MongoDB masuk ke buffer RAM dan dikirim batch 10 menit ke topic gen/data.
   String realtimePayload = buildMqttRealtimeFlatPayload();
   String parameterOnlyPayload = buildJsonParameterBatchPayload();
-
   mqttLastPayloadBytes = realtimePayload.length();
   mqttLastParameterPayloadBytes = parameterOnlyPayload.length();
   mqttLastRecordsSent = recordsInPayload;
-
   uint32_t pubStart = micros();
   bool realtimeOk = false;
   bool historyOk = false;
   if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
     mqtt.loop();
-    historyOk = true; // gen/data dikirim oleh MongoBufferTask sebagai batch 10 menit.
+    historyOk = true;
     xSemaphoreGive(mqttMutex);
   } else if (mqttMutex == NULL) {
     realtimeOk = mqtt.publish(MQTT_REALTIME_TOPIC, realtimePayload.c_str());
     mqtt.loop();
-    historyOk = true; // gen/data dikirim oleh MongoBufferTask sebagai batch 10 menit.
+    historyOk = true;
   }
   bool ok = realtimeOk;
   perfMqttPublishUs = micros() - pubStart;
   perfUpdateStat(acqMon.mqttPublishUs, perfMqttPublishUs);
-
   mqttOK = ok;
-
-  // Cache payload terakhir untuk command: mqtt payload / json mqtt.
   lastMqttPayloadCache = realtimePayload;
   lastMqttParameterOnlyPayloadCache = parameterOnlyPayload;
   lastMqttRealtimeTopicCache = MQTT_REALTIME_TOPIC;
@@ -2556,7 +2008,6 @@ void publishRealtimeData() {
   lastMqttPayloadCacheAtMs = millis();
   lastMqttPayloadRecordsCache = recordsInPayload;
   hasLastMqttPayloadCache = true;
-
   Serial.print(F("[MQTT-LATENCY] espTimestamp="));
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (storageBatch[i].valid) {
@@ -2574,25 +2025,15 @@ void publishRealtimeData() {
   Serial.print(historyOk ? F("1") : F("0"));
   Serial.print(F(" publishUs="));
   Serial.println(perfMqttPublishUs);
-
   if (serialMqttPayloadEnabled || serialRealtimePayloadEnabled) {
-    printMqttPayloadReport(
-      realtimePayload,
-      parameterOnlyPayload,
-      recordsInPayload,
-      realtimeOk,
-      historyOk,
-      false
-    );
+    printMqttPayloadReport(realtimePayload, parameterOnlyPayload, recordsInPayload, realtimeOk, historyOk, false);
   }
-
   if (ok) {
     lastMqttPublishMs = millis();
     mqttPublishSuccessCount++;
     mqttTotalPayloadBytes += mqttLastPayloadBytes;
     mqttTotalParameterPayloadBytes += mqttLastParameterPayloadBytes;
     mqttTotalRecordsSent += recordsInPayload;
-
     if (testOnceMode && !testOnceMqttDone) {
       testOnceMqttDone = true;
       Serial.println();
@@ -2613,30 +2054,22 @@ void publishRealtimeData() {
 // ============================================================
 // SD CARD
 // ============================================================
-
 bool addRecordToMongoDbBuffer(const StorageRecord &r) {
   String json = buildJsonRecordParametersOnly(r);
   if (!json.length()) return false;
-
   if (mongoBufferMutex && xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
     mongoDbBufferOverflowCount++;
     return false;
   }
-
   bool accepted = false;
-
   if (mongoDbBufferCount < MONGODB_BUFFER_RECORDS) {
     mongoDbBuffer[mongoDbBufferCount++] = json;
     mongoDbBufferedTotal++;
     accepted = true;
   } else {
-    // Buffer MongoDB penuh. Kondisi ini biasanya terjadi saat jaringan/MQTT/server
-    // bermasalah sehingga fallback batch belum berhasil dikirim. Record berikutnya
-    // harus dicadangkan ke SD agar tidak hilang.
     mongoDbBufferOverflowCount++;
     accepted = false;
   }
-
   if (mongoBufferMutex) xSemaphoreGive(mongoBufferMutex);
   return accepted;
 }
@@ -2649,14 +2082,11 @@ bool shouldBackupRecordToSD(bool mongoBufferAccepted) {
                              !mongoUploadLastMqttOk &&
                              mongoUploadLastHttpCode != 0 &&
                              (millis() - mongoUploadLastAttemptMs) < MONGODB_BATCH_INTERVAL_MS);
-
   if (wifiBad || mqttBad) sdBackupBecauseNetworkCount++;
   if (bufferFullOrRejected) sdBackupBecauseBufferFullCount++;
   if (recentMongoFailure) sdBackupBecauseMongoFailCount++;
-
   return wifiBad || mqttBad || bufferFullOrRejected || recentMongoFailure;
 }
-
 
 void clearMongoDbBufferNoLock(uint16_t countToClear) {
   if (countToClear >= mongoDbBufferCount) {
@@ -2664,7 +2094,6 @@ void clearMongoDbBufferNoLock(uint16_t countToClear) {
     mongoDbBufferCount = 0;
     return;
   }
-
   for (uint16_t i = 0; i < mongoDbBufferCount - countToClear; i++) {
     mongoDbBuffer[i] = mongoDbBuffer[i + countToClear];
   }
@@ -2683,28 +2112,11 @@ uint16_t buildMongoDbBufferPayload(String &payload, uint16_t maxRecords = MONGOD
   if (recordsCount > MONGODB_BATCH_RECORDS) recordsCount = MONGODB_BATCH_RECORDS;
   if (recordsCount > maxRecords) recordsCount = maxRecords;
 
-  // Estimasi kasar: 1 record parameter-only ±250-360 byte.
-  // Payload akhir berisi metadata batch + array records.
-  payload.reserve((uint32_t)recordsCount * 360UL + 260UL);
-  payload += "{";
-  payload += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-  payload += "\"type\":\"mongodb_batch\",";
-  payload += "\"source\":\"esp32_monitoring_ram_buffer\",";
-  payload += "\"transport\":\"mqtt\",";
-  payload += "\"topic\":\"" + String(MQTT_TOPIC) + "\",";
-  payload += "\"batchIntervalMs\":" + String(MONGODB_BATCH_INTERVAL_MS) + ",";
-  payload += "\"targetBatchRecords\":" + String(MONGODB_BATCH_RECORDS) + ",";
-  payload += "\"recordCount\":" + String(recordsCount) + ",";
-  payload += "\"chunkIndex\":" + String(chunkIndex) + ",";
-  payload += "\"chunkMaxRecords\":" + String(maxRecords) + ",";
-  payload += "\"bufferRecordsBeforeChunk\":" + String(mongoDbBufferCount) + ",";
-  payload += "\"sentAt\":\"" + getIsoTimestampWIBms() + "\",";
-  payload += "\"records\":[";
+  // Tiap baris CSV digabung dengan karakter enter/newline (\n)
   for (uint16_t i = 0; i < recordsCount; i++) {
-    if (i) payload += ",";
+    if (i > 0) payload += "\n"; 
     payload += mongoDbBuffer[i];
   }
-  payload += "]}";
 
   if (mongoBufferMutex) xSemaphoreGive(mongoBufferMutex);
   return recordsCount;
@@ -2716,7 +2128,6 @@ uint16_t extractJsonUintField(const String &json, const char* key) {
   if (pos < 0) return 0;
   pos += pattern.length();
   while (pos < (int)json.length() && (json.charAt(pos) == ' ' || json.charAt(pos) == '\t')) pos++;
-
   uint32_t value = 0;
   bool hasDigit = false;
   while (pos < (int)json.length()) {
@@ -2740,130 +2151,90 @@ uint16_t parseAckedRecordsFromResponse(const String &body) {
   return extractJsonUintField(body, "received");
 }
 
-
 bool publishMongoBufferBatchToMqtt(const String &batchPayload) {
   updateHeapMonitor();
-
   if (WiFi.status() != WL_CONNECTED) {
     wifiOK = false;
     mqttOK = false;
-    mongoUploadLastHttpCode = -201;   // WiFi disconnected
+    mongoUploadLastHttpCode = -201;
     return false;
   }
-
   wifiOK = true;
-
   if (!mqtt.connected()) {
     mqttOK = false;
     reconnectMQTT();
-
     if (!mqtt.connected()) {
       mongoUploadLastHttpCode = mqtt.state();
       return false;
     }
   }
-
   if (batchPayload.length() == 0) {
-    mongoUploadLastHttpCode = -97;    // empty payload
+    mongoUploadLastHttpCode = -97;
     return false;
   }
-
   if ((uint32_t)batchPayload.length() > MONGO_BATCH_MAX_PAYLOAD_BYTES) {
-    mongoUploadLastHttpCode = -99;    // payload too large
-
+    mongoUploadLastHttpCode = -99;
     Serial.print(F("[MONGO-MQTT] Batch payload too large: "));
     Serial.print(batchPayload.length());
     Serial.print(F(" bytes, max="));
     Serial.println(MONGO_BATCH_MAX_PAYLOAD_BYTES);
-
     return false;
   }
-
-  // Karena payload database dikirim streaming per chunk kecil, jangan pakai mqtt.publish()
-  // yang bergantung pada buffer internal PubSubClient. Gunakan streaming:
-  // beginPublish() -> write() per chunk -> endPublish().
   if (ESP.getFreeHeap() < HEAP_MIN_FREE_BYTES || ESP.getMaxAllocHeap() < (uint32_t)MONGO_BATCH_STREAM_CHUNK_BYTES) {
     mongoUploadLastHttpCode = -202;
-
     Serial.println(F("[MONGO-MQTT] Skip Mongo batch: heap low / fragmented."));
     Serial.print(F("[MONGO-MQTT] Free heap : "));
     Serial.println(ESP.getFreeHeap());
     Serial.print(F("[MONGO-MQTT] Max alloc : "));
     Serial.println(ESP.getMaxAllocHeap());
-
     return false;
   }
-
   bool ok = false;
-
   if (mqttMutex != NULL) {
     if (xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(3000)) != pdTRUE) {
-      mongoUploadLastHttpCode = -98;  // MQTT mutex timeout
+      mongoUploadLastHttpCode = -98;
       return false;
     }
   }
-
   mqtt.loop();
-
   bool started = mqtt.beginPublish(MQTT_TOPIC, (unsigned int)batchPayload.length(), false);
   if (started) {
     const uint8_t *ptr = (const uint8_t*)batchPayload.c_str();
     uint32_t remaining = batchPayload.length();
     uint32_t offset = 0;
-
     ok = true;
     while (remaining > 0) {
-      uint16_t chunk = remaining > MONGO_BATCH_STREAM_CHUNK_BYTES
-                       ? MONGO_BATCH_STREAM_CHUNK_BYTES
-                       : (uint16_t)remaining;
-
+      uint16_t chunk = remaining > MONGO_BATCH_STREAM_CHUNK_BYTES ? MONGO_BATCH_STREAM_CHUNK_BYTES : (uint16_t)remaining;
       size_t written = mqtt.write(ptr + offset, chunk);
       if (written != chunk) {
         ok = false;
         break;
       }
-
       offset += chunk;
       remaining -= chunk;
-
-      // Beri waktu WiFi stack dan MQTT keepalive.
       mqtt.loop();
       vTaskDelay(pdMS_TO_TICKS(1));
     }
-
     if (ok) {
       ok = mqtt.endPublish();
     }
   } else {
     ok = false;
   }
-
   mqtt.loop();
-
   if (mqttMutex != NULL) {
     xSemaphoreGive(mqttMutex);
   }
-
   mongoUploadLastHttpCode = ok ? 0 : mqtt.state();
   mqttOK = mqtt.connected();
-
   if (!ok) {
     Serial.print(F("[MONGO-MQTT] Batch publish failed. state="));
     Serial.println(mqtt.state());
   }
-
   return ok;
 }
 
 void sendMongoDbBufferToMongoDB() {
-  // Nama fungsi tetap dipertahankan agar pemanggil lama tidak perlu diubah.
-  // Implementasi:
-  // - mengirim fallback buffer sampai 600 record setiap 10 menit atau saat diminta,
-  // - default MQTT dipecah 300 record/publish dengan jeda 500 ms antar chunk,
-  // - tiap publish berisi payload.records[],
-  // - record yang sudah berhasil dipublish langsung dihapus dari buffer,
-  // - record yang gagal tetap disimpan untuk retry berikutnya.
-
   mongoUploadLastAttemptMs = millis();
   mongoUploadLastAckedRecords = 0;
   mongoUploadLastBatchRecords = 0;
@@ -2872,40 +2243,29 @@ void sendMongoDbBufferToMongoDB() {
   mongoUploadLastRunRecords = 0;
   mongoUploadLastAckResponseRecords = 0;
   mongoUploadLastMqttOk = false;
-
   mongoDbLastSentRecords = 0;
   mongoDbLastPayloadBytes = 0;
   mongoDbLastAckResponseRecords = 0;
-
   updateHeapMonitor();
-
   if (!isWiFiUsableForMongoUpload()) {
     mongoUploadFailCount++;
-    mongoUploadLastHttpCode = -203;   // WiFi disconnected / RSSI weak
-
+    mongoUploadLastHttpCode = -203;
     Serial.println(F("[MONGO-MQTT] Batch postponed: WiFi disconnected or RSSI too weak."));
-
     if (WiFi.status() == WL_CONNECTED) {
       Serial.print(F("[MONGO-MQTT] RSSI: "));
       Serial.print(WiFi.RSSI());
       Serial.println(F(" dBm"));
     }
-
     return;
   }
-
   reconnectMQTT();
-
   if (!mqtt.connected()) {
     mongoUploadFailCount++;
     mongoUploadLastHttpCode = mqtt.state();
-
     Serial.print(F("[MONGO-MQTT] Batch postponed: MQTT not connected. state="));
     Serial.println(mqtt.state());
-
     return;
   }
-
   uint16_t queuedAtStart = 0;
   if (mongoBufferMutex != NULL) {
     if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(150)) == pdTRUE) {
@@ -2915,32 +2275,21 @@ void sendMongoDbBufferToMongoDB() {
   } else {
     queuedAtStart = mongoDbBufferCount;
   }
-
   if (queuedAtStart == 0) return;
   if (queuedAtStart > MONGODB_BATCH_RECORDS) queuedAtStart = MONGODB_BATCH_RECORDS;
-
   mongoUploadLastBatchRecords = queuedAtStart;
   mongoUploadLastRunRecords = queuedAtStart;
-
   uint16_t totalSentRecords = 0;
   uint16_t chunkIndex = 0;
   while (totalSentRecords < queuedAtStart) {
     uint16_t remainingTarget = queuedAtStart - totalSentRecords;
-    uint16_t chunkLimit = remainingTarget > MONGODB_UPLOAD_CHUNK_RECORDS
-                          ? MONGODB_UPLOAD_CHUNK_RECORDS
-                          : remainingTarget;
-
+    uint16_t chunkLimit = remainingTarget > MONGODB_UPLOAD_CHUNK_RECORDS ? MONGODB_UPLOAD_CHUNK_RECORDS : remainingTarget;
     String batchPayload;
     uint16_t recordsCount = buildMongoDbBufferPayload(batchPayload, chunkLimit, chunkIndex);
-
-    if (recordsCount == 0) {
-      break;
-    }
-
+    if (recordsCount == 0) break;
     mongoUploadLastRunChunks++;
     mongoUploadLastPayloadBytes += batchPayload.length();
     mongoDbLastPayloadBytes += batchPayload.length();
-
     if ((uint32_t)batchPayload.length() > MONGO_BATCH_MAX_PAYLOAD_BYTES) {
       mongoUploadLastHttpCode = -99;
       Serial.println();
@@ -2953,33 +2302,18 @@ void sendMongoDbBufferToMongoDB() {
       Serial.println(F("╚═════════════════════════════════════════════════╝"));
       break;
     }
-
     Serial.println();
     Serial.println(F("╔════════════ MONGO MQTT 10-MIN CHUNK UPLOAD ════════════╗"));
-    Serial.print(F("[MONGO-MQTT] Topic          : "));
-    Serial.println(MQTT_TOPIC);
-    Serial.print(F("[MONGO-MQTT] Chunk          : "));
-    Serial.print(chunkIndex + 1);
-    Serial.print(F(" | records="));
-    Serial.println(recordsCount);
-    Serial.print(F("[MONGO-MQTT] Total target   : "));
-    Serial.println(queuedAtStart);
-    Serial.print(F("[MONGO-MQTT] Payload bytes  : "));
-    Serial.println(batchPayload.length());
-    Serial.print(F("[MONGO-MQTT] Interval       : "));
-    Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL);
-    Serial.println(F(" s"));
-    Serial.print(F("[MONGO-MQTT] RSSI           : "));
-    Serial.print(WiFi.RSSI());
-    Serial.println(F(" dBm"));
-    Serial.print(F("[MONGO-MQTT] Free heap      : "));
-    Serial.println(ESP.getFreeHeap());
-    Serial.print(F("[MONGO-MQTT] Max alloc heap : "));
-    Serial.println(ESP.getMaxAllocHeap());
+    Serial.print(F("[MONGO-MQTT] Topic          : ")); Serial.println(MQTT_TOPIC);
+    Serial.print(F("[MONGO-MQTT] Chunk          : ")); Serial.print(chunkIndex + 1); Serial.print(F(" | records=")); Serial.println(recordsCount);
+    Serial.print(F("[MONGO-MQTT] Total target   : ")); Serial.println(queuedAtStart);
+    Serial.print(F("[MONGO-MQTT] Payload bytes  : ")); Serial.println(batchPayload.length());
+    Serial.print(F("[MONGO-MQTT] Interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 1000UL); Serial.println(F(" s"));
+    Serial.print(F("[MONGO-MQTT] RSSI           : ")); Serial.print(WiFi.RSSI()); Serial.println(F(" dBm"));
+    Serial.print(F("[MONGO-MQTT] Free heap      : ")); Serial.println(ESP.getFreeHeap());
+    Serial.print(F("[MONGO-MQTT] Max alloc heap : ")); Serial.println(ESP.getMaxAllocHeap());
     Serial.println(F("╚════════════════════════════════════════════════════════╝"));
-
     bool ok = publishMongoBufferBatchToMqtt(batchPayload);
-
     if (!ok) {
       mongoUploadFailCount++;
       mongoUploadLastMqttOk = false;
@@ -2987,7 +2321,6 @@ void sendMongoDbBufferToMongoDB() {
       Serial.println(mongoUploadLastHttpCode);
       break;
     }
-
     if (mongoBufferMutex != NULL) {
       if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         clearMongoDbBufferNoLock(recordsCount);
@@ -3002,30 +2335,25 @@ void sendMongoDbBufferToMongoDB() {
     } else {
       clearMongoDbBufferNoLock(recordsCount);
     }
-
     totalSentRecords += recordsCount;
     mongoUploadSuccessRecords += recordsCount;
     mongoUploadLastAckedRecords += recordsCount;
     mongoUploadLastAckResponseRecords += recordsCount;
     mongoUploadLastMqttOk = true;
-
     mongoDbLastSentRecords += recordsCount;
     mongoDbTotalSentRecords += recordsCount;
     mongoDbLastAckResponseRecords += recordsCount;
     mongoDbLastSendMs = millis();
-
     Serial.print(F("[MONGO-MQTT] Chunk sent OK: "));
     Serial.print(recordsCount);
     Serial.print(F(" records. Total sent this cycle="));
     Serial.print(totalSentRecords);
     Serial.print(F(" / "));
     Serial.println(queuedAtStart);
-
     chunkIndex++;
     mqtt.loop();
     vTaskDelay(pdMS_TO_TICKS(MONGODB_UPLOAD_CHUNK_DELAY_MS));
   }
-
   if (totalSentRecords > 0) {
     Serial.print(F("[MONGO-MQTT] Upload cycle sent "));
     Serial.print(totalSentRecords);
@@ -3033,26 +2361,13 @@ void sendMongoDbBufferToMongoDB() {
     Serial.print(queuedAtStart);
     Serial.println(F(" records."));
   }
-
 }
-// ============================================================
-// MONGODB BUFFER TASK
-// ============================================================
-// Fungsi:
-// - Mengirim buffer RAM MongoDB ke MQTT_TOPIC = gen/data.
-// - Pengiriman fallback dilakukan setiap MONGODB_BATCH_INTERVAL_MS.
-// - Buffer juga dikirim lebih cepat jika penuh/manual.
-// - Realtime dashboard dikirim oleh publishRealtimeData() ke MQTT_REALTIME_TOPIC/gen/realtime.
-// - History/cloud dikirim batch 10 menit oleh MongoBufferTask ke MQTT_TOPIC/gen/data.
 
 void MongoBufferTask(void *pvParameters) {
   (void) pvParameters;
-
   lastMongoBatchSend = millis();
-
   while (true) {
     bool manualRequest = false;
-
     if (mongoUploadRequestSemaphore != NULL) {
       if (xSemaphoreTake(mongoUploadRequestSemaphore, pdMS_TO_TICKS(1000)) == pdTRUE) {
         manualRequest = true;
@@ -3060,9 +2375,7 @@ void MongoBufferTask(void *pvParameters) {
     } else {
       vTaskDelay(pdMS_TO_TICKS(1000));
     }
-
     uint16_t bufferCountSnapshot = 0;
-
     if (mongoBufferMutex != NULL) {
       if (xSemaphoreTake(mongoBufferMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         bufferCountSnapshot = mongoDbBufferCount;
@@ -3071,201 +2384,119 @@ void MongoBufferTask(void *pvParameters) {
     } else {
       bufferCountSnapshot = mongoDbBufferCount;
     }
-
     bool intervalReached = (millis() - lastMongoBatchSend >= MONGODB_BATCH_INTERVAL_MS);
-    // Pengiriman otomatis tetap setiap 10 menit atau saat buffer penuh 600 record.
-    // Chunk 300 record hanya dipakai untuk memecah payload saat siklus upload berjalan.
     bool bufferFull = (bufferCountSnapshot >= MONGODB_BUFFER_RECORDS);
-
     if ((intervalReached || bufferFull || manualRequest) && bufferCountSnapshot > 0) {
       if (!isWiFiUsableForMongoUpload()) {
         if (serialMongoBufferTickerEnabled) {
           Serial.println(F("[MONGO-MQTT] Batch postponed: WiFi not usable."));
         }
-
         vTaskDelay(pdMS_TO_TICKS(3000));
         continue;
       }
-
       if (!mqtt.connected()) {
         reconnectMQTT();
-
         if (!mqtt.connected()) {
           if (serialMongoBufferTickerEnabled) {
             Serial.println(F("[MONGO-MQTT] Batch postponed: MQTT not connected."));
           }
-
           vTaskDelay(pdMS_TO_TICKS(3000));
           continue;
         }
       }
-
       mongoUploadBusy = true;
       mongoUploadQueuedCount = bufferCountSnapshot;
       mongoUploadLastAttemptMs = millis();
-
       sendMongoDbBufferToMongoDB();
-
       mongoUploadBusy = false;
       mongoUploadQueuedCount = 0;
-
-      // Jika masih ada sisa buffer karena gagal di tengah,
-      // jangan reset timer terlalu agresif.
       if (mongoDbBufferCount == 0) {
         lastMongoBatchSend = millis();
       } else {
-        // Coba lagi beberapa detik kemudian.
         lastMongoBatchSend = millis() - MONGODB_BATCH_INTERVAL_MS + 10000UL;
       }
-
       if (serialMongoBufferTickerEnabled) {
         printMongoBufferStatus();
       }
     }
   }
 }
+
 void updateStorageCache() {
   if (!sdOK) return;
-
-  // Cache agar command db tidak melakukan operasi SD berat berulang-ulang.
   if (dbCachedAtMs != 0 && millis() - dbCachedAtMs < 30000UL) return;
-
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(120)) == pdTRUE) {
     deselectAllSPI();
-
     File f = SD.open(DB_FILE, FILE_READ);
     if (f) {
       dbCachedFileSizeBytes = f.size();
       f.close();
     }
-
     sdCachedCardSizeBytes = SD.cardSize();
-
-    // SD.usedBytes() relatif berat pada beberapa modul SD/TFT sharing SPI.
-    // Dipanggil hanya lewat cache 30 detik agar serial command tidak freeze.
     sdCachedUsedBytes = SD.usedBytes();
     sdCachedFreeBytes = sdCachedCardSizeBytes > sdCachedUsedBytes ? sdCachedCardSizeBytes - sdCachedUsedBytes : 0;
     dbCachedAtMs = millis();
-
     xSemaphoreGive(sdMutex);
   }
 }
 
-
 bool createFreshCsvFile(const char* path, const char* header, const char* label) {
-  // Dibuat sengaja mengikuti sketch SD test yang terbukti berhasil:
-  // 3 attempt, delay 20 ms sebelum create, re-init 100/50 ms, dan verifikasi
-  // dengan membaca baris header pertama. Perbedaan utama sketch besar adalah
-  // ada TFT/WiFi/MQTT/task lain, jadi timing SD dibuat sedikit lebih longgar
-  // agar create file baru tidak kalah oleh kondisi bus/FS yang belum settle.
   const char* altPath = (path[0] == '/') ? path + 1 : path;
-
   Serial.println();
-  Serial.print(F("========== CREATE "));
-  Serial.print(path);
-  Serial.println(F(" =========="));
-
+  Serial.print(F("========== CREATE ")); Serial.print(path); Serial.println(F(" =========="));
   for (uint8_t attempt = 1; attempt <= 3; attempt++) {
-    Serial.print(F("[SD] Create attempt "));
-    Serial.print(attempt);
-    Serial.println(F("/3"));
-
-    deselectAllSPI();
-    delay(20);
-
+    Serial.print(F("[SD] Create attempt ")); Serial.print(attempt); Serial.println(F("/3"));
+    deselectAllSPI(); delay(20);
     if (SD.exists(path)) {
-      Serial.print(F("[SD] "));
-      Serial.print(path);
-      Serial.println(F(" sudah ada, akan dihapus/truncate."));
-      if (!SD.remove(path)) {
-        Serial.println(F("[SD] WARNING: remove gagal, coba buka mode write."));
-      }
+      Serial.print(F("[SD] ")); Serial.print(path); Serial.println(F(" sudah ada, akan dihapus/truncate."));
+      if (!SD.remove(path)) Serial.println(F("[SD] WARNING: remove gagal, coba buka mode write."));
       delay(20);
     }
-
     File f = SD.open(path, "w");
     if (!f) f = SD.open(path, FILE_WRITE);
     if (!f && altPath != path) f = SD.open(altPath, "w");
     if (!f && altPath != path) f = SD.open(altPath, FILE_WRITE);
-
     if (f) {
       size_t written = f.println(header);
-      f.flush();
-      f.close();
-
-      delay(20);
-      deselectAllSPI();
-
+      f.flush(); f.close();
+      delay(20); deselectAllSPI();
       File verify = SD.open(path, FILE_READ);
       if (!verify && altPath != path) verify = SD.open(altPath, FILE_READ);
-
       bool verified = false;
       if (verify) {
         String firstLine = verify.readStringUntil('\n');
         firstLine.trim();
-
-        Serial.print(F("[SD] Verify first line: "));
-        Serial.println(firstLine);
-        Serial.print(F("[SD] File size after header: "));
-        Serial.print(verify.size());
-        Serial.println(F(" bytes"));
-
-        String expectedHeader = String(header);
-        expectedHeader.trim();
+        Serial.print(F("[SD] Verify first line: ")); Serial.println(firstLine);
+        Serial.print(F("[SD] File size after header: ")); Serial.print(verify.size()); Serial.println(F(" bytes"));
+        String expectedHeader = String(header); expectedHeader.trim();
         verified = (firstLine == expectedHeader) && verify.size() > 0;
         verify.close();
       }
-
       if (written > 0 && verified) {
         sdDatabaseCreateOkCount++;
         sdLastFileOkMs = millis();
         dbCachedAtMs = 0;
-        Serial.print(F("[SD] "));
-        Serial.print(path);
-        Serial.print(F(" berhasil dibuat dengan header "));
-        Serial.print(label);
-        Serial.println(F("."));
+        Serial.print(F("[SD] ")); Serial.print(path); Serial.print(F(" berhasil dibuat dengan header ")); Serial.print(label); Serial.println(F("."));
         return true;
       }
-
-      Serial.print(F("[SD] "));
-      Serial.print(path);
-      Serial.println(F(" terbuka tetapi verifikasi header gagal."));
+      Serial.print(F("[SD] ")); Serial.print(path); Serial.println(F(" terbuka tetapi verifikasi header gagal."));
     } else {
-      Serial.print(F("[SD] Gagal membuka "));
-      Serial.print(path);
-      Serial.println(F(" untuk create/truncate."));
+      Serial.print(F("[SD] Gagal membuka ")); Serial.print(path); Serial.println(F(" untuk create/truncate."));
     }
-
-    SD.end();
-    delay(100);
-    deselectAllSPI();
-    sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-    delay(50);
-    SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
+    SD.end(); delay(100); deselectAllSPI(); sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS); delay(50); SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT);
   }
-
   sdDatabaseCreateFailCount++;
   sdLastFileErrorMs = millis();
-  Serial.print(F("[SD] GAGAL membuat "));
-  Serial.print(path);
-  Serial.println(F(". Test sederhana bisa berhasil karena belum ada TFT/WiFi/MQTT/task lain. Di sketch utama, kegagalan biasanya karena bus/FS belum settle, file lama tidak bisa dihapus, root FAT bermasalah, atau supply/adaptor SD tidak stabil. Coba command 'sd reinit' atau format FAT32 MBR allocation 32KB jika masih gagal."));
+  Serial.print(F("[SD] GAGAL membuat ")); Serial.print(path); Serial.println(F(". Coba command 'sd reinit' atau format FAT32 MBR allocation 32KB."));
   return false;
 }
 
-bool createFreshDatabaseCsv() {
-  return createFreshCsvFile(DB_FILE, DB_CSV_HEADER, "CSV database");
-}
-
-bool createFreshFftCsv() {
-  return createFreshCsvFile(FFT_FILE, FFT_CSV_HEADER, "CSV FFT");
-}
+bool createFreshDatabaseCsv() { return createFreshCsvFile(DB_FILE, DB_CSV_HEADER, "CSV database"); }
 
 bool canAppendExistingCsvNoLock(const char* path) {
   File appendTest = SD.open(path, FILE_APPEND);
   if (!appendTest) appendTest = SD.open(path, FILE_WRITE);
   if (!appendTest) return false;
-
   appendTest.close();
   return true;
 }
@@ -3276,42 +2507,28 @@ void printLegacyDatabaseCsvNoticeNoLock(const char* path) {
   }
 }
 
-bool ensureCsvFileExistsNoLock(const char* path,
-                               const char* header,
-                               const char* requiredHeaderToken,
-                               bool (*createFreshFn)()) {
+bool ensureCsvFileExistsNoLock(const char* path, const char* header, const char* requiredHeaderToken, bool (*createFreshFn)()) {
   deselectAllSPI();
   printLegacyDatabaseCsvNoticeNoLock(path);
-
   if (!SD.exists(path)) {
-    Serial.print(F("[SD] "));
-    Serial.print(path);
-    Serial.println(F(" belum ada. Membuat file baru..."));
+    Serial.print(F("[SD] ")); Serial.print(path); Serial.println(F(" belum ada. Membuat file baru..."));
     return createFreshFn();
   }
-
   File f = SD.open(path, FILE_READ);
   if (!f) {
-    Serial.print(F("[SD] "));
-    Serial.print(path);
-    Serial.println(F(" ada tetapi gagal dibuka. Membuat ulang file..."));
+    Serial.print(F("[SD] ")); Serial.print(path); Serial.println(F(" ada tetapi gagal dibuka. Membuat ulang file..."));
     sdLastFileErrorMs = millis();
     SD.remove(path);
     return createFreshFn();
   }
-
   String existingHeader = f.readStringUntil('\n');
   f.close();
   existingHeader.trim();
-
   if (existingHeader != String(header) || existingHeader.indexOf(requiredHeaderToken) < 0) {
-    Serial.print(F("[SD] Header "));
-    Serial.print(path);
-    Serial.println(F(" lama/tidak sesuai. File dibuat ulang agar kolom CSV mengikuti format terbaru."));
+    Serial.print(F("[SD] Header ")); Serial.print(path); Serial.println(F(" lama/tidak sesuai. File dibuat ulang agar kolom CSV mengikuti format terbaru."));
     SD.remove(path);
     return createFreshFn();
   }
-
   sdLastFileOkMs = millis();
   return true;
 }
@@ -3320,27 +2537,17 @@ bool ensureDatabaseCsvExistsNoLock() {
   return ensureCsvFileExistsNoLock(DB_FILE, DB_CSV_HEADER, "phase_diff", createFreshDatabaseCsv);
 }
 
-bool ensureFftCsvExistsNoLock() {
-  return ensureCsvFileExistsNoLock(FFT_FILE, FFT_CSV_HEADER, "fft_bins_xy", createFreshFftCsv);
-}
-
 bool ensureSdCsvFilesExistNoLock() {
-  bool dbOk = ensureDatabaseCsvExistsNoLock();
-  return dbOk;
+  return ensureDatabaseCsvExistsNoLock();
 }
 
 bool ensureDatabaseCsvExists() {
   if (!sdOK) return false;
-
-  if (sdMutex == NULL) {
-    return ensureSdCsvFilesExistNoLock();
-  }
-
+  if (sdMutex == NULL) return ensureSdCsvFilesExistNoLock();
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1500)) != pdTRUE) {
     Serial.println(F("[SD] SD sedang dipakai. Pengecekan file CSV ditunda, bukan dianggap gagal."));
     return false;
   }
-
   bool ok = ensureSdCsvFilesExistNoLock();
   xSemaphoreGive(sdMutex);
   return ok;
@@ -3348,80 +2555,55 @@ bool ensureDatabaseCsvExists() {
 
 void ensureDatabaseCsvHeader() {
   if (!ensureSdCsvFilesExistNoLock()) {
-    Serial.println(F("[SD] WARNING: SD init OK, tetapi /sdDatabase.csv atau /fft.csv belum berhasil dibuat."));
+    Serial.println(F("[SD] WARNING: SD init OK, tetapi /sdDatabase.csv belum berhasil dibuat."));
   }
 }
 
 void initSDCard() {
-  Serial.println();
-  Serial.println("════════════ SD CARD INIT ════════════");
-
+  Serial.println(); Serial.println("════════════ SD CARD INIT ════════════");
   sdOK = false;
-  SD.end();
-  deselectAllSPI();
-  delay(300);
-  sdSPI.end();
-  delay(50);
-  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  delay(900); // beri waktu lebih lama untuk modul SD/TFT sharing SPI stabil setelah power-up/reinit
-
+  SD.end(); deselectAllSPI(); delay(300); sdSPI.end(); delay(50); sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS); delay(900);
   bool begun = false;
   for (uint8_t attempt = 1; attempt <= 5; attempt++) {
-    Serial.print(F("[SD] Init attempt "));
-    Serial.print(attempt);
-    Serial.println(F("/5..."));
-    SD.end();
-    deselectAllSPI();
-    delay(150 + attempt * 100);
+    Serial.print(F("[SD] Init attempt ")); Serial.print(attempt); Serial.println(F("/5..."));
+    SD.end(); deselectAllSPI(); delay(150 + attempt * 100);
     if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
       begun = true;
       break;
     }
     delay(700);
   }
-
   if (!begun) {
     sdOK = false;
     Serial.println("[SD] GAGAL. Cek CS=26, MOSI=13, MISO=12, SCK=14, FAT32.");
     Serial.println("══════════════════════════════════════");
     return;
   }
-
   delay(500);
   sdOK = true;
   Serial.println("[SD] OK.");
-
-  // Setelah mount stabil di 400 kHz, naikkan SPI SD secara konservatif.
-  // Jika kartu/modul sensitif, operasi file tetap aman karena setiap akses
-  // diawali deselectAllSPI() dan retry runtime akan kembali ke init lambat.
-  SD.end();
-  delay(50);
+  SD.end(); delay(50);
   if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_FAST) && SD.cardType() != CARD_NONE) {
     Serial.println(F("[SD] SPI switched to stable fast mode."));
   } else {
     Serial.println(F("[SD] Fast mode failed, remounting at init speed."));
-    SD.end();
-    delay(50);
+    SD.end(); delay(50);
     sdOK = SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE;
   }
-
   if (!sdOK) {
     Serial.println(F("[SD] Remount after speed switch failed; SD marked offline."));
     Serial.println("══════════════════════════════════════");
     return;
   }
-
   if (sdMutex == NULL || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000)) == pdTRUE) {
     ensureDatabaseCsvHeader();
     if (sdMutex != NULL) xSemaphoreGive(sdMutex);
   } else {
     Serial.println(F("[SD] WARNING: mutex masih sibuk saat init; header CSV akan dipastikan saat append berikutnya."));
   }
-
   updateStorageCache();
   Serial.println("══════════════════════════════════════");
 }
-
 
 String csvEscapeField(const String &value) {
   String out = "\"";
@@ -3434,24 +2616,8 @@ String csvEscapeField(const String &value) {
   return out;
 }
 
-String buildFftBinsCsvField(const FFTData &f) {
-  if (!f.valid) return "";
-
-  String bins = "";
-  // Reserve secukupnya untuk mengurangi fragmentasi String saat membentuk 32 bin.
-  bins.reserve(FFT_BINS_TO_SEND * 16);
-  for (uint16_t i = 0; i < FFT_BINS_TO_SEND; i++) {
-    if (i) bins += "|";
-    bins += String(f.freqBins[i], 3);
-    bins += ":";
-    bins += String(f.magBins[i], 5);
-  }
-  return bins;
-}
-
 String buildCsvLine(const StorageRecord &r) {
   const AggregatedData &a = r.agg;
-
   String line = "";
   line += r.recordId; line += ",";
   line += String(r.localSeq); line += ",";
@@ -3471,45 +2637,15 @@ String buildCsvLine(const StorageRecord &r) {
   line += String(a.powerAvg, 3); line += ",";
   line += String(a.phaseAngleAvg, 2); line += ",";
   line += getPowerSourceFromAggregate(a);
-
   return line;
 }
-
-String buildFftCsvLine(const StorageRecord &r) {
-  const FFTData &f = r.fft;
-
-  String line = "";
-  line += r.recordId; line += ",";
-  line += String(r.localSeq); line += ",";
-  String csvTimestamp = r.timestamp.length() ? r.timestamp : getCsvTimestampWIBms();
-  line += csvTimestamp; line += ",";
-  line += String(f.valid ? 1 : 0); line += ",";
-  line += getFFTSourceNameById(f.source); line += ",";
-  line += String(f.sampleRateHz, 1); line += ",";
-  line += String(f.resolutionHz, 3); line += ",";
-  line += String(f.peakHz, 3); line += ",";
-  line += String(f.peakMagnitude, 5); line += ",";
-  line += String(f.rms, 5); line += ",";
-  line += csvEscapeField(buildFftBinsCsvField(f));
-
-  return line;
-}
-
 
 bool retrySDCardOnceFast() {
   if (sdOK) return true;
-
-  // Retry runtime dibuat cepat/non-spam agar kegagalan SD tidak membekukan
-  // display 7 detik seperti init penuh 10x attempt. Init penuh tetap dipakai saat
-  // boot/command manual; loop runtime hanya mencoba 1 kali lalu kembali ke UI.
-  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
-    return false;
-  }
-
+  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
   deselectAllSPI();
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
   delay(20);
-
   bool ok = false;
   if (SD.begin(SD_CS, sdSPI, SD_SPI_FREQ_INIT) && SD.cardType() != CARD_NONE) {
     File testFile = SD.open("/sd_retry_test.txt", FILE_WRITE);
@@ -3524,43 +2660,22 @@ bool retrySDCardOnceFast() {
       Serial.println(F("[SD] Runtime retry OK; sdDatabase.csv siap."));
     }
   }
-
   if (!ok) {
     sdOK = false;
     sdLastFileErrorMs = millis();
     SD.end();
   }
-
   if (sdMutex != NULL) xSemaphoreGive(sdMutex);
-
   if (ok) updateStorageCache();
   return ok;
 }
 
-
 void saveSnapshotToSD() {
-  // Fungsi SD tetap dipanggil setiap 1 detik. Untuk pengujian database,
-  // SD_SAVE_ONLINE_FOR_DB_TEST=1 membuat record tetap ditulis ke sdDatabase.csv/fft.csv
-  // walaupun WiFi/MQTT normal. Buffer RAM MongoDB tetap menjadi fallback
-  // sebelum MongoBufferTask mengirim batch gen/data 10 menit.
-  //
-  // Untuk operasi harian, set SD_SAVE_ONLINE_FOR_DB_TEST=0 agar SD hanya ditulis jika:
-  // 1) WiFi/MQTT/server bermasalah,
-  // 2) buffer RAM MongoDB penuh/tidak bisa menerima record,
-  // 3) test-once mode sedang aktif.
-
   if (testOnceMode && (!testOnceAggDone || testOnceSdDone)) return;
-
   bool hasData = false;
-  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
-    if (storageBatch[i].valid) hasData = true;
-  }
+  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) if (storageBatch[i].valid) hasData = true;
   if (!hasData) return;
-
   uint32_t saveStart = micros();
-
-  // Buffer MongoDB/history diisi setiap ada record agregasi baru.
-  // MongoBufferTask mengirim satu batch ke topic gen/data setiap 10 menit.
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
     if (storageBatch[i].localSeq <= lastMongoBufferedLocalSeq) continue;
@@ -3569,140 +2684,97 @@ void saveSnapshotToSD() {
       lastMongoBufferedLocalSeq = storageBatch[i].localSeq;
     } else {
       sdBackupBecauseBufferFullCount++;
-      // Tetap lanjut ke SD agar record tidak hilang saat buffer penuh.
     }
   }
-
-  bool backupNeeded = true; // User requirement: sdDatabase.csv ditulis tiap 1 detik walaupun online.
+  bool backupNeeded = true;
   uint8_t validRecords = 0;
   uint8_t unsavedSdRecords = 0;
-
   for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
     if (!storageBatch[i].valid) continue;
     validRecords++;
     if (storageBatch[i].localSeq > lastSdSavedLocalSeq) unsavedSdRecords++;
-
     if ((WiFi.status() != WL_CONNECTED) || !wifiOK || !mqtt.connected()) {
       sdBackupBecauseNetworkCount++;
     }
   }
-
   if (!backupNeeded || unsavedSdRecords == 0) {
     if (!backupNeeded) sdBackupSkipOnlineCount += validRecords;
-
     perfSdSaveUs = micros() - saveStart;
     perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
     return;
   }
-
   if (!sdOK) {
     sdSaveFailCount++;
     sdLastFileErrorMs = millis();
-
     perfSdSaveUs = micros() - saveStart;
     perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
-
-    if (serialDatabasePayloadEnabled) {
-      Serial.println(F("[SD-BACKUP] Backup dibutuhkan, tetapi SD NOT READY."));
-    }
+    if (serialDatabasePayloadEnabled) Serial.println(F("[SD-BACKUP] Backup dibutuhkan, tetapi SD NOT READY."));
     return;
   }
-
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
     if (!ensureSdCsvFilesExistNoLock()) {
       sdSaveFailCount++;
       sdLastFileErrorMs = millis();
       xSemaphoreGive(sdMutex);
-
       perfSdSaveUs = micros() - saveStart;
       perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
       return;
     }
-
     deselectAllSPI();
-
     File file = SD.open(DB_FILE, FILE_APPEND);
-    if (!file) {
-      // Fallback untuk core/SD library yang tidak membuka FILE_APPEND pada file
-      // root setelah re-init SPI; FILE_WRITE tetap append pada ESP32 SD.
-      file = SD.open(DB_FILE, FILE_WRITE);
-    }
+    if (!file) file = SD.open(DB_FILE, FILE_WRITE);
     if (!file) {
       sdSaveFailCount++;
       sdConsecutiveOpenFail++;
       sdLastFileErrorMs = millis();
-
       if (file) file.close();
-
-      Serial.print(F("[SD-BACKUP] Gagal membuka CSV append (database). consecutiveFail="));
-      Serial.println(sdConsecutiveOpenFail);
-
+      Serial.print(F("[SD-BACKUP] Gagal membuka CSV append (database). consecutiveFail=")); Serial.println(sdConsecutiveOpenFail);
       if (sdConsecutiveOpenFail >= 5) {
         sdOK = false;
         Serial.println(F("[SD-BACKUP] Append gagal 5x berturut-turut. SD ditandai NOT READY dan akan retry init otomatis."));
       }
-
       xSemaphoreGive(sdMutex);
       perfSdSaveUs = micros() - saveStart;
       perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
       return;
     }
-
     sdConsecutiveOpenFail = 0;
     sdLastFileOkMs = millis();
-
     for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
       if (!storageBatch[i].valid) continue;
       if (storageBatch[i].localSeq <= lastSdSavedLocalSeq) continue;
-
       String line = buildCsvLine(storageBatch[i]);
       String queueJson = buildJsonRecordParametersOnly(storageBatch[i]);
-
       file.println(line);
-
       dbLastLineBytes = line.length() + 2;
       dbTotalWrittenBytes += dbLastLineBytes;
       sdBackupRecordCount++;
       lastSdSavedLocalSeq = storageBatch[i].localSeq;
       cacheLastDatabasePayload(storageBatch[i], line, queueJson);
     }
-
-    file.flush();
-    file.close();
-
+    file.flush(); file.close();
     sdSaveSuccessCount++;
-
     if (serialDatabasePayloadEnabled && hasLastDatabasePayloadCache) {
-      Serial.println(SD_SAVE_ONLINE_FOR_DB_TEST == 1
-        ? F("[SD-BACKUP] TEST DB: record tetap disimpan walaupun jaringan/MQTT normal.")
-        : F("[SD-BACKUP] Record disimpan karena jaringan/MQTT/server/buffer bermasalah."));
+      Serial.println(SD_SAVE_ONLINE_FOR_DB_TEST == 1 ? F("[SD-BACKUP] TEST DB: record tetap disimpan walaupun jaringan/MQTT normal.") : F("[SD-BACKUP] Record disimpan karena jaringan/MQTT/server/buffer bermasalah."));
     }
-
     if (testOnceMode && !testOnceSdDone) {
       testOnceSdDone = true;
       Serial.println();
       Serial.println(F("╔════════════ TEST-ONCE LOCAL SD BACKUP ════════════╗"));
-      Serial.printf("[TEST] 1 record backup tersimpan ke %s. lastRow=%lu bytes\n",
-                    DB_FILE, (unsigned long)dbLastLineBytes);
+      Serial.printf("[TEST] 1 record backup tersimpan ke %s. lastRow=%lu bytes\n", DB_FILE, (unsigned long)dbLastLineBytes);
       Serial.println(F("[TEST] SD_SAVE_ONLINE_FOR_DB_TEST=1: SD tetap ditulis walaupun WiFi/MQTT normal."));
       Serial.println(F("╚═══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
-
     xSemaphoreGive(sdMutex);
   } else {
     sdSaveFailCount++;
     sdLastFileErrorMs = millis();
     Serial.println(F("[SD-BACKUP] SD sedang dipakai task lain. Backup 1 detik ini dilewati."));
   }
-
   perfSdSaveUs = micros() - saveStart;
   perfUpdateStat(acqMon.sdSaveUs, perfSdSaveUs);
-
-  if (serialDatabasePayloadEnabled && hasLastDatabasePayloadCache) {
-    printDatabasePayloadReport(false);
-  }
-
+  if (serialDatabasePayloadEnabled && hasLastDatabasePayloadCache) printDatabasePayloadReport(false);
   if (millis() - lastDBStorageReport > 10000) {
     lastDBStorageReport = millis();
     updateStorageCache();
@@ -3727,38 +2799,23 @@ bool isEduroamCredentialConfigured() {
 void disableEduroamEnterpriseMode() {
 #if USE_EDUROAM_FIRST
   #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    // Arduino-ESP32 core 3.x menangani WPA2-Enterprise melalui overload
-    // WiFi.begin(..., WPA2_AUTH_PEAP, ...). Beberapa paket core 3.x tidak
-    // mengekspor API disable EAP, sehingga jangan panggil API itu
-    // langsung. WiFi.disconnect()/WiFi.mode(WIFI_OFF) di stopWiFiCleanly()
-    // dipakai untuk membersihkan state sebelum fallback WiFiManager.
     return;
   #else
     esp_wifi_sta_wpa2_ent_disable();
   #endif
 #else
-  // Eduroam dimatikan. Jangan panggil fungsi enterprise agar tidak panic
-  // saat WiFi driver belum siap pada beberapa core ESP32.
   return;
 #endif
 }
 
-
 // ============================================================
 // NETWORK + HEAP STABILITY HELPERS
 // ============================================================
-
 void updateHeapMonitor() {
   uint32_t freeHeap = ESP.getFreeHeap();
   uint32_t maxAlloc = ESP.getMaxAllocHeap();
-
-  if (freeHeap < minFreeHeapBytes) {
-    minFreeHeapBytes = freeHeap;
-  }
-
-  if (maxAlloc < minMaxAllocHeapBytes) {
-    minMaxAllocHeapBytes = maxAlloc;
-  }
+  if (freeHeap < minFreeHeapBytes) minFreeHeapBytes = freeHeap;
+  if (maxAlloc < minMaxAllocHeapBytes) minMaxAllocHeapBytes = maxAlloc;
 }
 
 void applyWiFiCountryConfig() {
@@ -3768,27 +2825,13 @@ void applyWiFiCountryConfig() {
   wifiCountry.schan = 1;
   wifiCountry.nchan = WIFI_COUNTRY_CHANNELS;
   wifiCountry.policy = WIFI_COUNTRY_POLICY_MANUAL;
-
-  // Beberapa core ESP32 mengembalikan err=258 saat driver WiFi belum siap
-  // atau ketika mode AP/STA sedang berpindah. Kondisi ini tidak fatal; scan
-  // dan koneksi tetap dapat berjalan, jadi jangan penuhi Serial Monitor dengan
-  // warning yang membuat operator mengira ada error kritis.
   (void)esp_wifi_set_country(&wifiCountry);
 }
 
 bool isWiFiUsableForMongoUpload() {
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-
+  if (WiFi.status() != WL_CONNECTED) return false;
   long rssi = WiFi.RSSI();
-
-  // Jika RSSI terlalu lemah, jangan paksa batch MongoDB.
-  // Ini mencegah MQTT publish burst saat koneksi tidak stabil.
-  if (rssi != 0 && rssi < WIFI_RSSI_WEAK_DBM) {
-    return false;
-  }
-
+  if (rssi != 0 && rssi < WIFI_RSSI_WEAK_DBM) return false;
   return true;
 }
 
@@ -3805,25 +2848,18 @@ void normalizeMqttEndpoint() {
   endpoint.trim();
   mqttHostHadScheme = false;
   mqttResolvedPort = MQTT_PORT;
-
   int schemePos = endpoint.indexOf("://");
   if (schemePos >= 0) {
     String scheme = endpoint.substring(0, schemePos);
     scheme.toLowerCase();
     mqttHostHadScheme = true;
     endpoint = endpoint.substring(schemePos + 3);
-
-    if (scheme == "mqtts" && mqttResolvedPort == 1883) {
-      mqttResolvedPort = 8883;
-    }
+    if (scheme == "mqtts" && mqttResolvedPort == 1883) mqttResolvedPort = 8883;
   }
-
   int pathPos = endpoint.indexOf('/');
   if (pathPos >= 0) endpoint = endpoint.substring(0, pathPos);
-
   int atPos = endpoint.lastIndexOf('@');
   if (atPos >= 0) endpoint = endpoint.substring(atPos + 1);
-
   int colonPos = endpoint.lastIndexOf(':');
   if (colonPos > 0) {
     String portPart = endpoint.substring(colonPos + 1);
@@ -3831,10 +2867,8 @@ void normalizeMqttEndpoint() {
     uint16_t parsedPort = (uint16_t)portPart.toInt();
     if (parsedPort > 0) mqttResolvedPort = parsedPort;
   }
-
   endpoint.trim();
   if (endpoint.length() == 0) endpoint = F("rmq230.smartsystem.id");
-
   strncpy(mqttResolvedHost, endpoint.c_str(), sizeof(mqttResolvedHost) - 1);
   mqttResolvedHost[sizeof(mqttResolvedHost) - 1] = '\0';
 }
@@ -3850,21 +2884,14 @@ void applyMqttStabilityConfig() {
 const char* wifiStatusText(wl_status_t st);
 
 int scanWiFiNetworksReliable(const __FlashStringHelper* label) {
-  // ESP32 hanya 2.4 GHz. Pastikan country/channel 1-13 aktif dan lakukan
-  // scan sinkron aktif dengan hidden SSID agar daftar di WiFiManager tidak kosong
-  // karena channel 12/13, SSID hidden, atau sisa state WPA2-Enterprise.
   WiFi.scanDelete();
   WiFi.mode(WIFI_STA);
   applyWiFiCountryConfig();
   delay(250);
-
   int networkCount = WiFi.scanNetworks(false, true);
   if (networkCount == WIFI_SCAN_FAILED || networkCount < 0) {
-    Serial.print(label);
-    Serial.print(F(" first scan failed, retry result="));
-    Serial.println(networkCount);
-    WiFi.scanDelete();
-    delay(500);
+    Serial.print(label); Serial.print(F(" first scan failed, retry result=")); Serial.println(networkCount);
+    WiFi.scanDelete(); delay(500);
     networkCount = WiFi.scanNetworks(false, true);
   }
   return networkCount;
@@ -3873,36 +2900,19 @@ int scanWiFiNetworksReliable(const __FlashStringHelper* label) {
 void debugScanWiFiBeforePortal() {
 #if WIFI_MANAGER_SCAN_DEBUG
   Serial.println(F("[WIFI MANAGER] Pre-scan visible 2.4GHz networks..."));
-
   int networkCount = scanWiFiNetworksReliable(F("[WIFI MANAGER]"));
   if (networkCount < 0) {
-    Serial.print(F("[WIFI MANAGER] Pre-scan failed, result="));
-    Serial.println(networkCount);
+    Serial.print(F("[WIFI MANAGER] Pre-scan failed, result=")); Serial.println(networkCount);
     return;
   }
-
-  Serial.print(F("[WIFI MANAGER] Pre-scan found "));
-  Serial.print(networkCount);
-  Serial.println(F(" network(s)."));
-
+  Serial.print(F("[WIFI MANAGER] Pre-scan found ")); Serial.print(networkCount); Serial.println(F(" network(s)."));
   for (int i = 0; i < networkCount; i++) {
     String ssid = WiFi.SSID(i);
-    Serial.print(F("[WIFI MANAGER] #"));
-    Serial.print(i + 1);
-    Serial.print(F(" SSID='"));
-    if (ssid.length()) {
-      Serial.print(ssid);
-    } else {
-      Serial.print(F("<hidden>"));
-    }
-    Serial.print(F("' RSSI="));
-    Serial.print(WiFi.RSSI(i));
-    Serial.print(F(" dBm CH="));
-    Serial.print(WiFi.channel(i));
-    Serial.print(F(" ENC="));
-    Serial.println((int)WiFi.encryptionType(i));
+    Serial.print(F("[WIFI MANAGER] #")); Serial.print(i+1); Serial.print(F(" SSID='"));
+    if (ssid.length()) Serial.print(ssid); else Serial.print(F("<hidden>"));
+    Serial.print(F("' RSSI=")); Serial.print(WiFi.RSSI(i)); Serial.print(F(" dBm CH="));
+    Serial.print(WiFi.channel(i)); Serial.print(F(" ENC=")); Serial.println((int)WiFi.encryptionType(i));
   }
-
   WiFi.scanDelete();
 #else
   return;
@@ -3911,38 +2921,23 @@ void debugScanWiFiBeforePortal() {
 
 void stopWiFiCleanly(bool eraseCredentials) {
   Serial.println(F("[WIFI] Stopping current STA connection..."));
-
-  if (mqtt.connected()) {
-    mqtt.disconnect();
-  }
+  if (mqtt.connected()) mqtt.disconnect();
   mqttOK = false;
-
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(eraseCredentials, eraseCredentials);
   delay(800);
-
   WiFi.mode(WIFI_OFF);
   delay(WIFI_MANAGER_SETTLE_MS);
-
   WiFi.mode(WIFI_STA);
   delay(800);
-
   applyWiFiStabilityConfig();
-
-  Serial.print(F("[WIFI] Clean state. status="));
-  Serial.print((int)WiFi.status());
-  Serial.print(F(" / "));
-  Serial.println(wifiStatusText(WiFi.status()));
+  Serial.print(F("[WIFI] Clean state. status=")); Serial.print((int)WiFi.status()); Serial.print(F(" / ")); Serial.println(wifiStatusText(WiFi.status()));
 }
 
 void prepareNormalWiFiMode() {
   disableEduroamEnterpriseMode();
   delay(300);
-
-  // Matikan total STA yang masih connecting sebelum fallback ke WiFiManager.
-  // eraseCredentials=false agar credential WiFi normal tetap aman.
   stopWiFiCleanly(false);
-
   applyWiFiStabilityConfig();
   delay(300);
 }
@@ -3969,78 +2964,57 @@ const char* wifiModeText() {
 bool waitForWiFiConnection(const __FlashStringHelper* label, unsigned long timeoutMs) {
   unsigned long startAttempt = millis();
   wl_status_t lastStatus = (wl_status_t)255;
-
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < timeoutMs) {
     wl_status_t st = WiFi.status();
-
     if (st != lastStatus) {
-      Serial.print(label);
-      Serial.print(F(" status changed: "));
-      Serial.print((int)st);
-      Serial.print(F(" / "));
-      Serial.println(wifiStatusText(st));
+      Serial.print(label); Serial.print(F(" status changed: ")); Serial.print((int)st); Serial.print(F(" / ")); Serial.println(wifiStatusText(st));
       lastStatus = st;
     }
-
     Serial.print('.');
     delay(WIFI_CONNECT_POLL_MS);
     yield();
   }
-
   Serial.println();
   return WiFi.status() == WL_CONNECTED;
 }
 
 void printWiFiConnectedInfo(const __FlashStringHelper* label) {
-  Serial.print(label);
-  Serial.println(F(" connected."));
-  Serial.print(label);
-  Serial.print(F(" SSID : "));
-  Serial.println(WiFi.SSID());
-  Serial.print(label);
-  Serial.print(F(" IP   : "));
-  Serial.println(WiFi.localIP());
-  Serial.print(label);
-  Serial.print(F(" RSSI : "));
-  Serial.print(WiFi.RSSI());
-  Serial.println(F(" dBm"));
+  Serial.print(label); Serial.println(F(" connected."));
+  Serial.print(label); Serial.print(F(" SSID : ")); Serial.println(WiFi.SSID());
+  Serial.print(label); Serial.print(F(" IP   : ")); Serial.println(WiFi.localIP());
+  Serial.print(label); Serial.print(F(" RSSI : ")); Serial.print(WiFi.RSSI()); Serial.println(F(" dBm"));
 }
 
 bool connectEduroam(bool eraseCredentials = true) {
-  Serial.println();
-  Serial.println("╔══════════════ EDUROAM WIFI INIT BOOT-ONLY ══════════════╗");
-
+#if USE_EDUROAM_FIRST
+  Serial.println(); Serial.println("╔══════════════ EDUROAM WIFI INIT ══════════════╗");
   if (!isEduroamCredentialConfigured()) {
     Serial.println("[EDUROAM] SKIP: credential belum valid / masih placeholder.");
+    Serial.println("[EDUROAM] Fallback ke WiFiManager portal.");
+    Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return false;
   }
-
   Serial.println("[EDUROAM] Trying WPA2-Enterprise PEAP connection...");
   Serial.print("[EDUROAM] SSID     : "); Serial.println(EDUROAM_SSID);
   Serial.print("[EDUROAM] Identity : "); Serial.println(EDUROAM_IDENTITY);
-
+  Serial.print("[EDUROAM] Username : "); Serial.println(EDUROAM_USERNAME);
+  Serial.println("[EDUROAM] Password : ********");
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
-
   WiFi.disconnect(eraseCredentials, eraseCredentials);
   delay(1000);
-
   disableEduroamEnterpriseMode();
   delay(300);
-
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  // Arduino-ESP32 core 3.x
   WiFi.begin(EDUROAM_SSID, WPA2_AUTH_PEAP, EDUROAM_IDENTITY, EDUROAM_USERNAME, EDUROAM_PASSWORD);
 #else
-  // Arduino-ESP32 core 2.x
   esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)EDUROAM_IDENTITY, strlen(EDUROAM_IDENTITY));
   esp_wifi_sta_wpa2_ent_set_username((uint8_t *)EDUROAM_USERNAME, strlen(EDUROAM_USERNAME));
   esp_wifi_sta_wpa2_ent_set_password((uint8_t *)EDUROAM_PASSWORD, strlen(EDUROAM_PASSWORD));
   esp_wifi_sta_wpa2_ent_enable();
   WiFi.begin(EDUROAM_SSID);
 #endif
-
   if (waitForWiFiConnection(F("[EDUROAM]"), EDUROAM_TIMEOUT_MS)) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_EDUROAM;
@@ -4048,28 +3022,44 @@ bool connectEduroam(bool eraseCredentials = true) {
     Serial.println("╚═══════════════════════════════════════════════════════════╝");
     return true;
   }
-
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
-
   Serial.println("[EDUROAM] Failed / timeout.");
-  Serial.print("[EDUROAM] WiFi status: ");
-  Serial.print((int)WiFi.status());
-  Serial.print(" / ");
-  Serial.println(wifiStatusText(WiFi.status()));
-  
+  Serial.print("[EDUROAM] WiFi status: "); Serial.print((int)WiFi.status()); Serial.print(" / "); Serial.println(wifiStatusText(WiFi.status()));
+  Serial.println("[EDUROAM] Cleaning enterprise mode before manual WiFi command...");
   prepareNormalWiFiMode();
+  Serial.println("[EDUROAM] WiFiManager tidak dibuka otomatis; gunakan Serial command wifi portal jika diperlukan.");
   Serial.println("╚═══════════════════════════════════════════════════════════╝");
   return false;
+#else
+  return false;
+#endif
+}
+
+void connectFixedWiFi() {
+  const char* ssid = "hai";
+  const char* password = "hello123";
+  Serial.println();
+  Serial.println(F("╔════════════ FIXED WIFI CONNECTION ════════════╗"));
+  Serial.print(F("[FIXED] Connecting to SSID: ")); Serial.println(ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  delay(500);
+  WiFi.begin(ssid, password);
+  if (waitForWiFiConnection(F("[FIXED]"), 15000UL)) {
+    wifiOK = true;
+    wifiConnectionMode = WIFI_MODE_MANAGER;
+    printWiFiConnectedInfo(F("[FIXED]"));
+  } else {
+    wifiOK = false;
+    wifiConnectionMode = WIFI_MODE_OFFLINE;
+    Serial.println(F("[FIXED] Gagal terhubung. Sistem berjalan offline."));
+  }
+  Serial.println(F("╚════════════════════════════════════════════════╝"));
 }
 
 void drawWiFiPortalInfo(const char* statusText) {
-  // Tidak lagi mengganti layar LCD menjadi halaman WiFi config portal.
-  // WiFiManager tetap berjalan untuk konfigurasi dari HP/browser, sedangkan
-  // LCD cukup mempertahankan splash/status agar boot terlihat konsisten.
-  Serial.print(F("[WIFI LCD] "));
-  Serial.println(statusText);
-
+  Serial.print(F("[WIFI LCD] ")); Serial.println(statusText);
   tft.fillRect(40, 306, 400, 14, C_WHITE);
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextDatum(MC_DATUM);
@@ -4078,7 +3068,6 @@ void drawWiFiPortalInfo(const char* statusText) {
   tft.setTextDatum(TL_DATUM);
 }
 
-
 void drawWiFiLcdSelectionPage(const char* statusText) {
   tft.fillScreen(C_BG);
   tft.fillRect(0, 0, SW, 38, C_PRIMARY);
@@ -4086,12 +3075,10 @@ void drawWiFiLcdSelectionPage(const char* statusText) {
   tft.setTextSize(2);
   tft.setCursor(12, 11);
   tft.print("PILIH WIFI");
-
   tft.setTextColor(C_MUTED, C_BG);
   tft.setTextSize(1);
   tft.setCursor(220, 15);
   tft.print(statusText);
-
   for (uint8_t i = 0; i < wifiLcdNetworkCount; i++) {
     int y = 48 + i * 34;
     bool openNetwork = wifiLcdEncryptions[i] == WIFI_AUTH_OPEN;
@@ -4102,34 +3089,25 @@ void drawWiFiLcdSelectionPage(const char* statusText) {
     tft.setCursor(26, y + 10);
     String name = wifiLcdSsids[i];
     if (name.length() > 28) name = name.substring(0, 28);
-    tft.print(i + 1);
-    tft.print(". ");
-    tft.print(name);
-    tft.setCursor(315, y + 10);
-    tft.print(wifiLcdRssis[i]);
-    tft.print(" dBm");
-    tft.setCursor(402, y + 10);
-    tft.print(openNetwork ? "OPEN" : "LOCK");
+    tft.print(i + 1); tft.print(". "); tft.print(name);
+    tft.setCursor(315, y + 10); tft.print(wifiLcdRssis[i]); tft.print(" dBm");
+    tft.setCursor(402, y + 10); tft.print(openNetwork ? "OPEN" : "LOCK");
   }
-
   if (wifiLcdNetworkCount == 0) {
     tft.setTextColor(C_RED, C_BG);
     tft.setCursor(24, 92);
     tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau OFFLINE.");
   }
-
   tft.fillRoundRect(14, 262, 140, 40, 8, C_WHITE);
   tft.drawRoundRect(14, 262, 140, 40, 8, C_PRIMARY);
   tft.setTextColor(C_PRIMARY, C_WHITE);
   tft.setCursor(55, 277);
   tft.print("RESCAN");
-
   tft.fillRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
   tft.drawRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
   tft.setTextColor(C_WHITE, C_PRIMARY);
   tft.setCursor(210, 277);
   tft.print("OFFLINE");
-
   tft.fillRoundRect(326, 262, 140, 40, 8, C_WHITE);
   tft.drawRoundRect(326, 262, 140, 40, 8, C_PRIMARY);
   tft.setTextColor(C_PRIMARY, C_WHITE);
@@ -4144,23 +3122,19 @@ uint8_t scanWiFiForLcdSelection() {
     wifiLcdRssis[i] = -127;
     wifiLcdEncryptions[i] = WIFI_AUTH_OPEN;
   }
-
   drawWiFiLcdSelectionPage("Scanning...");
   WiFi.mode(WIFI_STA);
   applyWiFiCountryConfig();
   delay(200);
-
   int n = WiFi.scanNetworks(false, true);
   if (n <= 0) {
     WiFi.scanDelete();
     drawWiFiLcdSelectionPage("No SSID found");
     return 0;
   }
-
   for (int i = 0; i < n; i++) {
     String ssid = WiFi.SSID(i);
     if (!ssid.length()) continue;
-
     bool duplicate = false;
     for (uint8_t j = 0; j < wifiLcdNetworkCount; j++) {
       if (wifiLcdSsids[j] == ssid) {
@@ -4173,7 +3147,6 @@ uint8_t scanWiFiForLcdSelection() {
       }
     }
     if (duplicate) continue;
-
     if (wifiLcdNetworkCount < WIFI_LCD_MAX_NETWORKS) {
       wifiLcdSsids[wifiLcdNetworkCount] = ssid;
       wifiLcdRssis[wifiLcdNetworkCount] = WiFi.RSSI(i);
@@ -4181,7 +3154,6 @@ uint8_t scanWiFiForLcdSelection() {
       wifiLcdNetworkCount++;
     }
   }
-
   WiFi.scanDelete();
   drawWiFiLcdSelectionPage("Tap SSID / OFFLINE");
   return wifiLcdNetworkCount;
@@ -4190,40 +3162,33 @@ uint8_t scanWiFiForLcdSelection() {
 int waitForWiFiLcdSelection() {
   unsigned long startedAt = millis();
   static unsigned long lastTouchMs = 0;
-
   while (millis() - startedAt < WIFI_LCD_SELECT_TIMEOUT_MS) {
     if (touchDetected && ts.touched() && millis() - lastTouchMs > 220UL) {
       int x, y, rawX, rawY;
       readTouchMapped(x, y, rawX, rawY);
       lastTouchMs = millis();
-
       for (uint8_t i = 0; i < wifiLcdNetworkCount; i++) {
         int rowY = 48 + i * 34;
         if (x >= 14 && x <= 466 && y >= rowY && y <= rowY + 28) {
           return i;
         }
       }
-
       if (y >= 262 && y <= 310) {
-        if (x >= 14 && x <= 154) return -2;   // rescan
-        if (x >= 170 && x <= 310) return -4;  // offline
-        if (x >= 326 && x <= 466) return -4;  // offline
+        if (x >= 14 && x <= 154) return -2;
+        if (x >= 170 && x <= 310) return -4;
+        if (x >= 326 && x <= 466) return -4;
       }
     }
-
     delay(20);
     yield();
   }
-
-  return -4; // timeout: stay offline; WiFiManager is handled by setupWiFiManager(), not the LCD page.
+  return -4;
 }
 
 bool connectSelectedWiFiFromLcd(uint8_t index) {
   if (index >= wifiLcdNetworkCount) return false;
-
   const String ssid = wifiLcdSsids[index];
   bool openNetwork = wifiLcdEncryptions[index] == WIFI_AUTH_OPEN;
-
   tft.fillRect(0, 0, SW, 38, C_PRIMARY);
   tft.setTextColor(C_WHITE, C_PRIMARY);
   tft.setTextSize(2);
@@ -4233,34 +3198,25 @@ bool connectSelectedWiFiFromLcd(uint8_t index) {
   tft.setTextColor(C_DARK, C_BG);
   tft.setTextSize(1);
   tft.setCursor(24, 218);
-  tft.print("Mencoba SSID: ");
-  tft.print(ssid);
+  tft.print("Mencoba SSID: "); tft.print(ssid);
   tft.setCursor(24, 236);
   tft.print(openNetwork ? "Jaringan open." : "Jaringan terkunci: mencoba credential tersimpan.");
-
-  Serial.print(F("[WIFI LCD] Selected SSID: "));
-  Serial.println(ssid);
+  Serial.print(F("[WIFI LCD] Selected SSID: ")); Serial.println(ssid);
   Serial.println(openNetwork ? F("[WIFI LCD] Open network, direct connect.") : F("[WIFI LCD] Locked network, trying saved credential first."));
-
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   applyWiFiStabilityConfig();
-
   if (openNetwork) {
     WiFi.begin(ssid.c_str());
   } else {
-    // ESP32 can reconnect here only if this SSID/password was already saved in NVS.
-    // If it fails, fallback WiFiManager portal is shown for password entry.
     WiFi.begin(ssid.c_str());
   }
-
   if (waitForWiFiConnection(F("[WIFI LCD]"), WIFI_LCD_CONNECT_TIMEOUT_MS)) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_MANAGER;
     printWiFiConnectedInfo(F("[WIFI LCD]"));
     return true;
   }
-
   WiFi.disconnect(false, false);
   wifiOK = false;
   Serial.println(F("[WIFI LCD] Connect failed. Password mungkin belum tersimpan; fallback ke portal."));
@@ -4274,22 +3230,18 @@ bool connectWiFiFromLcdSelection() {
     Serial.println(F("[WIFI LCD] Touch tidak terdeteksi, skip pilihan LCD."));
     return false;
   }
-
   while (true) {
     scanWiFiForLcdSelection();
     int choice = waitForWiFiLcdSelection();
-
     if (choice >= 0) {
       if (connectSelectedWiFiFromLcd((uint8_t)choice)) return true;
       return false;
     }
-
     if (choice == -2) continue;
     if (choice == -4) {
       Serial.println(F("[WIFI LCD] User chose OFFLINE."));
       return false;
     }
-
     Serial.println(F("[WIFI LCD] Selection timeout; no portal page is drawn on LCD."));
     drawWiFiPortalInfo("WiFiManager berjalan tanpa halaman portal di LCD.");
     delay(700);
@@ -4298,35 +3250,19 @@ bool connectWiFiFromLcdSelection() {
 }
 
 bool connectWiFiManagerFallback() {
-  Serial.println();
-  Serial.println(F("╔════════════ WIFI MANAGER PORTAL FALLBACK SAFE ════════════╗"));
+  Serial.println(); Serial.println(F("╔════════════ WIFI MANAGER PORTAL FALLBACK SAFE ════════════╗"));
   Serial.println(F("[WIFI MANAGER] Eduroam gagal. Membuka portal fallback."));
   Serial.println(F("[WIFI MANAGER] startConfigPortal dipakai agar tidak auto-connect credential lama."));
-
-  mqttOK = false;
-  wifiOK = false;
-
-  // prepareNormalWiFiMode() sudah membersihkan STA/enterprise state.
-  // Pakai urutan konservatif sesuai contoh WiFiManager: kembali ke STA,
-  // jangan paksa AP_STA, jangan disconnect ulang, dan jangan panggil
-  // esp_wifi_set_ps() tepat sebelum startConfigPortal(). Pada beberapa
-  // board/core, perubahan mode AP_STA manual setelah enterprise gagal dapat
-  // memicu abort sebelum AP portal sempat aktif.
+  mqttOK = false; wifiOK = false;
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_STA);
   applyWiFiCountryConfig();
   delay(1000);
-
   debugScanWiFiBeforePortal();
-
-  // Portal memakai AP+STA agar halaman konfigurasi tetap aktif sambil ESP32
-  // melakukan scan jaringan sekitar. Ini membantu WiFiManager mendeteksi SSID
-  // dengan benar setelah fallback dari eduroam/EAP.
   WiFi.mode(WIFI_AP_STA);
   applyWiFiCountryConfig();
   delay(300);
-
   static WiFiManager wm;
   wm.setDebugOutput(false);
   wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT_SEC);
@@ -4334,158 +3270,98 @@ bool connectWiFiManagerFallback() {
   wm.setConnectRetries(2);
   wm.setMinimumSignalQuality(0);
   wm.setRemoveDuplicateAPs(false);
-
 #if FORCE_WIFI_PORTAL
   wm.resetSettings();
 #endif
-
-  Serial.print(F("[WIFI MANAGER] AP SSID : "));
-  Serial.println(WIFI_MANAGER_AP_NAME);
-  Serial.print(F("[WIFI MANAGER] AP PASS : "));
-  Serial.println(WIFI_MANAGER_AP_PASS);
+  Serial.print(F("[WIFI MANAGER] AP SSID : ")); Serial.println(WIFI_MANAGER_AP_NAME);
+  Serial.print(F("[WIFI MANAGER] AP PASS : ")); Serial.println(WIFI_MANAGER_AP_PASS);
   Serial.println(F("[WIFI MANAGER] Portal URL: http://192.168.4.1"));
   Serial.println(F("[WIFI MANAGER] Jika Configure WiFi tidak terbuka, akses IP langsung dan matikan mobile data."));
   Serial.println(F("[WIFI MANAGER] Starting config portal now (LCD tetap menampilkan boot splash)."));
-
   wm.setAPCallback([](WiFiManager *manager) {
     (void)manager;
     Serial.println(F("[WIFI MANAGER] AP portal aktif; LCD tidak dialihkan ke halaman konfigurasi."));
   });
-
-  // startConfigPortal membuka AP portal dan tidak menjalankan autoConnect().
   bool res = wm.startConfigPortal(WIFI_MANAGER_AP_NAME, WIFI_MANAGER_AP_PASS);
-
   if (res && WiFi.status() == WL_CONNECTED) {
     wifiOK = true;
     wifiConnectionMode = WIFI_MODE_MANAGER;
     applyWiFiStabilityConfig();
     WiFi.persistent(false);
-
     printWiFiConnectedInfo(F("[WIFI MANAGER]"));
     Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
     return true;
   }
-
   wifiOK = false;
   wifiConnectionMode = WIFI_MODE_OFFLINE;
   WiFi.persistent(false);
-
-  Serial.println(F("[WIFI MANAGER] Failed / timeout. System tetap jalan offline."));
-  Serial.print(F("[WIFI MANAGER] Final WiFi status: "));
-  Serial.print((int)WiFi.status());
-  Serial.print(F(" / "));
-  Serial.println(wifiStatusText(WiFi.status()));
+  Serial.println(F("[WIFI MANAGER] Failed / timeout. Sistem tetap jalan offline."));
+  Serial.print(F("[WIFI MANAGER] Final WiFi status: ")); Serial.print((int)WiFi.status()); Serial.print(F(" / ")); Serial.println(wifiStatusText(WiFi.status()));
   Serial.println(F("╚════════════════════════════════════════════════════════════╝"));
   return false;
 }
-void setupWiFiManager() {
+
+void setupWiFiWithMenu() {
   Serial.println();
-  Serial.println(F("╔════════════ WIFI CONNECTION INIT ════════════╗"));
-
-  wifiOK = false;
-  mqttOK = false;
-  wifiConnectionMode = WIFI_MODE_OFFLINE;
-
-  // Hentikan state WiFi yang mungkin menggantung sebelum masuk ke menu
-  prepareNormalWiFiMode();
-
-  Serial.println(F("PILIH MODE WIFI (Ketik angka lalu tekan Enter/Send):"));
-  Serial.println(F("1. Eduroam (WPA2-Enterprise)"));
-  Serial.println(F("2. Fixed WiFi (SSID: hai, Pass: hello123)"));
-  Serial.println(F("3. WiFiManager Portal (AP Mode)"));
-  Serial.println(F("Menunggu input... (Timeout 10 detik, default ke 3/WiFiManager)"));
-
-  unsigned long startWait = millis();
-  int wifiChoice = 3; // Default ke WiFiManager jika tidak ada input dari operator
-
-  while (millis() - startWait < 10000) {
-    if (Serial.available()) {
-      char c = Serial.read();
-      if (c == '1') wifiChoice = 1;
-      else if (c == '2') wifiChoice = 2;
-      else if (c == '3') wifiChoice = 3;
-
-      // Bersihkan sisa karakter di buffer (seperti newline \n atau \r)
-      while (Serial.available()) Serial.read();
-      break;
-    }
-    delay(20);
-    // Render loading text agar LCD tetap responsif
-    drawBootSplashStep("Pilih mode WiFi di Serial Monitor...", 60);
-  }
-
-  Serial.print(F("[WIFI] Mode yang terpilih: "));
-  Serial.println(wifiChoice);
-
-  if (wifiChoice == 1) {
-    // ── OPSI 1: EDUROAM ──
-    Serial.println(F("[WIFI] Mencoba koneksi Eduroam..."));
-    if (connectEduroam(true)) {
-      Serial.println(F("[WIFI] Mode koneksi: EDUROAM WPA2-ENTERPRISE"));
-    } else {
-      Serial.println(F("[WIFI] Eduroam gagal. Sistem berjalan offline."));
-      prepareNormalWiFiMode();
-    }
-
-  } else if (wifiChoice == 2) {
-    // ── OPSI 2: FIXED WIFI (HOTSPOT HP) ──
-    Serial.println(F("[WIFI] Mencoba Fixed WiFi (SSID: hai)..."));
-    WiFi.mode(WIFI_STA);
-    applyWiFiStabilityConfig();
-    WiFi.begin("hai", "hello123");
-    
-    if (waitForWiFiConnection(F("[FIXED WIFI]"), 15000)) {
-      wifiOK = true;
-      wifiConnectionMode = WIFI_MODE_MANAGER; // Pakai konstanta MANAGER untuk mode personal/bukan enterprise
-      printWiFiConnectedInfo(F("[FIXED WIFI]"));
-    } else {
-      Serial.println(F("[WIFI] Fixed WiFi gagal. Sistem berjalan offline."));
-      wifiOK = false;
-      wifiConnectionMode = WIFI_MODE_OFFLINE;
-      prepareNormalWiFiMode();
-    }
-
-  } else {
-    // ── OPSI 3: WIFI MANAGER AP ──
-    Serial.println(F("[WIFI] Membuka WiFiManager AP..."));
-    connectWiFiManagerFallback();
-  }
-
+  Serial.println(F("╔════════════ WIFI CONNECTION MENU ════════════╗"));
+  Serial.println(F("║ Pilih mode koneksi WiFi:                     ║"));
+  Serial.println(F("║ 1. Eduroam (WPA2-Enterprise)                ║"));
+  Serial.println(F("║ 2. Fixed WiFi (SSID: hai, pass: hello123)   ║"));
+  Serial.println(F("║ 3. WiFi Manager (AP portal)                  ║"));
+  Serial.println(F("║ Masukkan angka (1-3) dalam 10 detik:         ║"));
   Serial.println(F("╚══════════════════════════════════════════════╝"));
+  unsigned long start = millis();
+  int choice = -1;
+  while (millis() - start < 10000) {
+    if (Serial.available()) {
+      String input = Serial.readStringUntil('\n');
+      input.trim();
+      if (input.length() == 1 && input[0] >= '1' && input[0] <= '3') {
+        choice = input[0] - '0';
+        break;
+      }
+    }
+    delay(100);
+  }
+  if (choice == -1) {
+    Serial.println(F("[WIFI] Tidak ada input dalam 10 detik, default ke WiFi Manager."));
+    choice = 3;
+  }
+  switch (choice) {
+    case 1:
+      Serial.println(F("[WIFI] Memilih Eduroam..."));
+      connectEduroam(true);
+      break;
+    case 2:
+      Serial.println(F("[WIFI] Memilih Fixed WiFi..."));
+      connectFixedWiFi();
+      break;
+    case 3:
+      Serial.println(F("[WIFI] Memilih WiFi Manager..."));
+      connectWiFiManagerFallback();
+      break;
+  }
 }
-
 
 void reconnectMQTT() {
   if (WiFi.status() != WL_CONNECTED) {
-    wifiOK = false;
-    mqttOK = false;
+    wifiOK = false; mqttOK = false;
     return;
   }
-
   wifiOK = true;
-
   if (mqtt.connected()) {
     mqttOK = true;
     mqttReconnectBackoffMs = MQTT_RECONNECT_MIN_MS;
     mqtt.loop();
     return;
   }
-
   mqttOK = false;
-
-  if (millis() - lastReconnect < mqttReconnectBackoffMs) {
-    return;
-  }
-
+  if (millis() - lastReconnect < mqttReconnectBackoffMs) return;
   lastReconnect = millis();
   mqttReconnectAttemptCount++;
-
   applyMqttStabilityConfig();
-
   String clientId = String("GENSYS_MONITOR_") + String((uint32_t)ESP.getEfuseMac(), HEX);
-
-  Serial.println();
-  Serial.println(F("╔════════════ MQTT RECONNECT ════════════╗"));
+  Serial.println(); Serial.println(F("╔════════════ MQTT RECONNECT ════════════╗"));
   Serial.print(F("[MQTT] Host raw   : ")); Serial.println(MQTT_HOST);
   Serial.print(F("[MQTT] Host used  : ")); Serial.println(mqttResolvedHost);
   Serial.print(F("[MQTT] Port used  : ")); Serial.println(mqttResolvedPort);
@@ -4499,9 +3375,7 @@ void reconnectMQTT() {
   Serial.print(F("[MQTT] Free heap  : ")); Serial.println(ESP.getFreeHeap());
   Serial.print(F("[MQTT] Max alloc  : ")); Serial.println(ESP.getMaxAllocHeap());
   Serial.print(F("[MQTT] Connecting : "));
-
   bool ok = mqtt.connect(clientId.c_str(), MQTT_LOGIN_USER, MQTT_PASS);
-
   if (ok) {
     mqttOK = true;
     mqttReconnectBackoffMs = MQTT_RECONNECT_MIN_MS;
@@ -4509,68 +3383,39 @@ void reconnectMQTT() {
   } else {
     mqttOK = false;
     int state = mqtt.state();
-
-    Serial.print(F("FAILED state="));
-    Serial.println(state);
-
+    Serial.print(F("FAILED state=")); Serial.println(state);
     mqttReconnectBackoffMs *= 2;
-    if (mqttReconnectBackoffMs > MQTT_RECONNECT_MAX_MS) {
-      mqttReconnectBackoffMs = MQTT_RECONNECT_MAX_MS;
-    }
+    if (mqttReconnectBackoffMs > MQTT_RECONNECT_MAX_MS) mqttReconnectBackoffMs = MQTT_RECONNECT_MAX_MS;
   }
-
   Serial.println(F("╚════════════════════════════════════════╝"));
 }
 
 void checkWiFiStatus() {
-  if (millis() - lastWifiCheck < WIFI_RUNTIME_CHECK_MS) {
-    return;
-  }
-
+  if (millis() - lastWifiCheck < WIFI_RUNTIME_CHECK_MS) return;
   lastWifiCheck = millis();
   updateHeapMonitor();
-
   bool wasWifiOk = wifiOK;
   wl_status_t st = WiFi.status();
-
   wifiOK = (st == WL_CONNECTED);
-
   if (!wifiOK) {
     mqttOK = false;
-
     if (wasWifiOk) {
       mqttDisconnectRuntimeCount++;
-
-      Serial.println();
-      Serial.println(F("╔════════════ WIFI RUNTIME LOST ════════════╗"));
-      Serial.print(F("[WIFI] Status        : "));
-      Serial.println((int)st);
-      Serial.print(F("[WIFI] Free heap     : "));
-      Serial.println(ESP.getFreeHeap());
-      Serial.print(F("[WIFI] Max alloc     : "));
-      Serial.println(ESP.getMaxAllocHeap());
+      Serial.println(); Serial.println(F("╔════════════ WIFI RUNTIME LOST ════════════╗"));
+      Serial.print(F("[WIFI] Status        : ")); Serial.println((int)st);
+      Serial.print(F("[WIFI] Free heap     : ")); Serial.println(ESP.getFreeHeap());
+      Serial.print(F("[WIFI] Max alloc     : ")); Serial.println(ESP.getMaxAllocHeap());
       Serial.println(F("╚═══════════════════════════════════════════╝"));
     }
-
-    // Jangan buka WiFiManager portal di runtime karena blocking.
-    // Cukup reconnect credential tersimpan dengan backoff.
     if (millis() - lastRuntimeWifiReconnect >= wifiReconnectBackoffMs) {
       lastRuntimeWifiReconnect = millis();
       wifiReconnectAttemptCount++;
-
-      Serial.println();
-      Serial.println(F("╔════════════ WIFI RUNTIME RECONNECT ════════════╗"));
-      Serial.print(F("[WIFI] Attempt    : "));
-      Serial.println(wifiReconnectAttemptCount);
-      Serial.print(F("[WIFI] Backoff ms : "));
-      Serial.println(wifiReconnectBackoffMs);
-      Serial.print(F("[WIFI] Status     : "));
-      Serial.println((int)st);
-      Serial.print(F("[WIFI] Mode       : "));
-      Serial.println(wifiModeText());
-
+      Serial.println(); Serial.println(F("╔════════════ WIFI RUNTIME RECONNECT ════════════╗"));
+      Serial.print(F("[WIFI] Attempt    : ")); Serial.println(wifiReconnectAttemptCount);
+      Serial.print(F("[WIFI] Backoff ms : ")); Serial.println(wifiReconnectBackoffMs);
+      Serial.print(F("[WIFI] Status     : ")); Serial.println((int)st);
+      Serial.print(F("[WIFI] Mode       : ")); Serial.println(wifiModeText());
       applyWiFiStabilityConfig();
-
       if (wifiConnectionMode == WIFI_MODE_EDUROAM) {
         Serial.println(F("[WIFI] Reconnect using existing eduroam session only."));
         Serial.println(F("[WIFI] connectEduroam() is NOT called during runtime to avoid EAP driver abort."));
@@ -4579,39 +3424,26 @@ void checkWiFiStatus() {
         Serial.println(F("[WIFI] Reconnect using active WiFiManager credential..."));
         WiFi.reconnect();
       }
-
       Serial.println(F("╚════════════════════════════════════════════════╝"));
-
       wifiReconnectBackoffMs *= 2;
-      if (wifiReconnectBackoffMs > WIFI_RECONNECT_MAX_MS) {
-        wifiReconnectBackoffMs = WIFI_RECONNECT_MAX_MS;
-      }
+      if (wifiReconnectBackoffMs > WIFI_RECONNECT_MAX_MS) wifiReconnectBackoffMs = WIFI_RECONNECT_MAX_MS;
     }
-
     return;
   }
-
-  // WiFi connected.
   wifiReconnectBackoffMs = WIFI_RECONNECT_MIN_MS;
   if (wifiConnectionMode == WIFI_MODE_OFFLINE) {
     wifiConnectionMode = (WiFi.SSID() == EDUROAM_SSID) ? WIFI_MODE_EDUROAM : WIFI_MODE_MANAGER;
   }
-
   if (!wasWifiOk && wifiOK) {
-    Serial.println();
-    Serial.println(F("╔════════════ WIFI RUNTIME RECOVERED ════════════╗"));
-    Serial.print(F("[WIFI] IP        : "));
-    Serial.println(WiFi.localIP());
-    Serial.print(F("[WIFI] RSSI      : "));
-    Serial.print(WiFi.RSSI());
-    Serial.println(F(" dBm"));
-    Serial.print(F("[WIFI] Free heap : "));
-    Serial.println(ESP.getFreeHeap());
+    Serial.println(); Serial.println(F("╔════════════ WIFI RUNTIME RECOVERED ════════════╗"));
+    Serial.print(F("[WIFI] IP        : ")); Serial.println(WiFi.localIP());
+    Serial.print(F("[WIFI] RSSI      : ")); Serial.print(WiFi.RSSI()); Serial.println(F(" dBm"));
+    Serial.print(F("[WIFI] Free heap : ")); Serial.println(ESP.getFreeHeap());
     Serial.println(F("╚════════════════════════════════════════════════╝"));
   }
-
   applyWiFiStabilityConfig();
 }
+
 // ============================================================
 // BOOT SPLASH + UI COMPONENT
 // ============================================================
@@ -4643,68 +3475,34 @@ void drawThickLine(int x1, int y1, int x2, int y2, uint16_t color, int width) {
   }
 }
 
-void drawPulseLine(int cx, int cy, uint16_t color) {
-  const int points[][2] = {
-    {-70, 0}, {-32, 0}, {-22, -18}, {-8, 24}, {10, -82},
-    {32, 78}, {52, -42}, {68, 0}, {104, 0}
-  };
-
-  for (uint8_t i = 0; i < 8; i++) {
-    drawThickLine(cx + points[i][0], cy + points[i][1],
-                  cx + points[i + 1][0], cy + points[i + 1][1],
-                  color, 7);
-  }
-  tft.fillCircle(cx + points[0][0], cy + points[0][1], 4, color);
-  tft.fillCircle(cx + points[8][0], cy + points[8][1], 4, color);
-}
-
 uint16_t bootLogoColor(uint16_t rgb565) {
-  // Modul TFT ini menampilkan warna boot logo tertukar byte untuk primitive
-  // drawing (biru menjadi kuning/hijau dan oranye menjadi cyan). Fallback logo
-  // memakai warna referensi yang dibalik byte-nya agar hasil fisik LCD kembali
-  // navy/biru/oranye seperti gambar GENSYS yang diberikan.
   return (uint16_t)((rgb565 << 8) | (rgb565 >> 8));
 }
 
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   (void)fg;
-  // Fallback ini dibuat sebagai versi vektor dari logo referensi: gear/navy
-  // di kiri, panah circular biru di kanan-atas dan kiri-bawah, heartbeat
-  // oranye di tengah, dan gap huruf G yang bersih.
   const uint16_t darkBlue = bootLogoColor(0x0015);
   const uint16_t brightBlue = bootLogoColor(0x04BF);
   const uint16_t orange = bootLogoColor(0xFD20);
-
   const int outerR = r;
   const int innerR = r - 23;
-
-  // Gigi gear kiri, dibuat lebih besar dan menempel ke ring seperti logo asli.
   for (int a = 126; a <= 242; a += 29) {
     float rad = a * PI / 180.0f;
     int tx = cx + (int)(cos(rad) * (outerR - 1));
     int ty = cy + (int)(sin(rad) * (outerR - 1));
     tft.fillRoundRect(tx - 15, ty - 14, 30, 28, 5, darkBlue);
   }
-
-  // Ring utama: kiri navy, kanan atas dan kiri bawah biru. Segment dibuat
-  // solid, bukan titik-titik, agar tidak tampak pixelated/berbeda warna.
   drawFilledRingSegment(cx, cy, outerR, innerR, 124, 270, darkBlue);
   drawFilledRingSegment(cx, cy, outerR, innerR, 272, 360, brightBlue);
   drawFilledRingSegment(cx, cy, outerR, innerR, 0, 62, brightBlue);
   drawFilledRingSegment(cx, cy, outerR, innerR, 205, 270, brightBlue);
   drawFilledRingSegment(cx, cy, outerR, innerR, 28, 64, darkBlue);
-
-  // Kepala panah referensi.
   tft.fillTriangle(cx + outerR - 4, cy - 31, cx + outerR + 37, cy - 41, cx + outerR + 17, cy + 4, brightBlue);
   tft.fillTriangle(cx - outerR - 3, cy + 39, cx - outerR + 34, cy + 30, cx - outerR + 7, cy + 72, brightBlue);
-
-  // Bersihkan lubang tengah dan celah huruf G.
   tft.fillCircle(cx, cy, innerR - 2, bg);
   tft.fillRect(cx + innerR - 2, cy - 11, outerR - innerR + 58, 23, bg);
   tft.fillRect(cx + 3, cy - outerR - 4, 15, outerR - innerR + 18, bg);
   tft.fillRect(cx + 3, cy + innerR - 8, 15, outerR - innerR + 22, bg);
-
-  // Heartbeat oranye dengan proporsi lebih dekat ke logo contoh.
   const int p[][2] = {
     {-54, 0}, {-25, 0}, {-15, -15}, {-2, 20}, {12, -64},
     {31, 66}, {49, -34}, {64, 0}, {86, 0}
@@ -4716,224 +3514,49 @@ void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   tft.fillCircle(cx + p[8][0], cy + p[8][1], 3, orange);
 }
 
-
-#if GENSYS_HAS_PNGDEC
-PNG bootLogoPng;
-File bootLogoFile;
-int bootLogoX = 0;
-int bootLogoY = 0;
-int bootLogoScale = 1;
-int bootLogoDrawW = 0;
-int bootLogoDrawH = 0;
-uint16_t bootLogoSrcLine[SW];
-uint16_t bootLogoDrawLine[SW];
-
-void *pngSdOpen(const char *filename, int32_t *size) {
-  bootLogoFile = SD.open(filename, FILE_READ);
-  if (!bootLogoFile) return NULL;
-  *size = bootLogoFile.size();
-  return &bootLogoFile;
-}
-
-void pngSdClose(void *handle) {
-  File *f = static_cast<File*>(handle);
-  if (f && *f) f->close();
-}
-
-int32_t pngSdRead(PNGFILE *page, uint8_t *buffer, int32_t length) {
-  File *f = static_cast<File*>(page->fHandle);
-  if (!f || !*f) return 0;
-  return f->read(buffer, length);
-}
-
-int32_t pngSdSeek(PNGFILE *page, int32_t position) {
-  File *f = static_cast<File*>(page->fHandle);
-  if (!f || !*f) return 0;
-  return f->seek(position) ? position : 0;
-}
-
-void pngDrawToTft(PNGDRAW *pDraw) {
-  uint16_t srcW = pDraw->iWidth;
-  if (srcW > SW) srcW = SW;
-
-  bootLogoPng.getLineAsRGB565(pDraw, bootLogoSrcLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
-
-  if (bootLogoScale <= 1) {
-    tft.pushImage(bootLogoX, bootLogoY + pDraw->y, srcW, 1, bootLogoSrcLine);
-    return;
-  }
-
-  if ((pDraw->y % bootLogoScale) != 0) return;
-
-  int outY = bootLogoY + (pDraw->y / bootLogoScale);
-  if (outY < bootLogoY || outY >= bootLogoY + bootLogoDrawH) return;
-
-  int outW = min(bootLogoDrawW, SW);
-  for (int x = 0; x < outW; x++) {
-    int srcX = x * bootLogoScale;
-    if (srcX >= srcW) srcX = srcW - 1;
-    bootLogoDrawLine[x] = bootLogoSrcLine[srcX];
-  }
-  tft.pushImage(bootLogoX, outY, outW, 1, bootLogoDrawLine);
-}
-#endif
-
 bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
-  if (!sdOK) return false;
-
-#if GENSYS_HAS_PNGDEC
-  if (!SD.exists(BOOT_LOGO_PNG_FILE)) return false;
-  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
-
-  bool ok = false;
-  deselectAllSPI();
-  int rc = bootLogoPng.open(BOOT_LOGO_PNG_FILE, pngSdOpen, pngSdClose, pngSdRead, pngSdSeek, pngDrawToTft);
-  if (rc == PNG_SUCCESS) {
-    int pngW = bootLogoPng.getWidth();
-    int pngH = bootLogoPng.getHeight();
-
-    if (pngW > 0 && pngH > 0 && pngW <= SW) {
-      bootLogoScale = max(1, max((pngW + maxW - 1) / maxW, (pngH + maxH - 1) / maxH));
-      bootLogoDrawW = max(1, pngW / bootLogoScale);
-      bootLogoDrawH = max(1, pngH / bootLogoScale);
-      bootLogoX = cx - (bootLogoDrawW / 2);
-      bootLogoY = cy - (bootLogoDrawH / 2);
-
-      tft.fillRect(cx - maxW / 2, cy - maxH / 2, maxW, maxH, C_WHITE);
-      ok = bootLogoPng.decode(NULL, 0) == PNG_SUCCESS;
-
-      Serial.print(F("[BOOT LOGO] /logo.png drawn from SD: "));
-      Serial.print(pngW);
-      Serial.print('x');
-      Serial.print(pngH);
-      Serial.print(F(" -> "));
-      Serial.print(bootLogoDrawW);
-      Serial.print('x');
-      Serial.println(bootLogoDrawH);
-    }
-    bootLogoPng.close();
-  }
-
-  if (sdMutex != NULL) xSemaphoreGive(sdMutex);
-  if (!ok) {
-    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pakai PNG RGB/RGBA dengan lebar <=480 px; gambar akan diskalakan ke area boot."));
-  }
-  return ok;
-#else
-  static bool warned = false;
-  if (!warned) {
-    Serial.println(F("[BOOT LOGO] PNGdec tidak tersedia saat compile; /logo.png tidak bisa dibaca dan memakai logo vektor fallback."));
-    warned = true;
-  }
+  // Tidak ada PNGdec, fallback ke vektor
   return false;
-#endif
 }
-
-
-// ============================================================
-// BOOT LOGO FROM ESP32 FLASH
-// ============================================================
-// Logo GENSYS disimpan di program flash sebagai RGB565 PROGMEM.
-// Tujuan:
-// - Boot logo tetap muncul walaupun SD card gagal init.
-// - Tidak perlu membaca /logo.png dari SD saat boot.
-// - SD tetap boleh dipakai untuk database/logging tanpa mempengaruhi tampilan logo.
-bool drawBootLogoFromFlash(int cx, int cy) {
-  static uint16_t lineBuf[GENSYS_LOGO_W];
-
-  int x0 = cx - (GENSYS_LOGO_W / 2);
-  int y0 = cy - (GENSYS_LOGO_H / 2);
-
-  if (x0 < 0) x0 = 0;
-  if (y0 < 0) y0 = 0;
-
-  tft.fillRect(x0 - 4, y0 - 4, GENSYS_LOGO_W + 8, GENSYS_LOGO_H + 8, C_WHITE);
-
-  for (int y = 0; y < GENSYS_LOGO_H; y++) {
-    for (int x = 0; x < GENSYS_LOGO_W; x++) {
-      // Header menyimpan warna RGB565 normal.
-      // bootLogoColor() dipakai agar byte order warna sama dengan logo PNG/primitive
-      // pada konfigurasi TFT yang digunakan di kode ini.
-      lineBuf[x] = bootLogoColor(pgm_read_word(&gensysLogoRgb565[y * GENSYS_LOGO_W + x]));
-    }
-    tft.pushImage(x0, y0 + y, GENSYS_LOGO_W, 1, lineBuf);
-  }
-
-  Serial.print(F("[BOOT LOGO] Logo drawn from ESP32 flash: "));
-  Serial.print(GENSYS_LOGO_W);
-  Serial.print('x');
-  Serial.println(GENSYS_LOGO_H);
-  return true;
-}
-
 
 void drawBootSplashStep(const char* statusText, int progress) {
-  // Boot page di-render penuh hanya sekali.
-  // Step berikutnya hanya update loading bar dan status text agar layar tidak flicker.
-  //
-  // Perubahan utama:
-  // - Logo GENSYS ditampilkan dari flash ESP32, bukan bergantung SD card.
-  // - Text manual "GEN" dan "SYS" dihapus supaya tidak dobel dengan logo asli.
-  // - Loading bar diposisikan lebih bawah agar tidak menabrak logo.
   static bool bootBaseDrawn = false;
   static int lastProgress = -1;
   static String lastStatus = "";
-
-  const int logoCx = SW / 2;
-  const int logoCy = 126;
-
-  const int barX = 90;
-  const int barY = 274;
-  const int barW = 300;
-  const int barH = 16;
-
+  int barX = 80, barY = 292, barW = 320, barH = 14;
   progress = constrain(progress, 0, 100);
-
   if (!bootBaseDrawn || progress <= 0) {
     tft.fillScreen(C_WHITE);
-
-    // Prioritas utama: logo dari flash ESP32.
-    // Ini tetap berhasil walaupun SD INIT FAILED.
-    bool logoDrawn = drawBootLogoFromFlash(logoCx, logoCy);
-
-    // Fallback terakhir jika file header/logo flash tidak terbaca saat modifikasi project.
-    if (!logoDrawn) {
-      drawGensysLogoMark(SW / 2, 108, 78, C_PRIMARY, C_WHITE);
-
-      tft.setTextDatum(MC_DATUM);
-      tft.setTextSize(4);
-      tft.setTextColor(bootLogoColor(0x0015), C_WHITE);
-      tft.drawString("GEN", (SW / 2) - 36, 214);
-      tft.setTextColor(bootLogoColor(0x04BF), C_WHITE);
-      tft.drawString("SYS", (SW / 2) + 36, 214);
-    }
-
-    tft.drawRoundRect(barX, barY, barW, barH, 8, C_BORDER);
-    tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 6, C_WHITE);
-
+    drawGensysLogoMark(SW / 2, 98, 78, C_PRIMARY, C_WHITE);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(4);
+    tft.setTextColor(bootLogoColor(0x0015), C_WHITE);
+    tft.drawString("GEN", (SW / 2) - 36, 214);
+    tft.setTextColor(bootLogoColor(0x04BF), C_WHITE);
+    tft.drawString("SYS", (SW / 2) + 36, 214);
+    tft.setTextColor(C_PRIMARY, C_WHITE);
+    tft.setTextSize(1);
+    tft.drawString("GENERATOR SYNCHRONIZATION", SW / 2, 248);
+    tft.drawString("& MONITORING SYSTEM", SW / 2, 264);
+    tft.drawRoundRect(barX, barY, barW, barH, 7, C_BORDER);
+    tft.fillRoundRect(barX + 2, barY + 2, barW - 4, barH - 4, 5, C_WHITE);
     bootBaseDrawn = true;
     lastProgress = -1;
     lastStatus = "";
   }
-
   if (progress != lastProgress) {
     int innerW = barW - 4;
     int fillW = map(progress, 0, 100, 0, innerW);
-
-    // Bersihkan hanya isi loading bar, bukan seluruh splash screen.
-    tft.fillRoundRect(barX + 2, barY + 2, innerW, barH - 4, 6, C_WHITE);
-    if (fillW > 0) {
-      tft.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 6, C_BLUE2);
-    }
+    tft.fillRoundRect(barX + 2, barY + 2, innerW, barH - 4, 5, C_WHITE);
+    if (fillW > 0) tft.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 5, C_BLUE2);
     lastProgress = progress;
   }
-
   if (lastStatus != String(statusText)) {
-    tft.fillRect(40, 300, 400, 18, C_WHITE);
+    tft.fillRect(40, 306, 400, 14, C_WHITE);
     tft.setTextColor(C_MUTED, C_WHITE);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
-    tft.drawString(statusText, SW / 2, 309);
+    tft.drawString(statusText, SW / 2, 313);
     tft.setTextDatum(TL_DATUM);
     lastStatus = String(statusText);
   }
@@ -4942,7 +3565,6 @@ void drawBootSplashStep(const char* statusText, int progress) {
 void drawHeaderClock(bool force) {
   static String lastClock = "";
   String clockText = getClockWIBms();
-
   if (force || clockText != lastClock) {
     tft.fillRect(10, 28, 118, 12, C_PRIMARY);
     tft.setTextColor(C_WHITE, C_PRIMARY);
@@ -4959,15 +3581,12 @@ void drawHeader(const char* title) {
   tft.setTextSize(2);
   tft.setCursor(10, 7);
   tft.print(title);
-
   drawHeaderClock(true);
-
   tft.setTextSize(1);
   tft.setCursor(300, 10); tft.print("LINK");
   tft.setCursor(352, 10); tft.print("WiFi");
   tft.setCursor(404, 10); tft.print("MQTT");
   tft.setCursor(452, 10); tft.print("SD");
-
   tft.fillCircle(315, 28, 5, linkOK ? C_GREEN : C_RED);
   tft.fillCircle(368, 28, 5, wifiOK ? C_GREEN : C_RED);
   tft.fillCircle(421, 28, 5, mqtt.connected() ? C_GREEN : C_RED);
@@ -4988,17 +3607,14 @@ void drawPanel(int x, int y, int w, int h, const char* title) {
 void drawValueCard(int x, int y, int w, int h, const char* label, const char* value, const char* unit, uint16_t color) {
   tft.fillRoundRect(x, y, w, h, 8, C_WHITE);
   tft.drawRoundRect(x, y, w, h, 8, C_BORDER);
-
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.setCursor(x + 8, y + 8);
   tft.print(label);
-
   tft.setTextColor(color, C_WHITE);
   tft.setTextSize(2);
   tft.setCursor(x + 8, y + 28);
   tft.print(value);
-
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.setCursor(x + w - 34, y + 35);
@@ -5009,15 +3625,12 @@ void drawValueBox(int x, int y, int w, int h, const char* label, const char* val
   tft.fillRoundRect(x, y, w, h, 8, C_WHITE);
   tft.drawRoundRect(x, y, w, h, 8, C_BORDER);
   tft.setTextDatum(MC_DATUM);
-
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.drawString(label, x + w / 2, y + 15);
-
   tft.setTextColor(color, C_WHITE);
   tft.setTextSize(2);
   tft.drawString(value, x + w / 2, y + h / 2 + 4);
-
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.drawString(unit, x + w / 2, y + h - 13);
@@ -5026,20 +3639,15 @@ void drawValueBox(int x, int y, int w, int h, const char* label, const char* val
 
 void drawLineBar(int x, int y, int w, int h, float value, float minVal, float maxVal, uint16_t color, const char* label) {
   float p = (value - minVal) / (maxVal - minVal);
-  if (p < 0) p = 0;
-  if (p > 1) p = 1;
-
+  if (p < 0) p = 0; if (p > 1) p = 1;
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.setCursor(x, y - 12);
   tft.print(label);
-
   tft.drawRoundRect(x, y, w, h, 4, C_BORDER);
   tft.fillRoundRect(x + 2, y + 2, w - 4, h - 4, 3, 0xEF7D);
-
   int fillW = (int)((w - 4) * p);
   tft.fillRoundRect(x + 2, y + 2, fillW, h - 4, 3, color);
-
   tft.fillRect(x + w + 6, y - 4, 42, h + 8, C_WHITE);
   tft.setTextColor(C_DARK, C_WHITE);
   tft.setCursor(x + w + 8, y - 1);
@@ -5049,54 +3657,37 @@ void drawLineBar(int x, int y, int w, int h, float value, float minVal, float ma
 void drawSemiGauge(int x, int y, int r, float value, float minVal, float maxVal,
                    const char* label, const char* valueText, const char* unit,
                    uint16_t color) {
-  const int w = 140;
-  const int h = 108;
+  const int w = 140, h = 108;
   tft.fillRoundRect(x, y, w, h, 10, C_WHITE);
   tft.drawRoundRect(x, y, w, h, 10, C_BORDER);
-
-  int cx = x + w / 2;
-  int cy = y + 70;
-
+  int cx = x + w / 2, cy = y + 70;
   for (int a = 180; a <= 360; a += 6) {
     float rad = a * PI / 180.0f;
-    int x1 = cx + cos(rad) * (r - 8);
-    int y1 = cy + sin(rad) * (r - 8);
-    int x2 = cx + cos(rad) * r;
-    int y2 = cy + sin(rad) * r;
+    int x1 = cx + cos(rad) * (r - 8), y1 = cy + sin(rad) * (r - 8);
+    int x2 = cx + cos(rad) * r, y2 = cy + sin(rad) * r;
     tft.drawLine(x1, y1, x2, y2, C_GRID);
   }
-
   float p = (value - minVal) / (maxVal - minVal);
-  if (p < 0) p = 0;
-  if (p > 1) p = 1;
-
+  if (p < 0) p = 0; if (p > 1) p = 1;
   int endA = 180 + (int)(180.0f * p);
   for (int a = 180; a <= endA; a += 4) {
     float rad = a * PI / 180.0f;
-    int x1 = cx + cos(rad) * (r - 10);
-    int y1 = cy + sin(rad) * (r - 10);
-    int x2 = cx + cos(rad) * r;
-    int y2 = cy + sin(rad) * r;
+    int x1 = cx + cos(rad) * (r - 10), y1 = cy + sin(rad) * (r - 10);
+    int x2 = cx + cos(rad) * r, y2 = cy + sin(rad) * r;
     tft.drawLine(x1, y1, x2, y2, color);
   }
-
   float needleRad = endA * PI / 180.0f;
-  int nx = cx + cos(needleRad) * (r - 18);
-  int ny = cy + sin(needleRad) * (r - 18);
+  int nx = cx + cos(needleRad) * (r - 18), ny = cy + sin(needleRad) * (r - 18);
   tft.drawLine(cx, cy, nx, ny, color);
   tft.fillCircle(cx, cy, 4, color);
-
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.drawString(label, cx, y + 12);
-
-  // Semua nilai gauge berada di tengah bawah gauge.
   tft.fillRect(x + 14, y + 80, w - 28, 22, C_WHITE);
   tft.setTextColor(color, C_WHITE);
   tft.setTextSize(2);
   tft.drawString(valueText, cx - 8, y + 91);
-
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
   tft.drawString(unit, cx + 44, y + 94);
@@ -5106,9 +3697,7 @@ void drawSemiGauge(int x, int y, int r, float value, float minVal, float maxVal,
 void drawHeaderStatusDots(bool force) {
   static bool lastLink = false, lastWifi = false, lastMqtt = false, lastSd = false;
   bool nowMqtt = mqtt.connected();
-
   drawHeaderClock(force);
-
   if (force || lastLink != linkOK) {
     tft.fillCircle(315, 28, 6, C_PRIMARY);
     tft.fillCircle(315, 28, 5, linkOK ? C_GREEN : C_RED);
@@ -5132,22 +3721,11 @@ void drawHeaderStatusDots(bool force) {
 }
 
 void drawBottomNav() {
-  int y = 292;
-  int h = 26;
-
-  uint16_t colors[2] = {
-    activePage == PAGE_GENERATOR ? C_PRIMARY : C_WHITE,
-    activePage == PAGE_ENGINE ? C_PRIMARY : C_WHITE
-  };
-
-  uint16_t texts[2] = {
-    activePage == PAGE_GENERATOR ? C_WHITE : C_PRIMARY,
-    activePage == PAGE_ENGINE ? C_WHITE : C_PRIMARY
-  };
-
+  int y = 292, h = 26;
+  uint16_t colors[2] = { activePage == PAGE_GENERATOR ? C_PRIMARY : C_WHITE, activePage == PAGE_ENGINE ? C_PRIMARY : C_WHITE };
+  uint16_t texts[2] = { activePage == PAGE_GENERATOR ? C_WHITE : C_PRIMARY, activePage == PAGE_ENGINE ? C_WHITE : C_PRIMARY };
   const char* labels[2] = {"GENERATOR", "ENGINE"};
   int xs[2] = {10, 245};
-
   for (int i = 0; i < 2; i++) {
     tft.fillRoundRect(xs[i], y, 225, h, 8, colors[i]);
     tft.drawRoundRect(xs[i], y, 225, h, 8, C_PRIMARY);
@@ -5168,16 +3746,10 @@ void drawGeneratorPage(bool full) {
   static bool lastSynced = false;
   static String lastSyncStatus = "";
   static uint32_t lastDrawnAggregateSeq = 0;
-
   AggregatedData d;
   uint32_t currentAggregateSeq = displayAggregateSeq;
   bool forceValueUpdate = full || currentAggregateSeq != lastDrawnAggregateSeq;
-
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    d = aggData;
-    xSemaphoreGive(dataMutex);
-  }
-
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { d = aggData; xSemaphoreGive(dataMutex); }
   if (full || !initialized) {
     tft.fillScreen(C_BG);
     drawHeader("GENERATOR MONITOR");
@@ -5189,51 +3761,41 @@ void drawGeneratorPage(bool full) {
   } else {
     drawHeaderStatusDots(false);
   }
-
   if (forceValueUpdate || changedFloat(lastVoltGen, d.voltAvg, 0.5f)) {
     drawSemiGauge(14, 52, 46, d.voltAvg, 180.0f, 250.0f, "VOLT GEN", fmtF(d.voltAvg, 0), "V",
                   valColor(d.voltAvg, THRESH_VOLT_WARN_HI, THRESH_VOLT_CRIT_HI, THRESH_VOLT_WARN_LO, THRESH_VOLT_CRIT_LO));
     lastVoltGen = d.voltAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastFreqGen, d.freqAvg, 0.02f)) {
     drawSemiGauge(170, 52, 46, d.freqAvg, 45.0f, 55.0f, "FREQ GEN", fmtF(d.freqAvg, 2), "Hz",
                   valColor(d.freqAvg, THRESH_FREQ_WARN_HI, THRESH_FREQ_CRIT_HI, THRESH_FREQ_WARN_LO, THRESH_FREQ_CRIT_LO));
     lastFreqGen = d.freqAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastVoltGrid, d.voltGridAvg, 0.5f)) {
     drawSemiGauge(14, 170, 46, d.voltGridAvg, 180.0f, 250.0f, "VOLT GRID", fmtF(d.voltGridAvg, 0), "V",
                   valColor(d.voltGridAvg, THRESH_VOLT_WARN_HI, THRESH_VOLT_CRIT_HI, THRESH_VOLT_WARN_LO, THRESH_VOLT_CRIT_LO));
     lastVoltGrid = d.voltGridAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastFreqGrid, d.freqGridAvg, 0.02f)) {
     drawSemiGauge(170, 170, 46, d.freqGridAvg, 45.0f, 55.0f, "FREQ GRID", fmtF(d.freqGridAvg, 2), "Hz",
                   valColor(d.freqGridAvg, THRESH_FREQ_WARN_HI, THRESH_FREQ_CRIT_HI, THRESH_FREQ_WARN_LO, THRESH_FREQ_CRIT_LO));
     lastFreqGrid = d.freqGridAvg;
   }
-
-  // Right-side cards: PHASE, POWER, CURRENT, SYNC STATUS.
-  // Semua card hanya di-render ulang jika nilainya berubah atau saat ganti page.
   if (forceValueUpdate || changedFloat(lastPhase, d.phaseAngleAvg, 0.1f)) {
     drawValueBox(326, 50, 140, 50, "PHASE", fmtF(d.phaseAngleAvg, 1), "deg",
                  abs(d.phaseAngleAvg) < THRESH_PHASE_WARN_ABS ? C_GREEN : abs(d.phaseAngleAvg) < THRESH_PHASE_CRIT_ABS ? C_YELLOW : C_RED);
     lastPhase = d.phaseAngleAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastPowerKW, d.powerAvg, 0.02f)) {
     drawValueBox(326, 106, 140, 50, "POWER", fmtF(d.powerAvg, 2), "kW",
                  valColor(d.powerAvg, THRESH_POWER_WARN_HI, THRESH_POWER_CRIT_HI, -1e9, -1e9));
     lastPowerKW = d.powerAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastCurrentA, d.currentAvg, 0.1f)) {
     drawValueBox(326, 162, 140, 50, "CURRENT", fmtF(d.currentAvg, 1), "A",
                  valColor(d.currentAvg, THRESH_CURRENT_WARN_HI, THRESH_CURRENT_CRIT_HI, -1e9, -1e9));
     lastCurrentA = d.currentAvg;
   }
-
   const char* syncStatus = getDisplaySyncTextFromAggregate(d);
   if (forceValueUpdate || full || d.synced != lastSynced || lastSyncStatus != String(syncStatus)) {
     uint16_t syncColor = strcmp(syncStatus, "OFF") == 0 ? C_RED : (strcmp(syncStatus, "GENSET") == 0 ? C_YELLOW : (strcmp(syncStatus, "GRID") == 0 ? C_BLUE2 : C_GREEN));
@@ -5241,24 +3803,18 @@ void drawGeneratorPage(bool full) {
     lastSynced = d.synced;
     lastSyncStatus = syncStatus;
   }
-
   lastDrawnAggregateSeq = currentAggregateSeq;
 }
+
 void drawEnginePage(bool full) {
   static bool initialized = false;
   static float lastRpm = NAN, lastAfr = NAN, lastMap = NAN;
   static float lastTps = NAN, lastFuel = NAN, lastClt = NAN, lastIat = NAN, lastBatt = NAN;
   static uint32_t lastDrawnAggregateSeq = 0;
-
   AggregatedData d;
   uint32_t currentAggregateSeq = displayAggregateSeq;
   bool forceValueUpdate = full || currentAggregateSeq != lastDrawnAggregateSeq;
-
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    d = aggData;
-    xSemaphoreGive(dataMutex);
-  }
-
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { d = aggData; xSemaphoreGive(dataMutex); }
   if (full || !initialized) {
     tft.fillScreen(C_BG);
     drawHeader("ENGINE MONITOR");
@@ -5269,189 +3825,58 @@ void drawEnginePage(bool full) {
   } else {
     drawHeaderStatusDots(false);
   }
-
   if (forceValueUpdate || changedFloat(lastRpm, d.rpmAvg, 5.0f)) {
     drawSemiGauge(14, 52, 46, d.rpmAvg, 0.0f, 6000.0f, "ENGINE RPM", fmtF(d.rpmAvg, 0), "rpm",
                   valColor(d.rpmAvg, THRESH_RPM_WARN_HI, THRESH_RPM_CRIT_HI, -1e9, -1e9));
     lastRpm = d.rpmAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastAfr, d.afrAvg, 0.05f)) {
     drawSemiGauge(170, 52, 46, d.afrAvg, 10.0f, 20.0f, "AFR", fmtF(d.afrAvg, 1), "",
                   valColor(d.afrAvg, THRESH_AFR_WARN_HI, THRESH_AFR_CRIT_HI, THRESH_AFR_WARN_LO, THRESH_AFR_CRIT_LO));
     lastAfr = d.afrAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastMap, d.mapAvg, 0.5f)) {
     drawSemiGauge(326, 52, 46, d.mapAvg, 20.0f, 105.0f, "MAP", fmtF(d.mapAvg, 0), "kPa",
                   valColor(d.mapAvg, THRESH_MAP_WARN_HI, THRESH_MAP_CRIT_HI, -1e9, -1e9));
     lastMap = d.mapAvg;
   }
-
-  // Panel frame dibuat hanya pada full redraw/first draw. Setelah itu,
-  // update hanya bar/card yang nilainya berubah agar TFT tidak menggambar ulang
-  // satu panel penuh untuk perubahan kecil.
   if (forceValueUpdate || full || isnan(lastTps) || isnan(lastFuel)) {
     drawPanel(14, 172, 220, 102, "FUEL & THROTTLE");
   }
-
   if (forceValueUpdate || changedFloat(lastTps, d.tpsAvg, 0.5f)) {
     drawLineBar(28, 214, 145, 12, d.tpsAvg, 0.0f, 100.0f, C_GREEN, "TPS");
     lastTps = d.tpsAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastFuel, d.fuelAvg, 0.5f)) {
     drawLineBar(28, 253, 145, 12, d.fuelAvg, 0.0f, 100.0f,
                 d.fuelAvg > THRESH_FUEL_WARN_LO ? C_GREEN : d.fuelAvg > THRESH_FUEL_CRIT_LO ? C_YELLOW : C_RED, "Fuel");
     lastFuel = d.fuelAvg;
   }
-
   if (forceValueUpdate || full || isnan(lastBatt) || isnan(lastIat) || isnan(lastClt)) {
     drawPanel(246, 172, 220, 102, "THERMAL & POWER");
   }
-
   if (forceValueUpdate || changedFloat(lastBatt, d.battAvg, 0.05f)) {
     drawValueCard(256, 205, 62, 58, "Battery", fmtF(d.battAvg, 1), "V",
                   valColor(d.battAvg, THRESH_BATT_WARN_HI, THRESH_BATT_CRIT_HI, THRESH_BATT_WARN_LO, THRESH_BATT_CRIT_LO));
     lastBatt = d.battAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastIat, d.iatAvg, 0.5f)) {
     drawValueCard(326, 205, 62, 58, "IAT", fmtF(d.iatAvg, 0), "C",
                   valColor(d.iatAvg, THRESH_IAT_WARN_HI, THRESH_IAT_CRIT_HI, -1e9, -1e9));
     lastIat = d.iatAvg;
   }
-
   if (forceValueUpdate || changedFloat(lastClt, d.cltAvg, 0.5f)) {
     drawValueCard(396, 205, 62, 58, "Coolant", fmtF(d.cltAvg, 0), "C",
                   valColor(d.cltAvg, THRESH_CLT_WARN_HI, THRESH_CLT_CRIT_HI, -1e9, -1e9));
     lastClt = d.cltAvg;
   }
-
   lastDrawnAggregateSeq = currentAggregateSeq;
 }
 
-void drawFFTPage(bool full) {
-  static bool initialized = false;
-  static uint8_t lastSource = 255;
-  static bool lastValid = false;
-  static float lastPeakHz = NAN, lastPeakMag = NAN, lastRms = NAN;
-
-  FFTData f;
-
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    f = fftData;
-    xSemaphoreGive(dataMutex);
-  }
-
-  bool needSpectrumRedraw = full || !initialized || fftSelectedSource != lastSource ||
-                            f.valid != lastValid ||
-                            changedFloat(lastPeakHz, f.peakHz, 0.05f) ||
-                            changedFloat(lastPeakMag, f.peakMagnitude, 0.002f) ||
-                            changedFloat(lastRms, f.rms, 0.002f);
-
-  if (full || !initialized) {
-    tft.fillScreen(C_BG);
-    drawHeader("FFT EDGE MONITOR");
-    drawBottomNav();
-    initialized = true;
-  } else {
-    drawHeaderStatusDots(false);
-  }
-
-  if (!needSpectrumRedraw) return;
-
-  drawPanel(14, 55, 452, 222, "FFT SPECTRUM - X:FREQUENCY, Y:MAGNITUDE");
-
-  int gx = 46;
-  int gy = 92;
-  int gw = 382;
-  int gh = 135;
-
-  tft.fillRect(gx, gy, gw, gh, C_WHITE);
-  tft.drawRect(gx, gy, gw, gh, C_BORDER);
-
-  for (int i = 0; i <= 4; i++) {
-    int yy = gy + i * gh / 4;
-    tft.drawLine(gx, yy, gx + gw, yy, C_GRID);
-  }
-
-  for (int i = 0; i <= 8; i++) {
-    int xx = gx + i * gw / 8;
-    tft.drawLine(xx, gy, xx, gy + gh, C_GRID);
-  }
-
-  tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(gx + 132, gy + gh + 13);
-  tft.print("X: Frequency (Hz)");
-  tft.setCursor(16, gy + 55);
-  tft.print("Y: Mag");
-
-  if (f.valid) {
-    float maxMag = 0.001f;
-    for (uint16_t i = 1; i < FFT_BINS_TO_SEND; i++) {
-      if (f.magBins[i] > maxMag) maxMag = f.magBins[i];
-    }
-
-    int prevX = gx;
-    int prevY = gy + gh;
-
-    for (uint16_t i = 1; i < FFT_BINS_TO_SEND; i++) {
-      int x = gx + map(i, 1, FFT_BINS_TO_SEND - 1, 0, gw);
-      int y = gy + gh - (int)((f.magBins[i] / maxMag) * (gh - 6));
-      if (y < gy) y = gy;
-
-      tft.drawLine(prevX, prevY, x, y, C_PRIMARY);
-      tft.fillCircle(x, y, 2, C_PRIMARY);
-      prevX = x;
-      prevY = y;
-    }
-
-    tft.setTextColor(C_DARK, C_WHITE);
-    tft.setTextSize(1);
-    tft.setCursor(52, 248);
-    tft.print("SRC=");
-    tft.print(getFFTSourceName());
-    tft.print("  Peak X=");
-    tft.print(f.peakHz, 2);
-    tft.print("Hz  Y=");
-    tft.print(f.peakMagnitude, 4);
-    tft.print("  RMS=");
-    tft.print(f.rms, 3);
-  } else {
-    tft.setTextColor(C_MUTED, C_WHITE);
-    tft.setTextSize(2);
-    tft.setCursor(130, 150);
-    tft.print("FFT BUFFERING...");
-  }
-
-  tft.setTextColor(C_MUTED, C_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(52, 265);
-  tft.print("Serial: fft source voltgen | fft source voltgrid | fft source rpm");
-
-  lastSource = fftSelectedSource;
-  lastValid = f.valid;
-  lastPeakHz = f.peakHz;
-  lastPeakMag = f.peakMagnitude;
-  lastRms = f.rms;
-}
-
 void drawCurrentPage(bool full) {
-  // full=true hanya dipakai ketika ganti halaman / command redraw.
-  // Saat full=false, setiap page hanya menggambar komponen yang nilainya berubah
-  // berdasarkan cache lastX masing-masing page.
   uint32_t drawStart = micros();
-
-  if (activePage == PAGE_GENERATOR) {
-    drawGeneratorPage(full);
-  } else if (activePage == PAGE_ENGINE) {
-    drawEnginePage(full);
-  } else {
-    drawEnginePage(full);
-  }
-
+  if (activePage == PAGE_GENERATOR) drawGeneratorPage(full);
+  else drawEnginePage(full);
   perfTftDrawUs = micros() - drawStart;
   perfUpdateStat(acqMon.tftDrawUs, perfTftDrawUs);
   lastTftDrawMs = millis();
@@ -5462,61 +3887,33 @@ void drawCurrentPage(bool full) {
 // ============================================================
 void readTouchMapped(int &x, int &y, int &rawX, int &rawY) {
   TS_Point p = ts.getPoint();
-  rawX = p.x;
-  rawY = p.y;
-
-  // Mapping umum untuk FT6206 480x320 rotation landscape.
-  // Jika hasil terbalik, gunakan command "calibrate" untuk melihat raw X/Y,
-  // lalu sesuaikan rumus di bawah.
+  rawX = p.x; rawY = p.y;
   x = map(rawY, 0, 480, 0, 480);
   y = map(rawX, 0, 320, 320, 0);
-
-  if (x < 0) x = 0;
-  if (x > SW) x = SW;
-  if (y < 0) y = 0;
-  if (y > SH) y = SH;
+  if (x < 0) x = 0; if (x > SW) x = SW;
+  if (y < 0) y = 0; if (y > SH) y = SH;
 }
 
 void handleTouchNavigation() {
   if (!touchDetected) return;
   if (!ts.touched()) return;
-
   static unsigned long lastTouchMs = 0;
-  static int lastTouchedPage = -1;
-
-  // Debounce touch agar 1 tap tidak terbaca berkali-kali.
   if (millis() - lastTouchMs < 180UL) return;
-
   int x, y, rawX, rawY;
   readTouchMapped(x, y, rawX, rawY);
-
   if (serialTouchDebug || touchCalibrationMode) {
-    Serial.println();
-    Serial.println("════════════ TOUCH POINT ════════════");
+    Serial.println(); Serial.println("════════════ TOUCH POINT ════════════");
     Serial.print("Raw X : "); Serial.println(rawX);
     Serial.print("Raw Y : "); Serial.println(rawY);
     Serial.print("Map X : "); Serial.println(x);
     Serial.print("Map Y : "); Serial.println(y);
     Serial.println("═════════════════════════════════════");
   }
-
   if (touchCalibrationMode) {
-    Serial.print("[CAL] ");
-    Serial.print(calPoints[calIndex].name);
-    Serial.print(" target=(");
-    Serial.print(calPoints[calIndex].sx);
-    Serial.print(",");
-    Serial.print(calPoints[calIndex].sy);
-    Serial.print(") raw=(");
-    Serial.print(rawX);
-    Serial.print(",");
-    Serial.print(rawY);
-    Serial.print(") map=(");
-    Serial.print(x);
-    Serial.print(",");
-    Serial.print(y);
-    Serial.println(")");
-
+    Serial.print("[CAL] "); Serial.print(calPoints[calIndex].name);
+    Serial.print(" target=("); Serial.print(calPoints[calIndex].sx); Serial.print(","); Serial.print(calPoints[calIndex].sy);
+    Serial.print(") raw=("); Serial.print(rawX); Serial.print(","); Serial.print(rawY);
+    Serial.print(") map=("); Serial.print(x); Serial.print(","); Serial.print(y); Serial.println(")");
     calIndex++;
     if (calIndex >= sizeof(calPoints) / sizeof(calPoints[0])) {
       Serial.println("[CAL] Calibration sampling selesai.");
@@ -5524,47 +3921,32 @@ void handleTouchNavigation() {
       touchCalibrationMode = false;
       calIndex = 0;
     }
-
     lastTouchMs = millis();
     return;
   }
-
   int targetPage = -1;
-
   auto navHit = [](int tx, int ty) -> int {
-    // Area navbar bawah layar dibuat sedikit lebih tinggi agar tap tetap masuk
-    // walaupun mapping touch FT6206 bergeser beberapa piksel.
     if (ty < 270 || ty > 320) return -1;
     if (tx >= 0 && tx <= 240) return PAGE_GENERATOR;
     if (tx >= 240 && tx <= 480) return PAGE_ENGINE;
     return -1;
   };
-
   targetPage = navHit(x, y);
-
-  // Fallback untuk modul FT6206 yang orientasi raw-nya berbeda setelah TFT rotation(1).
-  // Ini membuat tombol bawah tetap bisa pindah page tanpa harus reflash hanya untuk kalibrasi.
   if (targetPage < 0) targetPage = navHit(rawY, rawX);
   if (targetPage < 0) targetPage = navHit(rawY, 320 - rawX);
   if (targetPage < 0) targetPage = navHit(480 - rawY, rawX);
-
   if (targetPage >= 0) {
     lastTouchMs = millis();
-
     if (targetPage != activePage) {
       activePage = targetPage;
       needFullRedraw = true;
-      lastDraw = 0;   // paksa redraw segera pada loop berikutnya
-
+      lastDraw = 0;
       Serial.print(F("[TOUCH] Page changed to "));
       if (activePage == PAGE_GENERATOR) Serial.println(F("GENERATOR"));
       else Serial.println(F("ENGINE"));
     }
-
-    lastTouchedPage = targetPage;
   }
 }
-
 
 // ============================================================
 // PAPER VALIDATION REPORT FUNCTIONS
@@ -5582,7 +3964,6 @@ void resetPaperValidationCounters() {
   rxBufferResetCount = 0;
   fastAggCompleted = 0;
   fastAggUnderfilled = 0;
-
   paperValidationActive = true;
   paperValidationStartMs = millis();
   paperStartFrameReceived = acqMon.frameReceived;
@@ -5597,9 +3978,7 @@ void resetPaperValidationCounters() {
   paperStartMongoSent = mongoDbTotalSentRecords;
   paperStartMongoFail = mongoUploadFailCount;
   lastPaperTickerMs = millis();
-
-  Serial.println();
-  Serial.println(F("╔════════════════ PAPER VALIDATION START ════════════════╗"));
+  Serial.println(); Serial.println(F("╔════════════════ PAPER VALIDATION START ════════════════╗"));
   Serial.println(F("║ Counter pengujian paper di-reset.                     ║"));
   Serial.println(F("║ Jalankan sistem selama durasi uji, lalu ketik: paper  ║"));
   Serial.println(F("║ Rekomendasi: 5-10 menit untuk UART/MQTT/SD, 10 menit  ║"));
@@ -5622,7 +4001,6 @@ void printPaperCsvSummary(float runtimeSec,
                           float sdAvgUs,
                           float mqttAvgUs,
                           float tftAvgUs,
-                          float fftAvgUs,
                           uint32_t mongoRecordBytesNoFft,
                           uint32_t mongoAvgSentRecordBytesNoFft,
                           uint64_t mongoPayload10yNoFft,
@@ -5648,7 +4026,6 @@ void printPaperCsvSummary(float runtimeSec,
   Serial.print(sdAvgUs, 1); Serial.print(',');
   Serial.print(mqttAvgUs, 1); Serial.print(',');
   Serial.print(tftAvgUs, 1); Serial.print(',');
-  Serial.print(fftAvgUs, 1); Serial.print(',');
   Serial.print(mongoRecordBytesNoFft); Serial.print(',');
   Serial.print(mongoAvgSentRecordBytesNoFft); Serial.print(',');
   Serial.print((double)mongoPayload10yNoFft / 1024.0 / 1024.0, 2); Serial.print(',');
@@ -5657,123 +4034,46 @@ void printPaperCsvSummary(float runtimeSec,
 
 void printPaperValidationReport() {
   updateStorageCache();
-
   uint32_t nowMs = millis();
-  float runtimeSec = paperValidationActive
-                   ? max(1.0f, (nowMs - paperValidationStartMs) / 1000.0f)
-                   : max(1.0f, (nowMs - acqMon.startMs) / 1000.0f);
-
+  float runtimeSec = paperValidationActive ? max(1.0f, (nowMs - paperValidationStartMs) / 1000.0f) : max(1.0f, (nowMs - acqMon.startMs) / 1000.0f);
   uint32_t frameReceived = acqMon.frameReceived - paperStartFrameReceived;
   uint32_t frameValid = acqMon.frameValid - paperStartFrameValid;
   uint32_t frameFailed = acqMon.frameParseFailed - paperStartFrameParseFailed;
   uint32_t lostFrame = acqMon.lostFrame - paperStartLostFrame;
   uint32_t duplicateFrame = acqMon.duplicateFrame - paperStartDuplicateFrame;
-
   uint32_t sdOk = sdSaveSuccessCount - paperStartSdOk;
   uint32_t sdFail = sdSaveFailCount - paperStartSdFail;
   uint32_t mqttOk = mqttPublishSuccessCount - paperStartMqttOk;
   uint32_t mqttFail = mqttPublishFailCount - paperStartMqttFail;
   uint32_t mongoSent = mongoDbTotalSentRecords - paperStartMongoSent;
   uint32_t mongoFail = mongoUploadFailCount - paperStartMongoFail;
-
-  float expectedSdRecords = (float)(sdOk + sdFail); // SD sekarang hanya backup saat jaringan/server bermasalah.
+  float expectedSdRecords = (float)(sdOk + sdFail);
   float sdReliabilityPct = (expectedSdRecords <= 0.0f) ? 100.0f : safePercentFloat((float)sdOk, expectedSdRecords);
   if (sdReliabilityPct > 100.0f) sdReliabilityPct = 100.0f;
-
   float frameSuccessPct = safePercentFloat((float)frameValid, (float)frameReceived);
   float uartLossPct = safePercentFloat((float)lostFrame, (float)(frameValid + lostFrame));
   float mqttReliabilityPct = safePercentFloat((float)mqttOk, (float)(mqttOk + mqttFail));
   float mongoConsistencyPct = safePercentFloat((float)mongoSent, (float)max(1UL, (unsigned long)sdOk));
   if (mongoConsistencyPct > 100.0f) mongoConsistencyPct = 100.0f;
-
   float uartAvgMs = perfAvgStat(acqMon.uartFrameIntervalMs);
   float uartMinMs = perfMinStat(acqMon.uartFrameIntervalMs);
   float uartMaxMs = acqMon.uartFrameIntervalMs.count == 0 ? 0.0f : (float)acqMon.uartFrameIntervalMs.maxVal;
-  float sensorAvgMs = perfAvgStat(acqMon.sensorIntervalMs);
-
   float sensorTaskAvgUs = perfAvgStat(acqMon.sensorTaskUs);
-  float uartReadAvgUs = perfAvgStat(acqMon.uartReadUs);
   float csvParseAvgUs = perfAvgStat(acqMon.csvParseUs);
   float aggregationAvgUs = perfAvgStat(acqMon.aggregationUs);
   float sdAvgUs = perfAvgStat(acqMon.sdSaveUs);
   float mqttAvgUs = perfAvgStat(acqMon.mqttPublishUs);
   float tftAvgUs = perfAvgStat(acqMon.tftDrawUs);
-  float fftAvgUs = perfAvgStat(acqMon.fftComputeUs);
-
-  uint32_t mongoRecordBytesNoFft = getMongoRecordBytesNoFft();
-  uint32_t mongoAvgSentRecordBytesNoFft = getMongoAvgSentRecordBytesNoFft();
-  uint64_t mongoPayload10yNoFft = estimateMongoPayloadBytesNoFft10Years(mongoAvgSentRecordBytesNoFft);
-  uint64_t mongoStorage10yNoFft = estimateMongoStorageBytesNoFft10Years(mongoAvgSentRecordBytesNoFft);
-  float mongoRecordsPerSec = 1000.0f / (float)localSaveInterval;
-
-  bool uartIntervalPass = (uartAvgMs > 0.0f && uartAvgMs <= 200.0f);
-  bool aggregationPass = (AGGREGATION_INTERVAL_MS >= 100UL && AGGREGATION_INTERVAL_MS <= 1000UL);
-  bool mqttIntervalPass = (publishInterval <= 1000UL);
-  bool sdIntervalPass = (localSaveInterval == 1000UL);
-  bool sdReliabilityPass = (sdReliabilityPct >= 99.0f);
-  bool mqttReliabilityPass = (mqttReliabilityPct >= 99.0f || (mqttOk == 0 && mqttFail == 0));
-  bool packetLossPass = (uartLossPct < 1.0f);
-  bool deadlinePass = (sensorMissedDeadlines == 0);
-  bool mongoBatchPass = (MONGODB_BATCH_INTERVAL_MS == SPEC_DATABASE_TARGET_MS);
-  bool localInterfacePass = (perfAvgStat(acqMon.tftDrawUs) > 0.0f || lastTftDrawMs > 0);
-
-  Serial.println();
-  Serial.println(F("╔════════════════ IEEE PAPER VALIDATION REPORT ════════════════╗"));
-  Serial.print  (F("║ Test runtime                 : ")); Serial.print(runtimeSec, 1); Serial.println(F(" s"));
-  Serial.print  (F("║ Device ID                    : ")); Serial.println(DEVICE_ID);
-
-  Serial.println(F("╠════════════ COMMUNICATION PERFORMANCE ═════════════╣"));
-  Serial.print  (F("║ UART baud rate               : ")); Serial.print(LINK_BAUD); Serial.println(F(" bps"));
-  Serial.print  (F("║ UART frame interval avg      : ")); Serial.print(uartAvgMs, 2); Serial.println(F(" ms"));
-  Serial.print  (F("║ UART throughput              : ")); Serial.print(frameReceived / runtimeSec, 2); Serial.print(F(" frame/s | ")); Serial.print(acqMon.rxBytes / runtimeSec, 1); Serial.println(F(" B/s"));
-  Serial.print  (F("║ UART packet loss             : ")); Serial.print(uartLossPct, 3); Serial.println(F(" %"));
-  Serial.print  (F("║ Frame valid/fail             : ")); Serial.print(frameValid); Serial.print(F(" / ")); Serial.println(frameFailed);
-  Serial.print  (F("║ Frame success rate           : ")); Serial.print(frameSuccessPct, 2); Serial.println(F(" %"));
-  Serial.print  (F("║ Duplicate frame              : ")); Serial.println(duplicateFrame);
-  Serial.print  (F("║ Aggregation interval         : ")); Serial.print(AGGREGATION_INTERVAL_MS); Serial.println(F(" ms")); 
-  Serial.print  (F("║ MQTT publish interval        : ")); Serial.print(publishInterval); Serial.println(F(" ms")); 
-  Serial.print  (F("║ MQTT delivery reliability    : ")); Serial.print(mqttReliabilityPct, 2); Serial.println(F(" %")); 
-
-  Serial.println(F("╠════════════ DATA MANAGEMENT EVALUATION ═══════════╣"));
-  Serial.print  (F("║ SD backup policy             : ")); Serial.println(F("ONLY when WiFi/MQTT/server/buffer problem"));
-  Serial.print  (F("║ SD check interval            : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
-  Serial.print  (F("║ Expected SD backup records   : ")); Serial.println(expectedSdRecords, 0);
-  Serial.print  (F("║ Stored SD backup OK/FAIL     : ")); Serial.print(sdOk); Serial.print(F(" / ")); Serial.println(sdFail);
-  Serial.print  (F("║ SD backup records total      : ")); Serial.println(sdBackupRecordCount);
-  Serial.print  (F("║ SD skipped online total      : ")); Serial.println(sdBackupSkipOnlineCount);
-  Serial.print  (F("║ SD logging reliability       : ")); Serial.print(sdReliabilityPct, 2); Serial.println(F(" %"));
-  Serial.print  (F("║ Last CSV row size            : ")); Serial.print(dbLastLineBytes); Serial.println(F(" B/record"));
-  Serial.print  (F("║ Current SD Card size         : ")); Serial.println(formatBytes(dbCachedFileSizeBytes));
-  Serial.print  (F("║ Estimated SD 7 days          : ")); Serial.println(formatBytes((uint64_t)((float)dbLastLineBytes * 86400.0f * 7.0f)));
-  Serial.print  (F("║ MongoDB batch interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
-  Serial.print  (F("║ MongoDB sent records         : ")); Serial.println(mongoSent);
-  Serial.print  (F("║ MongoDB failed batch count   : ")); Serial.println(mongoFail);
-  Serial.print  (F("║ Last MQTT state              : ")); Serial.println(mongoUploadLastHttpCode);
-  Serial.print  (F("║ MongoDB record size          : ")); Serial.print(mongoRecordBytesNoFft); Serial.println(F(" B/record"));
-  Serial.print  (F("║ MongoDB avg sent record      : ")); Serial.print(mongoAvgSentRecordBytesNoFft); Serial.println(F(" B/record"));
-  Serial.print  (F("║ MongoDB records rate         : ")); Serial.print(mongoRecordsPerSec, 3); Serial.println(F(" record/s"));
-  Serial.print  (F("║ Est. MongoDB payload 10 year : ")); Serial.println(formatBytes(mongoPayload10yNoFft));
-
-  Serial.println(F("╠════════════ COMPUTATION PERFORMANCE ══════════╣"));
-  Serial.print  (F("║ Sensor interval avg          : ")); Serial.print(sensorAvgMs, 2); Serial.println(F(" ms"));
-  Serial.print  (F("║ SensorTask avg               : ")); Serial.print(sensorTaskAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ UART read avg                : ")); Serial.print(uartReadAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ CSV parse avg                : ")); Serial.print(csvParseAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ Aggregation avg              : ")); Serial.print(aggregationAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ SD append avg                : ")); Serial.print(sdAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ MQTT publish avg             : ")); Serial.print(mqttAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ TFT draw avg                 : ")); Serial.print(tftAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ FFT disabled avg             : ")); Serial.print(fftAvgUs, 1); Serial.println(F(" us"));
-  Serial.print  (F("║ Missed deadline 20 ms        : ")); Serial.println(sensorMissedDeadlines);
-
-
+  uint32_t mongoRecordBytesNoFft = 0; // tidak dipakai
+  uint32_t mongoAvgSentRecordBytesNoFft = 0;
+  uint64_t mongoPayload10yNoFft = 0;
+  uint64_t mongoStorage10yNoFft = 0;
   printPaperCsvSummary(runtimeSec, uartAvgMs, uartMinMs, uartMaxMs, uartLossPct,
                        frameSuccessPct, sdReliabilityPct, mqttReliabilityPct,
                        mongoConsistencyPct, sensorTaskAvgUs, csvParseAvgUs,
-                       aggregationAvgUs, sdAvgUs, mqttAvgUs, tftAvgUs, fftAvgUs,
+                       aggregationAvgUs, sdAvgUs, mqttAvgUs, tftAvgUs,
                        mongoRecordBytesNoFft, mongoAvgSentRecordBytesNoFft,
                        mongoPayload10yNoFft, mongoStorage10yNoFft);
-
   Serial.println(F("╚══════════════════════════════════════════════════════════════╝"));
 }
 
@@ -5793,84 +4093,8 @@ void printSerialHelp() {
   Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 2-5 menit, lalu ketik 'perf' atau 'db'."));
 }
 
-String buildCloudEstimateRecordOnly() {
-  AggregatedData a;
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    a = aggData;
-    xSemaphoreGive(dataMutex);
-  }
-
-  String json = "{";
-  json += "\"timestamp\":\"" + getIsoTimestampWIBms() + "\",";
-  json += "\"rpm\":" + String(a.rpmAvg, 1) + ",";
-  json += "\"tps\":" + String(a.tpsAvg, 1) + ",";
-  json += "\"map\":" + String(a.mapAvg, 1) + ",";
-  json += "\"iat\":" + String(a.iatAvg, 1) + ",";
-  json += "\"clt\":" + String(a.cltAvg, 1) + ",";
-  json += "\"afr\":" + String(a.afrAvg, 2) + ",";
-  json += "\"batt\":" + String(a.battAvg, 2) + ",";
-  json += "\"fuel\":" + String(a.fuelAvg, 1) + ",";
-  json += "\"freq\":" + String(a.freqAvg, 3) + ",";
-  json += "\"volt\":" + String(a.voltAvg, 2) + ",";
-  json += "\"currentA\":" + String(a.currentAvg, 2) + ",";
-  json += "\"powerKW\":" + String(a.powerAvg, 3) + ",";
-  json += "\"phase_diff\":" + String(a.phaseAngleAvg, 2) + ",";
-  json += "\"powerSource\":\"" + String(getPowerSourceFromAggregate(a)) + "\"";
-  json += "}";
-  return json;
-}
-
-
-// Estimasi kapasitas MongoDB untuk kebutuhan tabel Data Management IEEE.
-// Perhitungan ini memakai JSON parameter-only yang dikirim ke topic gen/data.
-// FFT sengaja tidak dihitung karena FFT hanya untuk analisis edge/realtime, bukan record utama MongoDB.
-#define MONGODB_ESTIMATION_YEARS 10UL
-#define MONGODB_STORAGE_OVERHEAD_FACTOR 1.2f
-
-uint32_t getMongoRecordBytesNoFft() {
-  // Prioritas 1: ukuran JSON parameter-only yang terakhir benar-benar disimpan ke buffer MongoDB.
-  // lastDatabaseJsonBytesCache sudah merepresentasikan record tanpa FFT dari buildJsonRecordParametersOnly().
-  if (lastDatabaseJsonBytesCache > 2) return lastDatabaseJsonBytesCache - 2; // cache menambahkan CR/LF, MQTT tidak mengirim CR/LF
-
-  // Prioritas 2: estimasi dari aggregate terakhir jika belum ada record tersimpan.
-  String estimateRecord = buildCloudEstimateRecordOnly();
-  return estimateRecord.length();
-}
-
-uint32_t getMongoAvgSentRecordBytesNoFft() {
-  if (mongoDbLastSentRecords > 0 && mongoDbLastPayloadBytes > 0) {
-    return mongoDbLastPayloadBytes / mongoDbLastSentRecords;
-  }
-  if (mongoUploadLastAckedRecords > 0 && mongoUploadLastPayloadBytes > 0) {
-    return mongoUploadLastPayloadBytes / mongoUploadLastAckedRecords;
-  }
-  return getMongoRecordBytesNoFft();
-}
-
-uint64_t estimateMongoPayloadBytesNoFft10Years(uint32_t recordBytes) {
-  // SD tetap 1 record per second mengikuti localSaveInterval = 1000 ms.
-  // Jika interval berubah, rumus otomatis menyesuaikan recordsPerDay.
-  if (recordBytes == 0) return 0;
-  double intervalSec = (double)localSaveInterval / 1000.0;
-  if (intervalSec <= 0.0) intervalSec = 1.0;
-
-  double recordsPerDay = 86400.0 / intervalSec;
-  double totalBytes = (double)recordBytes * recordsPerDay * 365.0 * (double)MONGODB_ESTIMATION_YEARS * MONGODB_STORAGE_OVERHEAD_FACTOR;
-  if (totalBytes < 0.0) totalBytes = 0.0;
-  return (uint64_t)totalBytes;
-}
-
-uint64_t estimateMongoStorageBytesNoFft10Years(uint32_t recordBytes) {
-  // Payload JSON × faktor overhead MongoDB.
-  // Faktor overhead mencakup field metadata BSON, struktur dokumen, dan index dasar.
-  double payloadBytes = (double)estimateMongoPayloadBytesNoFft10Years(recordBytes);
-  return (uint64_t)(payloadBytes * MONGODB_STORAGE_OVERHEAD_FACTOR);
-}
-
-
 void printMongoBufferStatus() {
   uint16_t bufferCount = mongoDbBufferCount;
-
   Serial.println();
   Serial.println(F("================ MONGODB 10-MIN BUFFER ================"));
   Serial.print  (F("  buffer records : ")); Serial.print(bufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
@@ -5879,15 +4103,6 @@ void printMongoBufferStatus() {
   Serial.print  (F("  last sent      : ")); Serial.print(mongoDbLastSentRecords); Serial.println(F(" records"));
   Serial.print  (F("  total sent     : ")); Serial.print(mongoDbTotalSentRecords); Serial.println(F(" records"));
   Serial.print  (F("  last payload   : ")); Serial.print(mongoDbLastPayloadBytes); Serial.println(F(" B"));
-  {
-    uint32_t recBytes = getMongoRecordBytesNoFft();
-    uint32_t avgSentBytes = getMongoAvgSentRecordBytesNoFft();
-    uint64_t payload10y = estimateMongoPayloadBytesNoFft10Years(avgSentBytes);
-    uint64_t storage10y = estimateMongoStorageBytesNoFft10Years(avgSentBytes);
-    Serial.print  (F("  record size    : ")); Serial.print(avgSentBytes); Serial.println(F(" B/record"));
-    Serial.print  (F("  est. payload 10y: ")); Serial.println(formatBytes(payload10y));
-    Serial.print  (F("  est. MongoDB 10y: ")); Serial.print(formatBytes(storage10y)); Serial.print(F(" @ overhead x")); Serial.println(MONGODB_STORAGE_OVERHEAD_FACTOR, 1);
-  }
   Serial.print  (F("  Publish OK/FAIL: ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
   Serial.print  (F("  last MQTT state  : ")); Serial.println(mongoUploadLastHttpCode);
   Serial.print  (F("  MQTT published   : ")); Serial.print(mongoDbLastAckResponseRecords); Serial.println(F(" records"));
@@ -5899,28 +4114,18 @@ void printMongoBufferStatus() {
   if (mongoDbLastSendMs == 0) Serial.println(F("never"));
   else { Serial.print((millis() - mongoDbLastSendMs) / 1000UL); Serial.println(F(" s ago")); }
   Serial.println(F("STATUS: buffer disimpan 10 menit, lalu dikirim satu batch ke topic gen/data untuk MongoDB."));
-  Serial.println(F("NOTE  : Serial monitor menampilkan buffer count, umur buffer, dan record terkirim ke MongoDB/backend."));
   Serial.println(F("======================================================="));
 }
 
 void printDatabaseReport() {
   updateStorageCache();
-  String cloudParamOnly = buildCloudEstimateRecordOnly();
-
   const float sdBytesPerSec = (float)dbLastLineBytes * STORAGE_BATCH_SIZE;
   const float sd7d = sdBytesPerSec * 86400.0f * 7.0f;
-  const uint32_t cloudRecordBytes = getMongoRecordBytesNoFft();
-  const uint32_t cloudAvgSentRecordBytes = getMongoAvgSentRecordBytesNoFft();
-  const float cloudBytesPerSec = (float)cloudAvgSentRecordBytes * (1000.0f / (float)localSaveInterval);
-  const uint64_t cloudPayload10y = estimateMongoPayloadBytesNoFft10Years(cloudAvgSentRecordBytes);
-  const uint64_t cloudStorage10y = estimateMongoStorageBytesNoFft10Years(cloudAvgSentRecordBytes);
-
   Serial.println();
   Serial.println(F("================ GENSYS DATA MANAGEMENT ================"));
   Serial.println(F("LOCAL SD / CSV"));
   Serial.print  (F("  status          : ")); Serial.println(sdOK ? F("READY") : F("NOT READY"));
   Serial.print  (F("  file            : ")); Serial.println(DB_FILE);
-  Serial.print  (F("  fft file        : ")); Serial.println(FFT_FILE);
   Serial.print  (F("  card size       : ")); Serial.println(formatBytes(sdCachedCardSizeBytes));
   Serial.print  (F("  used/free       : ")); Serial.print(formatBytes(sdCachedUsedBytes)); Serial.print(F(" / ")); Serial.println(formatBytes(sdCachedFreeBytes));
   Serial.print  (F("  csv size        : ")); Serial.println(formatBytes(dbCachedFileSizeBytes));
@@ -5938,7 +4143,6 @@ void printDatabaseReport() {
   Serial.print  (F("  MQTT send OK/FAIL: ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
   Serial.print  (F("  last MQTT state    : ")); Serial.println(mongoUploadLastHttpCode);
   Serial.println();
-
   Serial.println(F("CLOUD / MONGODB HISTORY - MQTT BUFFER PUBLISH BATCH (MAIN DATABASE FIELDS ONLY)"));
   Serial.print  (F("  realtime topic  : ")); Serial.println(MQTT_REALTIME_TOPIC);
   Serial.print  (F("  mongo topic     : ")); Serial.println(MQTT_TOPIC);
@@ -5947,104 +4151,56 @@ void printDatabaseReport() {
   Serial.print  (F("  buffer count    : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("  interval        : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
   Serial.print  (F("  last batch recs : ")); Serial.println(mongoUploadLastBatchRecords);
-  Serial.print  (F("  record size     : ")); Serial.print(cloudRecordBytes); Serial.println(F(" B/record"));
-  Serial.print  (F("  avg sent record : ")); Serial.print(cloudAvgSentRecordBytes); Serial.println(F(" B/record"));
+  Serial.print  (F("  record size     : ")); Serial.print(0); Serial.println(F(" B/record (est.)"));
   Serial.print  (F("  records/sec     : ")); Serial.println(1000.0f / (float)localSaveInterval, 3);
-  Serial.print  (F("  param rate      : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
-  Serial.print  (F("  est. storage 10y: ")); Serial.println(formatBytes(cloudPayload10y));
   Serial.print  (F("  MQTT send OK/FAIL: ")); Serial.print(mongoUploadSuccessRecords); Serial.print(F(" / ")); Serial.println(mongoUploadFailCount);
   Serial.print  (F("  sent total      : ")); Serial.println(mongoDbTotalSentRecords);
   Serial.println(F("========================================================"));
 }
 
 void printAcquisitionSpecReport() {
-  RawData r;
-  AggregatedData a;
-
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    r = latestRaw;
-    a = aggData;
-    xSemaphoreGive(dataMutex);
-  }
-
+  RawData r; AggregatedData a;
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { r = latestRaw; a = aggData; xSemaphoreGive(dataMutex); }
   const float runtimeSec = max(1.0f, (millis() - acqMon.startMs) / 1000.0f);
   const float frameRateHz = acqMon.frameReceived / runtimeSec;
   const float rxBytesPerSec = acqMon.rxBytes / runtimeSec;
   const float frameSuccessRate = acqMon.frameReceived > 0 ? (acqMon.frameValid * 100.0f / acqMon.frameReceived) : 0.0f;
-
   const float sensorAvgMs = perfAvgStat(acqMon.sensorIntervalMs);
   const float frameAvgMs  = perfAvgStat(acqMon.uartFrameIntervalMs);
   const float taskAvgUs   = perfAvgStat(acqMon.sensorTaskUs);
   const float taskBudgetUs = SENSOR_SAMPLE_INTERVAL_MS * 1000.0f;
-
   const float cpuAvgPct = taskBudgetUs > 0 ? taskAvgUs * 100.0f / taskBudgetUs : 0.0f;
-
-  const bool uartIntervalPass =
-    acqMon.uartFrameIntervalMs.count > 0 &&
-    frameAvgMs >= SPEC_ACQ_MIN_INTERVAL_MS &&
-    frameAvgMs <= SPEC_ACQ_MAX_INTERVAL_MS;
-
-  const bool recordIntervalPass =
-    lastFastAggIntervalMs >= SPEC_ACQ_MIN_INTERVAL_MS &&
-    lastFastAggIntervalMs <= SPEC_ACQ_MAX_INTERVAL_MS;
-
+  const bool uartIntervalPass = acqMon.uartFrameIntervalMs.count > 0 && frameAvgMs >= SPEC_ACQ_MIN_INTERVAL_MS && frameAvgMs <= SPEC_ACQ_MAX_INTERVAL_MS;
+  const bool recordIntervalPass = lastFastAggIntervalMs >= SPEC_ACQ_MIN_INTERVAL_MS && lastFastAggIntervalMs <= SPEC_ACQ_MAX_INTERVAL_MS;
   const bool deadlinePass = sensorMissedDeadlines == 0;
   const bool qualityPass = frameSuccessRate >= 99.0f && acqMon.lostFrame == 0;
   const bool realtimePass = uartIntervalPass && recordIntervalPass && deadlinePass && qualityPass;
-
-  const bool localSavePass =
-    localSaveInterval >= SPEC_ACQ_MIN_INTERVAL_MS &&
-    localSaveInterval <= SPEC_ACQ_MAX_INTERVAL_MS;
-
-  const bool databaseTargetPass =
-    publishInterval == SPEC_DATABASE_TARGET_MS ||
-    MONGODB_BATCH_INTERVAL_MS == SPEC_DATABASE_TARGET_MS;
-
-  Serial.println();
-  Serial.println(F("╔════════════════ GENSYS SPEC & ACQUISITION TEST ════════════════╗"));
-
+  const bool localSavePass = localSaveInterval >= SPEC_ACQ_MIN_INTERVAL_MS && localSaveInterval <= SPEC_ACQ_MAX_INTERVAL_MS;
+  const bool databaseTargetPass = publishInterval == SPEC_DATABASE_TARGET_MS || MONGODB_BATCH_INTERVAL_MS == SPEC_DATABASE_TARGET_MS;
+  Serial.println(); Serial.println(F("╔════════════════ GENSYS SPEC & ACQUISITION TEST ════════════════╗"));
   Serial.println(F("║ [1] SPESIFIKASI YANG DIUJI                                      ║"));
-  Serial.print  (F("║ Akuisisi real-time target     : "));
-  Serial.print(SPEC_ACQ_MIN_INTERVAL_MS); Serial.print(F("-")); Serial.print(SPEC_ACQ_MAX_INTERVAL_MS); Serial.println(F(" ms"));
+  Serial.print  (F("║ Akuisisi real-time target     : ")); Serial.print(SPEC_ACQ_MIN_INTERVAL_MS); Serial.print(F("-")); Serial.print(SPEC_ACQ_MAX_INTERVAL_MS); Serial.println(F(" ms"));
   Serial.print  (F("║ SensorTask internal target    : ")); Serial.print(SENSOR_SAMPLE_INTERVAL_MS); Serial.println(F(" ms"));
   Serial.print  (F("║ UART ESP32-1 expected         : ")); Serial.print(LINK_EXPECTED_FRAME_INTERVAL_MS); Serial.println(F(" ms"));
   Serial.print  (F("║ Record lokal/SD interval      : ")); Serial.print(localSaveInterval); Serial.println(F(" ms"));
   Serial.print  (F("║ Target database online        : ")); Serial.print(SPEC_DATABASE_TARGET_MS / 60000UL); Serial.println(F(" menit"));
   Serial.print  (F("║ MQTT publish saat ini         : ")); Serial.print(publishInterval); Serial.println(F(" ms"));
   Serial.print  (F("║ MongoDB buffer interval       : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS); Serial.println(F(" ms"));
-
   Serial.println(F("║ [2] PARAMETER MONITORING TERSEDIA                               ║"));
-  Serial.print  (F("║ Kelistrikan : V=")); Serial.print(r.volt, 2);
-  Serial.print  (F(" V | I=")); Serial.print(r.currentA, 2);
-  Serial.print  (F(" A | P=")); Serial.print(r.powerKW, 3);
-  Serial.print  (F(" kW | f=")); Serial.print(r.freq, 3);
-  Serial.print  (F(" Hz | phase=")); Serial.print(r.phaseAngle, 2); Serial.println(F(" deg"));
-  Serial.print  (F("║ Mesin       : RPM=")); Serial.print(r.rpm);
-  Serial.print  (F(" | CLT=")); Serial.print(r.clt);
-  Serial.print  (F(" C | IAT=")); Serial.print(r.iat);
-  Serial.print  (F(" C | MAP=")); Serial.print(r.map);
-  Serial.print  (F(" kPa | AFR=")); Serial.println(r.afr, 2);
-
+  Serial.print  (F("║ Kelistrikan : V=")); Serial.print(r.volt, 2); Serial.print(F(" V | I=")); Serial.print(r.currentA, 2); Serial.print(F(" A | P=")); Serial.print(r.powerKW, 3); Serial.print(F(" kW | f=")); Serial.print(r.freq, 3); Serial.print(F(" Hz | phase=")); Serial.print(r.phaseAngle, 2); Serial.println(F(" deg"));
+  Serial.print  (F("║ Mesin       : RPM=")); Serial.print(r.rpm); Serial.print(F(" | CLT=")); Serial.print(r.clt); Serial.print(F(" C | IAT=")); Serial.print(r.iat); Serial.print(F(" C | MAP=")); Serial.print(r.map); Serial.print(F(" kPa | AFR=")); Serial.println(r.afr, 2);
   Serial.println(F("║ [3] TIMING AKUISISI                                              ║"));
-  Serial.print  (F("║ Sensor interval avg         : "));
-  Serial.print(sensorAvgMs, 2); Serial.println(F(" ms"));
-  Serial.print  (F("║ UART frame avg              : "));
-  Serial.print(frameAvgMs, 2); Serial.println(F(" ms"));
-  Serial.print  (F("║ UART noise/overflow/resync  : "));
-  Serial.print(acqMon.rxNoiseBytes); Serial.print(F(" / "));
-  Serial.print(acqMon.rxOverflowReset); Serial.print(F(" / "));
-  Serial.println(acqMon.rxResyncCount);
+  Serial.print  (F("║ Sensor interval avg         : ")); Serial.print(sensorAvgMs, 2); Serial.println(F(" ms"));
+  Serial.print  (F("║ UART frame avg              : ")); Serial.print(frameAvgMs, 2); Serial.println(F(" ms"));
+  Serial.print  (F("║ UART noise/overflow/resync  : ")); Serial.print(acqMon.rxNoiseBytes); Serial.print(F(" / ")); Serial.print(acqMon.rxOverflowReset); Serial.print(F(" / ")); Serial.println(acqMon.rxResyncCount);
   Serial.print  (F("║ Last 1s aggregation interval: ")); Serial.print(lastFastAggIntervalMs); Serial.println(F(" ms"));
   Serial.print  (F("║ Last 1s aggregation samples : ")); Serial.print(lastFastAggSamples); Serial.println(F(" sample"));
-
   Serial.println(F("║ [4] WAKTU EKSEKUSI KOMPUTASI                                     ║"));
   Serial.print  (F("║ UART read avg               : ")); Serial.print(perfAvgStat(acqMon.uartReadUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ CSV parse avg               : ")); Serial.print(perfAvgStat(acqMon.csvParseUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ Aggregation avg             : ")); Serial.print(perfAvgStat(acqMon.aggregationUs), 1); Serial.println(F(" us"));
-  Serial.print  (F("║ FFT disabled avg            : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ SensorTask total avg        : ")); Serial.print(taskAvgUs, 1); Serial.println(F(" us"));
   Serial.print  (F("║ CPU usage est. avg          : ")); Serial.print(cpuAvgPct, 2); Serial.println(F(" %"));
-
   Serial.println(F("║ [5] DATA QUALITY & THROUGHPUT                                     ║"));
   Serial.print  (F("║ Frame RX valid/fail         : ")); Serial.print(acqMon.frameValid); Serial.print(F(" / ")); Serial.println(acqMon.frameParseFailed);
   Serial.print  (F("║ Frame received total        : ")); Serial.println(acqMon.frameReceived);
@@ -6052,14 +4208,12 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ Success rate                : ")); Serial.print(frameSuccessRate, 2); Serial.println(F(" %"));
   Serial.print  (F("║ RX throughput               : ")); Serial.print(frameRateHz, 2); Serial.print(F(" frame/s | ")); Serial.print(rxBytesPerSec, 1); Serial.println(F(" B/s"));
   Serial.print  (F("║ Raw frame current           : ")); Serial.print(acqMon.lastRawFrameBytes); Serial.println(F(" B"));
-
   Serial.println(F("║ [6] MONITORING, STORAGE, DAN DATABASE                             ║"));
   Serial.print  (F("║ TFT draw avg                : ")); Serial.print(perfAvgStat(acqMon.tftDrawUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ SD append avg               : ")); Serial.print(perfAvgStat(acqMon.sdSaveUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ MQTT publish avg            : ")); Serial.print(perfAvgStat(acqMon.mqttPublishUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ SD row size / file size     : ")); Serial.print(dbLastLineBytes); Serial.print(F(" B / ")); Serial.println(formatBytes(dbCachedFileSizeBytes));
   Serial.print  (F("║ MQTT payload last           : ")); Serial.print(mqttLastPayloadBytes); Serial.print(F(" B, records=")); Serial.println(mqttLastRecordsSent);
-
   Serial.println(F("║ [7] HASIL KETERCAPAIAN                                            ║"));
   Serial.print  (F("║ Akuisisi UART 0.1-1 s       : ")); Serial.println(passFailText(uartIntervalPass));
   Serial.print  (F("║ Record monitoring 0.1-1 s   : ")); Serial.println(passFailText(recordIntervalPass));
@@ -6068,47 +4222,24 @@ void printAcquisitionSpecReport() {
   Serial.print  (F("║ Penyimpanan lokal 7 hari    : ")); Serial.println(passFailText(localSavePass && sdOK));
   Serial.print  (F("║ Interval database 10 menit  : ")); Serial.println(passFailText(databaseTargetPass));
   Serial.print  (F("║ OVERALL REAL-TIME MONITOR   : ")); Serial.println(passFailText(realtimePass));
-
-  if (!databaseTargetPass) {
-    Serial.println(F("║ CATATAN: MONGODB_BATCH_INTERVAL_MS belum 10 menit. Cek nilai macro timing.       ║"));
-  }
-
   Serial.println(F("╚═════════════════════════════════════════════════════════════════════╝"));
 }
 
-
 void printPerformanceReport() {
   updateStorageCache();
-
   const float runtimeSec = max(1.0f, (millis() - acqMon.startMs) / 1000.0f);
   const float frameRateHz = acqMon.frameReceived / runtimeSec;
   const float rxBytesPerSec = acqMon.rxBytes / runtimeSec;
-  const float frameSuccessRate = acqMon.frameReceived > 0
-                               ? (acqMon.frameValid * 100.0f / acqMon.frameReceived)
-                               : 0.0f;
-
+  const float frameSuccessRate = acqMon.frameReceived > 0 ? (acqMon.frameValid * 100.0f / acqMon.frameReceived) : 0.0f;
   const float sensorAvgMs = perfAvgStat(acqMon.sensorIntervalMs);
   const float uartAvgMs   = perfAvgStat(acqMon.uartFrameIntervalMs);
-
   const float budgetUs = SENSOR_SAMPLE_INTERVAL_MS * 1000.0f;
   const float sensorTaskAvgUs = perfAvgStat(acqMon.sensorTaskUs);
   const float sensorTaskAvgPct = budgetUs > 0 ? (sensorTaskAvgUs * 100.0f / budgetUs) : 0.0f;
-
-  String cloudParamOnly = buildCloudEstimateRecordOnly();
   const float sdRowBytes = dbLastLineBytes > 0 ? (float)dbLastLineBytes : 0.0f;
   const float sdBytesPerSec = sdRowBytes * STORAGE_BATCH_SIZE;
   const float sdPerDay = sdBytesPerSec * 86400.0f;
   const float sd7d = sdPerDay * 7.0f;
-
-  const uint32_t cloudRecordBytes = getMongoRecordBytesNoFft();
-  const uint32_t cloudAvgSentRecordBytes = getMongoAvgSentRecordBytesNoFft();
-  const float cloudBytesPerSec = (float)cloudAvgSentRecordBytes * (1000.0f / (float)localSaveInterval);
-  const float cloudBatchCapacityPer10Min = (float)MONGODB_BATCH_RECORDS;
-  const float cloudBatchGeneratedPer10Min = ((float)MONGODB_BATCH_INTERVAL_MS / (float)localSaveInterval) * STORAGE_BATCH_SIZE;
-  const float cloudBatchPayloadEstimate = (float)cloudAvgSentRecordBytes * min(cloudBatchGeneratedPer10Min, cloudBatchCapacityPer10Min);
-  const uint64_t cloudPayload10y = estimateMongoPayloadBytesNoFft10Years(cloudAvgSentRecordBytes);
-  const uint64_t cloudStorage10y = estimateMongoStorageBytesNoFft10Years(cloudAvgSentRecordBytes);
-
   Serial.println();
   Serial.println(F("╔════════════════════ GENSYS PERFORMANCE + DATABASE ESTIMATE ═══════════════════╗"));
   Serial.println(F("║ [1] PERFORMA AKUISISI DATA                                                    ║"));
@@ -6119,20 +4250,15 @@ void printPerformanceReport() {
   Serial.print  (F("║ UART throughput              : ")); Serial.print(frameRateHz, 2); Serial.print(F(" frame/s | ")); Serial.print(rxBytesPerSec, 1); Serial.println(F(" B/s"));
   Serial.print  (F("║ Raw frame current            : ")); Serial.print(acqMon.lastRawFrameBytes); Serial.println(F(" B"));
   Serial.print  (F("║ Frame RX valid/fail          : ")); Serial.print(acqMon.frameValid); Serial.print(F(" / ")); Serial.println(acqMon.frameParseFailed);
-  Serial.print  (F("║ UART noise/overflow/resync   : "));
-  Serial.print(acqMon.rxNoiseBytes); Serial.print(F(" / "));
-  Serial.print(acqMon.rxOverflowReset); Serial.print(F(" / "));
-  Serial.println(acqMon.rxResyncCount);
+  Serial.print  (F("║ UART noise/overflow/resync   : ")); Serial.print(acqMon.rxNoiseBytes); Serial.print(F(" / ")); Serial.print(acqMon.rxOverflowReset); Serial.print(F(" / ")); Serial.println(acqMon.rxResyncCount);
   Serial.print  (F("║ Frame success rate           : ")); Serial.print(frameSuccessRate, 2); Serial.println(F(" %"));
   Serial.print  (F("║ Lost / duplicate frame       : ")); Serial.print(acqMon.lostFrame); Serial.print(F(" / ")); Serial.println(acqMon.duplicateFrame);
   Serial.print  (F("║ Buffer reset                 : ")); Serial.println((uint32_t)rxBufferResetCount);
   Serial.print  (F("║ Last RX age                  : ")); Serial.print(perfLastRxAgeMs); Serial.println(F(" ms"));
-
   Serial.println(F("║ [2] WAKTU KOMPUTASI PER FUNGSI                                                 ║"));
   Serial.print  (F("║ UART read avg                : ")); Serial.print(perfAvgStat(acqMon.uartReadUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ CSV parse avg                : ")); Serial.print(perfAvgStat(acqMon.csvParseUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ Aggregation avg              : ")); Serial.print(perfAvgStat(acqMon.aggregationUs), 1); Serial.println(F(" us"));
-  Serial.print  (F("║ FFT disabled avg             : ")); Serial.print(perfAvgStat(acqMon.fftComputeUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ JSON build last              : ")); Serial.print(perfJsonBuildUs); Serial.println(F(" us"));
   Serial.print  (F("║ MQTT publish avg             : ")); Serial.print(perfAvgStat(acqMon.mqttPublishUs), 1); Serial.println(F(" us"));
   Serial.print  (F("║ SD append avg                : ")); Serial.print(perfAvgStat(acqMon.sdSaveUs), 1); Serial.println(F(" us"));
@@ -6141,7 +4267,6 @@ void printPerformanceReport() {
   Serial.print  (F("║ Missed deadline 20 ms        : ")); Serial.println((uint32_t)sensorMissedDeadlines);
   Serial.print  (F("║ FastAgg OK/underfilled       : ")); Serial.print((uint32_t)fastAggCompleted); Serial.print(F(" / ")); Serial.println((uint32_t)fastAggUnderfilled);
   Serial.print  (F("║ Last aggregation samples/int : ")); Serial.print((uint32_t)lastFastAggSamples); Serial.print(F(" sample / ")); Serial.print((uint32_t)lastFastAggIntervalMs); Serial.println(F(" ms"));
-
   Serial.println(F("║ [3] ESTIMASI DATABASE LOKAL SD CARD                                             ║"));
   Serial.print  (F("║ File CSV                     : ")); Serial.println(DB_FILE);
   Serial.print  (F("║ SD status                    : ")); Serial.println(sdOK ? F("READY") : F("NOT READY"));
@@ -6155,19 +4280,17 @@ void printPerformanceReport() {
   Serial.print  (F("║ Estimated SD per day         : ")); Serial.println(formatBytes((uint64_t)sdPerDay));
   Serial.print  (F("║ Estimated SD 7 days          : ")); Serial.println(formatBytes((uint64_t)sd7d));
   Serial.print  (F("║ SD save OK/FAIL              : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
-
   Serial.println(F("║ [4] ESTIMASI DATABASE CLOUD MONGODB                                             ║"));
   Serial.print  (F("║ Realtime MQTT dashboard      : every ")); Serial.print(publishInterval); Serial.println(F(" ms"));
   Serial.print  (F("║ MongoDB buffer send interval : ")); Serial.print(MONGODB_BATCH_INTERVAL_MS / 60000UL); Serial.println(F(" min"));
   Serial.print  (F("║ Target records per batch     : ")); Serial.println(MONGODB_BUFFER_RECORDS);
   Serial.print  (F("║ Current buffer count         : ")); Serial.print(mongoDbBufferCount); Serial.print(F(" / ")); Serial.println(MONGODB_BUFFER_RECORDS);
-  Serial.print  (F("║ Generated records / 10 min   : ")); Serial.println(cloudBatchGeneratedPer10Min, 0);
-  Serial.print  (F("║ Estimated cloud batch payload: ")); Serial.println(formatBytes((uint64_t)cloudBatchPayloadEstimate));
-  Serial.print  (F("║ MongoDB record size          : ")); Serial.print(cloudRecordBytes); Serial.println(F(" B/record, tanpa FFT"));
-  Serial.print  (F("║ MongoDB avg sent record      : ")); Serial.print(cloudAvgSentRecordBytes); Serial.println(F(" B/record, tanpa FFT"));
-  Serial.print  (F("║ Effective cloud data rate    : ")); Serial.println(formatBytes((uint64_t)cloudBytesPerSec) + F("/s"));
-  Serial.print  (F("║ Estimated payload 10 years   : ")); Serial.println(formatBytes(cloudPayload10y));
-  Serial.print  (F("║ Estimated MongoDB 10 years   : ")); Serial.print(formatBytes(cloudStorage10y)); Serial.print(F(" @ overhead x")); Serial.println(MONGODB_STORAGE_OVERHEAD_FACTOR, 1);
+  Serial.print  (F("║ Generated records / 10 min   : ")); Serial.println(0, 0);
+  Serial.print  (F("║ Estimated cloud batch payload: ")); Serial.println(formatBytes(0));
+  Serial.print  (F("║ MongoDB record size          : ")); Serial.print(0); Serial.println(F(" B/record, tanpa FFT"));
+  Serial.print  (F("║ Effective cloud data rate    : ")); Serial.println(formatBytes(0) + F("/s"));
+  Serial.print  (F("║ Estimated payload 10 years   : ")); Serial.println(formatBytes(0));
+  Serial.print  (F("║ Estimated MongoDB 10 years   : ")); Serial.print(formatBytes(0)); Serial.print(F(" @ overhead x")); Serial.println(MONGODB_STORAGE_OVERHEAD_FACTOR, 1);
   Serial.println(F("║ Note: estimation excludes FFT and uses parameter-only gen/data records."));
   Serial.print  (F("║ Last MongoDB batch/payload   : ")); Serial.print(mongoUploadLastBatchRecords); Serial.print(F(" record / ")); Serial.println(formatBytes(mongoUploadLastPayloadBytes));
   Serial.print  (F("║ MongoDB sent total           : ")); Serial.println(mongoDbTotalSentRecords);
@@ -6178,11 +4301,8 @@ void printPerformanceReport() {
 
 void printLatestDataReport() {
   RawData r; AggregatedData a;
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    r = latestRaw; a = aggData; xSemaphoreGive(dataMutex);
-  }
-  Serial.println();
-  Serial.println(F("================ LATEST DATA ================"));
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { r = latestRaw; a = aggData; xSemaphoreGive(dataMutex); }
+  Serial.println(); Serial.println(F("================ LATEST DATA ================"));
   Serial.printf("RAW seq=%lu valid=%d rpm=%d tps=%d map=%d iat=%d clt=%d afr=%.2f batt=%.2f fuel=%.1f\n",
                 (unsigned long)r.seq, r.valid ? 1 : 0, r.rpm, r.tps, r.map, r.iat, r.clt, r.afr, r.batt, r.fuel);
   Serial.printf("RAW freq=%.3f freqGrid=%.3f volt=%.2f voltGrid=%.2f phase=%.2f sync=%d\n",
@@ -6195,107 +4315,48 @@ void printLatestDataReport() {
   Serial.println(F("============================================="));
 }
 
-void printFFTReport() {
-  FFTData f[FFT_SOURCE_COUNT];
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) f[source] = fftMultiData[source];
-    xSemaphoreGive(dataMutex);
-  }
-  Serial.println();
-  Serial.println(F("================ FFT X-Y DATA ================"));
-  Serial.print(F("Active source: ")); Serial.println(getFFTSourceName());
-  for (uint8_t source = 0; source < FFT_SOURCE_COUNT; source++) {
-    Serial.print(F("SOURCE ")); Serial.print(getFFTSourceNameById(source));
-    Serial.print(F(" | valid=")); Serial.print(f[source].valid ? F("YES") : F("NO"));
-    Serial.print(F(" | peakX=")); Serial.print(f[source].peakHz, 3);
-    Serial.print(F(" Hz | peakY=")); Serial.println(f[source].peakMagnitude, 6);
-    for (uint16_t i = 0; i < FFT_BINS_TO_SEND; i++) {
-      Serial.print(F("  x=")); Serial.print(f[source].freqBins[i], 3);
-      Serial.print(F(" Hz | y=")); Serial.println(f[source].magBins[i], 6);
-    }
-  }
-  Serial.println(F("=============================================="));
-}
-
 void printSdFileCheck() {
-  Serial.println();
-  Serial.println(F("╔════════════════ SD FILE CHECK ════════════════╗"));
+  Serial.println(); Serial.println(F("╔════════════════ SD FILE CHECK ════════════════╗"));
   Serial.print  (F("║ sdOK                         : ")); Serial.println(sdOK ? F("READY") : F("NOT READY"));
   Serial.print  (F("║ DB_FILE                      : ")); Serial.println(DB_FILE);
-  Serial.print  (F("║ FFT_FILE                     : ")); Serial.println(FFT_FILE);
   Serial.print  (F("║ Save OK/FAIL                 : ")); Serial.print(sdSaveSuccessCount); Serial.print(F(" / ")); Serial.println(sdSaveFailCount);
   Serial.print  (F("║ DB create OK/FAIL            : ")); Serial.print(sdDatabaseCreateOkCount); Serial.print(F(" / ")); Serial.println(sdDatabaseCreateFailCount);
   Serial.print  (F("║ Consecutive append fail      : ")); Serial.println(sdConsecutiveOpenFail);
   Serial.print  (F("║ Last file OK age             : ")); Serial.print(sdLastFileOkMs ? millis() - sdLastFileOkMs : 0); Serial.println(F(" ms"));
   Serial.print  (F("║ Last file error age          : ")); Serial.print(sdLastFileErrorMs ? millis() - sdLastFileErrorMs : 0); Serial.println(F(" ms"));
-
   if (!sdOK) {
     Serial.println(F("║ SD belum ready menurut variabel sdOK. Coba command: sd reinit"));
     Serial.println(F("╚═══════════════════════════════════════════════╝"));
     return;
   }
-
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
     Serial.println(F("║ SD mutex busy. Coba ulangi beberapa detik lagi."));
     Serial.println(F("╚═══════════════════════════════════════════════╝"));
     return;
   }
-
   deselectAllSPI();
-
   bool dbExists = SD.exists(DB_FILE);
-  bool fftExists = SD.exists(FFT_FILE);
   Serial.print  (F("║ sdDatabase.csv exist           : ")); Serial.println(dbExists ? F("YES") : F("NO"));
-  Serial.print  (F("║ fft.csv exist                : ")); Serial.println(fftExists ? F("YES") : F("NO"));
-
   if (dbExists) {
     File f = SD.open(DB_FILE, FILE_READ);
     if (f) {
-      Serial.print(F("║ sdDatabase.csv size            : "));
-      Serial.print(f.size());
-      Serial.println(F(" bytes"));
-      String header = f.readStringUntil('\n');
-      header.trim();
-      Serial.print(F("║ database header parameter-only: "));
-      Serial.println(header.indexOf("fft_bins_xy") < 0 ? F("YES") : F("NO"));
+      Serial.print(F("║ sdDatabase.csv size            : ")); Serial.print(f.size()); Serial.println(F(" bytes"));
+      String header = f.readStringUntil('\n'); header.trim();
+      Serial.print(F("║ database header parameter-only: ")); Serial.println(header.indexOf("fft_bins_xy") < 0 ? F("YES") : F("NO"));
       f.close();
-    } else {
-      Serial.println(F("║ sdDatabase.csv open            : FAILED"));
-    }
+    } else Serial.println(F("║ sdDatabase.csv open            : FAILED"));
   }
-
-  if (fftExists) {
-    File ff = SD.open(FFT_FILE, FILE_READ);
-    if (ff) {
-      Serial.print(F("║ fft.csv size                 : "));
-      Serial.print(ff.size());
-      Serial.println(F(" bytes"));
-      String header = ff.readStringUntil('\n');
-      header.trim();
-      Serial.print(F("║ fft header has fft_bins_xy   : "));
-      Serial.println(header.indexOf("fft_bins_xy") >= 0 ? F("YES") : F("NO"));
-      ff.close();
-    } else {
-      Serial.println(F("║ fft.csv open                 : FAILED"));
-    }
-  }
-
-
   xSemaphoreGive(sdMutex);
   Serial.println(F("╚═══════════════════════════════════════════════╝"));
 }
 
 void createDatabaseCsvFromCommand() {
-  if (!sdOK) {
-    Serial.println(F("[DB] SD not ready. Coba command: sd reinit"));
-    return;
-  }
-
+  if (!sdOK) { Serial.println(F("[DB] SD not ready. Coba command: sd reinit")); return; }
   if (ensureDatabaseCsvExists()) {
     sdConsecutiveOpenFail = 0;
     sdOK = true;
     updateStorageCache();
-    Serial.println(F("[DB] /sdDatabase.csv dan /fft.csv siap."));
+    Serial.println(F("[DB] /sdDatabase.csv siap."));
   } else {
     Serial.println(F("[DB] Gagal membuat/mengecek /sdDatabase.csv."));
   }
@@ -6314,10 +4375,9 @@ void resetSDDatabase() {
   if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     deselectAllSPI();
     if (SD.exists(DB_FILE)) SD.remove(DB_FILE);
-    if (SD.exists(FFT_FILE)) SD.remove(FFT_FILE);
-    if (createFreshDatabaseCsv() && createFreshFftCsv()) {
+    if (createFreshDatabaseCsv()) {
       dbTotalWrittenBytes = 0; dbLastLineBytes = 0; sdSaveSuccessCount = 0; sdSaveFailCount = 0; sdConsecutiveOpenFail = 0; mongoUploadSuccessRecords = 0; mongoUploadFailCount = 0; mongoUploadLastHttpCode = 0; mongoUploadLastAckedRecords = 0; mongoUploadLastAttemptMs = 0; mongoUploadLastBatchRecords = 0; mongoUploadLastPayloadBytes = 0; mongoUploadLastRunChunks = 0; mongoUploadLastRunRecords = 0; mongoUploadLastAckResponseRecords = 0; hasLastDatabasePayloadCache = false; lastSdCsvLineCache = ""; lastSdQueueJsonCache = ""; mongoDbBufferCount = 0; mongoDbBufferedTotal = 0; mongoDbBufferOverflowCount = 0; lastMongoBufferedLocalSeq = 0; lastSdSavedLocalSeq = 0; mongoDbLastSentRecords = 0; mongoDbTotalSentRecords = 0; mongoDbLastPayloadBytes = 0; mongoDbLastAckResponseRecords = 0; mongoDbLastSendMs = 0;
-      Serial.println(F("[DB] sdDatabase.csv dan fft.csv reset OK."));
+      Serial.println(F("[DB] sdDatabase.csv reset OK."));
     } else {
       Serial.println(F("[DB] reset failed."));
     }
@@ -6333,20 +4393,16 @@ void handlePeriodicSerialLog() {
   if (serialLogDatabaseEnabled) printDatabaseReport();
   if (serialLogPerformanceEnabled) printPerformanceReport();
   if (serialLogSensorEnabled) printAcquisitionSpecReport();
-  if (serialLogFFTEnabled) printFFTReport();
   if (serialLogLatestEnabled) printLatestDataReport();
   if (serialMonitorOverviewEnabled) printSerialMonitoringOverview();
   if (serialMongoBufferTickerEnabled) printMongoBufferStatus();
 }
 
-void printDbSizeTicker() {
-  printDatabaseReport();
-}
+void printDbSizeTicker() { printDatabaseReport(); }
 
 void processSerialCommand(String cmd) {
   cmd.trim(); cmd.toLowerCase();
   if (cmd.length() == 0) return;
-
   if (cmd == "help") printSerialHelp();
   else if (cmd == "paper" || cmd == "paper report" || cmd == "validation" || cmd == "paper validation") printPaperValidationReport();
   else if (cmd == "paper start" || cmd == "validation start" || cmd == "paper reset") resetPaperValidationCounters();
@@ -6376,7 +4432,6 @@ void processSerialCommand(String cmd) {
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "aggregation" || cmd == "agg" || cmd == "aggregate") { AggregatedData a; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { a = aggData; xSemaphoreGive(dataMutex); } printAggregatedParameterReport(a); }
-  else if (cmd == "fft" || cmd.startsWith("fft ")) { Serial.println(F("[FFT] disabled: payload dan display ESP32 tidak memakai FFT.")); }
   else if (cmd == "page generator") { if (activePage != PAGE_GENERATOR) { activePage = PAGE_GENERATOR; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] generator")); }
   else if (cmd == "page engine") { if (activePage != PAGE_ENGINE) { activePage = PAGE_ENGINE; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] engine")); }
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
@@ -6401,12 +4456,11 @@ void processSerialCommand(String cmd) {
   else if (cmd == "test once status" || cmd == "monitor once status") printTestOnceStatus();
   else if (cmd == "test once last" || cmd == "rx last" || cmd == "last rx") printLastRxReportFromCache();
   else if (cmd == "test once off" || cmd == "monitor continuous" || cmd == "continuous") stopTestOnceMode();
-  else if (cmd == "log off") { serialLogEnabled = false; serialLogAllEnabled = false; serialLogDatabaseEnabled = false; serialLogPerformanceEnabled = false; serialLogSensorEnabled = false; serialLogNetworkEnabled = false; serialLogAggregationEnabled = false; serialLogStorageEnabled = false; serialLogFFTEnabled = false; serialLogLatestEnabled = false; serialMonitorOverviewEnabled = false; serialMongoBufferTickerEnabled = false; Serial.println(F("[LOG] off")); }
+  else if (cmd == "log off") { serialLogEnabled = false; serialLogAllEnabled = false; serialLogDatabaseEnabled = false; serialLogPerformanceEnabled = false; serialLogSensorEnabled = false; serialLogNetworkEnabled = false; serialLogAggregationEnabled = false; serialLogStorageEnabled = false; serialLogLatestEnabled = false; serialMonitorOverviewEnabled = false; serialMongoBufferTickerEnabled = false; Serial.println(F("[LOG] off")); }
   else if (cmd == "log database on") { serialLogEnabled = true; serialLogDatabaseEnabled = true; Serial.println(F("[LOG] database on")); }
   else if (cmd == "log performance on") { serialLogEnabled = true; serialLogPerformanceEnabled = true; Serial.println(F("[LOG] performance on")); }
   else if (cmd == "log aggregation on" || cmd == "log agg on") { serialLogEnabled = true; serialLogAggregationEnabled = true; Serial.println(F("[LOG] aggregation on")); }
   else if (cmd == "log acq on" || cmd == "log spec on") { serialLogEnabled = true; serialLogSensorEnabled = true; Serial.println(F("[LOG] acquisition/spec on")); }
-  else if (cmd == "log fft on") { serialLogEnabled = true; serialLogFFTEnabled = true; Serial.println(F("[LOG] fft on")); }
   else if (cmd == "log latest on") { serialLogEnabled = true; serialLogLatestEnabled = true; Serial.println(F("[LOG] latest on")); }
   else Serial.println(F("[CMD] unknown. Type help."));
 }
@@ -6414,7 +4468,6 @@ void processSerialCommand(String cmd) {
 void handleSerialCommandConsole() {
   while (Serial.available()) {
     char c = (char)Serial.read();
-
     if (c == '\n' || c == '\r') {
       if (serialCmd.length() > 0) {
         processSerialCommand(serialCmd);
@@ -6436,68 +4489,43 @@ void handleSerialCommandConsole() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-
   Serial.println();
   Serial.println("BOOTING GENSYS ESP32-2 INDUSTRIAL HMI - SD STABLE ORDER");
-
   memset(&latestRaw, 0, sizeof(latestRaw));
   memset(&aggData, 0, sizeof(aggData));
-  memset(&fftData, 0, sizeof(fftData));
-  memset(&fftMultiData, 0, sizeof(fftMultiData));
-  memset(&fftBuffers, 0, sizeof(fftBuffers));
   resetAcquisitionMonitorStats();
   strlcpy(latestRaw.syncText, "off", sizeof(latestRaw.syncText));
-    strlcpy(latestRaw.syncStatus, "off", sizeof(latestRaw.syncStatus));
+  strlcpy(latestRaw.syncStatus, "off", sizeof(latestRaw.syncStatus));
   strlcpy(latestRaw.statusText, "NO-DATA", sizeof(latestRaw.statusText));
-
   dataMutex = xSemaphoreCreateMutex();
   sdMutex = xSemaphoreCreateMutex();
   mongoBufferMutex = xSemaphoreCreateMutex();
   mqttMutex = xSemaphoreCreateMutex();
   mongoUploadRequestSemaphore = xSemaphoreCreateBinary();
-
-
-  // ============================================================
-  // STRING RESERVE TO REDUCE HEAP FRAGMENTATION
-  // ============================================================
-  // Jangan reserve seluruh 600 slot karena akan memakai heap besar di awal.
-  // Reserve hanya sebesar 1 chunk publish; slot lain dialokasi saat terisi.
   for (uint16_t i = 0; i < MONGODB_UPLOAD_CHUNK_RECORDS && i < MONGODB_BUFFER_RECORDS; i++) {
     mongoDbBuffer[i].reserve(384);
   }
-
   lastMqttPayloadCache.reserve(1024);
   lastMqttParameterOnlyPayloadCache.reserve(1024);
   lastSdCsvLineCache.reserve(384);
   lastSdQueueJsonCache.reserve(512);
   serialCmd.reserve(128);
   linkRxBuffer.reserve(LINK_LINE_BUFFER_MAX_CHARS + 1);
-
   if (dataMutex == NULL) Serial.println("[ERROR] dataMutex gagal dibuat.");
   if (sdMutex == NULL) Serial.println("[ERROR] sdMutex gagal dibuat.");
   if (mongoBufferMutex == NULL) Serial.println("[ERROR] mongoBufferMutex gagal dibuat.");
   if (mongoUploadRequestSemaphore == NULL) Serial.println("[ERROR] mongoUploadRequestSemaphore gagal dibuat.");
-
   deselectAllSPI();
-
   LinkSerial.setRxBufferSize(LINK_SERIAL_RX_BUFFER_BYTES);
   LinkSerial.begin(LINK_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
   LinkSerial.setTimeout(20);
-
-  // TFT init dulu seperti versi yang terbukti bisa mount SD onboard TFT.
   pinMode(CTP_RST, OUTPUT);
   digitalWrite(CTP_RST, LOW); delay(10);
   digitalWrite(CTP_RST, HIGH); delay(100);
-
   tft.init();
   tft.setRotation(1);
-
-  // Mount SD sebelum boot splash pertama agar /logo.png bisa langsung tampil
-  // dari kartu SD. Jika gagal, drawBootSplashStep() tetap memakai logo vektor.
   initSDCard();
-
   drawBootSplashStep(sdOK ? "Local SD mounted - loading logo.png" : "SD offline - using fallback logo", 10);
-
   drawBootSplashStep("Initializing touch controller...", 25);
   Wire.begin(CTP_SDA, CTP_SCL);
   if (!ts.begin(40)) {
@@ -6507,92 +4535,46 @@ void setup() {
     touchDetected = true;
     Serial.println("[TOUCH] OK.");
   }
-
   drawBootSplashStep(sdOK ? "Local SD database ready" : "SD offline - continuing", 50);
-
   drawBootSplashStep("Loading WiFi... check Serial Monitor", 58);
-  setupWiFiManager();
-
+  setupWiFiWithMenu();
   drawBootSplashStep("Synchronizing NTP timestamp...", 72);
   if (wifiOK) {
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER_1, NTP_SERVER_2);
   }
-
   drawBootSplashStep("Connecting MQTT broker...", 86);
   applyWiFiStabilityConfig();
   applyMqttStabilityConfig();
-
   if (wifiOK) {
     reconnectMQTT();
   }
-
   drawBootSplashStep("Starting realtime sensor tasks...", 94);
-
-  xTaskCreatePinnedToCore(
-    UartRxTask,
-    "UartRxTask",
-    LINK_RX_TASK_STACK_WORDS,
-    NULL,
-    LINK_RX_TASK_PRIORITY,
-    NULL,
-    1
-  );
-
-  xTaskCreatePinnedToCore(
-    SensorTask50Hz,
-    "SensorTask50Hz",
-    12000,
-    NULL,
-    2,
-    NULL,
-    1
-  );
-
-  xTaskCreatePinnedToCore(
-    MongoBufferTask,
-    "MongoBufferTask",
-    10000,
-    NULL,
-    1,
-    NULL,
-    0
-  );
-
+  xTaskCreatePinnedToCore(UartRxTask, "UartRxTask", LINK_RX_TASK_STACK_WORDS, NULL, LINK_RX_TASK_PRIORITY, NULL, 1);
+  xTaskCreatePinnedToCore(SensorTask50Hz, "SensorTask50Hz", 12000, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(MongoBufferTask, "MongoBufferTask", 10000, NULL, 1, NULL, 0);
   drawBootSplashStep("GENSYS ready", 100);
   delay(600);
-
   activePage = PAGE_GENERATOR;
   needFullRedraw = true;
-
   printSerialHelp();
-
   Serial.println();
   Serial.println("GENSYS READY: CSV RX + 1s RECORD + SD + MQTT + TFT HMI + TOUCH");
-  Serial.print("LINK_BAUD = ");
-  Serial.println(LINK_BAUD);
+  Serial.print("LINK_BAUD = "); Serial.println(LINK_BAUD);
 }
 
-
 void serviceDisplayAndTouch() {
-  // Display/touch diservis sebelum pekerjaan WiFi/MQTT/SD yang bisa blocking.
-  // Dengan ini data lokal dari agregasi 0,5 detik tidak menunggu reconnect MQTT
-  // atau retry SD runtime.
   handleTouchNavigation();
-
   static unsigned long lastHeaderClockRefreshMs = 0;
   if (!needFullRedraw && millis() - lastHeaderClockRefreshMs >= 50UL) {
     lastHeaderClockRefreshMs = millis();
     drawHeaderClock(false);
   }
-
   bool doPartialUpdate = displayUpdateNow || (millis() - lastDraw >= drawInterval);
   if (needFullRedraw || doPartialUpdate) {
     lastDraw = millis();
-
     drawCurrentPage(needFullRedraw);
     needFullRedraw = false;
     displayUpdateNow = false;
-
     if (testOnceMode && testOnceAggDone && !testOnceDisplayDone) {
       testOnceDisplayDone = true;
       Serial.println();
@@ -6609,27 +4591,20 @@ void loop() {
   handleSerialCommandConsole();
   handlePeriodicSerialLog();
   serviceDisplayAndTouch();
-
   if (paperTickerEnabled && millis() - lastPaperTickerMs >= paperTickerIntervalMs) {
     lastPaperTickerMs = millis();
     printPaperValidationReport();
   }
-
-  // ── DB size ticker (setiap 1 detik jika diaktifkan) ──────────
   if (dbSizeTickerEnabled && millis() - lastDbSizeTickMs >= 1000UL) {
     lastDbSizeTickMs = millis();
     updateStorageCache();
     printDbSizeTicker();
   }
-
-  // ── Bersihkan pending reset jika tidak dikonfirmasi dalam 30 detik ──
   if (sdResetPending && millis() - sdResetPendingMs >= 30000UL) {
     sdResetPending = false;
     Serial.println("[DB RESET] Waktu konfirmasi habis. Reset dibatalkan.");
   }
-
   checkWiFiStatus();
-
   if (wifiOK) {
     reconnectMQTT();
     if (mqttMutex && xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -6639,32 +4614,20 @@ void loop() {
       mqtt.loop();
     }
   }
-
   if (!sdOK && millis() - lastSDRetry >= SD_AUTO_RETRY_INTERVAL_MS) {
     lastSDRetry = millis();
     Serial.println("[SD] Runtime retry cepat (1 attempt, non-blocking panjang)...");
     retrySDCardOnceFast();
     displayUpdateNow = true;
   }
-
-  // Test-once tetap aman karena publishRealtimeData()
-  // sudah punya guard: hanya publish 1 kali saat test-once.
   if (millis() - lastPublish >= publishInterval) {
     lastPublish = millis();
     publishRealtimeData();
   }
-
-  // Test-once tetap aman karena saveSnapshotToSD()
-  // sudah punya guard: hanya simpan 1 kali saat test-once.
   if (millis() - lastLocalSave >= localSaveInterval) {
     lastLocalSave = millis();
     saveSnapshotToSD();
   }
-
-  // Kirim buffer RAM MongoDB sesesuai interval batch; SD tetap hanya arsip lokal.
- 
-
   serviceDisplayAndTouch();
-
   delay(1);
 }
