@@ -209,8 +209,7 @@ async function ensureDbReady() {
 
 // --- SCHEMAS ---
 const generatorDataSchema = new mongoose.Schema({
-    // recordId berasal dari ESP32 SD backup. Field ini menjadi kunci deduplikasi
-    // agar retry pengiriman backup tidak membuat data dobel di MongoDB.
+    // recordId opsional untuk deduplikasi bila payload memilikinya.
     recordId: String,
     localSeq: Number,
 
@@ -268,21 +267,6 @@ async function cleanupGeneratorDataFieldsFromDB() {
         console.error('Generator data cleanup error:', error.message);
     }
 }
-
-const fftDataSchema = new mongoose.Schema({
-    timestamp: { type: Date, default: Date.now, index: true },
-    deviceId: { type: String, required: true, index: true },
-    source: { type: String, default: '' },
-    sampleRateHz: Number,
-    samples: Number,
-    resolutionHz: Number,
-    peakHz: Number,
-    peakMagnitude: Number,
-    rms: Number,
-    freqBins: [Number],
-    magBins: [Number]
-});
-const FFTData = mongoose.models.FFTData || mongoose.model('FFTData', fftDataSchema, 'fftdata');
 
 const alertSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now },
@@ -736,13 +720,11 @@ const mqttIngestStats = {
     lastInsertedRecords: 0,
     lastDuplicateRecords: 0,
     bufferedRecords: 0,
-    bufferedFftRecords: 0,
     lastBufferedAt: null,
     nextFlushAt: null,
     lastFlushAt: null,
     lastFlushReason: null,
     lastFlushedRecords: 0,
-    lastFlushedFftRecords: 0,
     lastErrorAt: null,
     lastError: null
 };
@@ -1204,10 +1186,6 @@ mqttClient.on('connect', () => {
         if (err) console.error('❌ Subscribe error (gen/realtime):', err.message);
         else console.log('📡 Subscribed to gen/realtime');
     });
-    mqttClient.subscribe('gen/data', (err) => {
-        if (err) console.error('❌ Subscribe error (gen/data):', err.message);
-        else console.log('📡 Subscribed to gen/data');
-    });
 });
 
 mqttClient.on('reconnect', () => console.log('🔄 MQTT Reconnecting...'));
@@ -1218,20 +1196,20 @@ mqttClient.on('error', (error) => {
 });
 
 // gen/realtime memperbarui dashboard/alert secara langsung.
-// gen/data menyimpan record history realtime dari ESP32 ke MongoDB.
+// History MongoDB hanya disimpan dari buffer server gen/realtime (buffermongo).
 // ============================================================
 // MONGODB BATCH SAVE
-// Realtime data tetap diterima setiap 0,5 detik dari MQTT,
+// Realtime data diterima setiap 1 detik dari MQTT,
 // tetapi penyimpanan GeneratorData ke MongoDB dilakukan batch
-// Buffer server internal menahan gen/data selama interval batch sebelum dikirim ke MongoDB.
+// Buffer server internal menahan tepat 600 data sebelum dikirim ke MongoDB.
 // ============================================================
 
-const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // 10 menit
-const DATA_SEND_MODE = cleanEnvValue(process.env.DATA_SEND_MODE || process.env.GEN_DATA_SEND_MODE || 'auto').toLowerCase();
-const REALTIME_BUFFER_BACKEND_TO_MONGO = process.env.REALTIME_BUFFER_BACKEND_TO_MONGO !== 'false';
+const DB_BATCH_INTERVAL_MS = parseInt(process.env.DB_BATCH_INTERVAL_MS || '600000', 10); // retry timer saat buffer belum penuh/DB belum ready
+const DB_BATCH_RECORDS = 600; // 10 menit x 60 data/menit
+const DATA_SEND_MODE = 'buffermongo';
+const REALTIME_BUFFER_BACKEND_TO_MONGO = true;
 
 let generatorBatchBuffer = [];
-let fftBatchBuffer = [];
 let activeTimeBatchBuffer = [];
 let isFlushingGeneratorBatch = false;
 let generatorBatchTimerStartedAt = null;
@@ -1279,38 +1257,6 @@ function buildGeneratorDbDocument(data) {
 }
 
 
-async function persistGeneratorDocumentsDirect(docs, reason = 'direct-batch') {
-    if (!docs.length) return { inserted: 0, duplicates: 0 };
-    await ensureDbReady();
-    const operations = docs.map((doc) => {
-        if (doc.recordId) {
-            return {
-                updateOne: {
-                    filter: { recordId: doc.recordId },
-                    update: { $setOnInsert: doc },
-                    upsert: true
-                }
-            };
-        }
-        return { insertOne: { document: doc } };
-    });
-    const result = await GeneratorData.bulkWrite(operations, { ordered: false });
-    const inserted = (result.insertedCount || 0) + (result.upsertedCount || 0);
-    const duplicates = result.matchedCount || 0;
-    mqttIngestStats.savedMessages++;
-    mqttIngestStats.insertedRecords += inserted;
-    mqttIngestStats.duplicateRecords += duplicates;
-    mqttIngestStats.lastInsertedRecords = inserted;
-    mqttIngestStats.lastDuplicateRecords = duplicates;
-    mqttIngestStats.lastFlushAt = new Date();
-    mqttIngestStats.lastFlushReason = reason;
-    mqttIngestStats.lastFlushedRecords = docs.length;
-    mqttIngestStats.lastError = null;
-    mqttIngestStats.lastErrorAt = null;
-    console.log(`💾 MongoDB direct batch saved | reason=${reason} | received=${docs.length} | inserted=${inserted} | duplicates=${duplicates}`);
-    return { inserted, duplicates };
-}
-
 function getNextGeneratorBatchFlushAt(now = new Date()) {
     const baseTime = generatorBatchTimerStartedAt || now;
     return new Date(baseTime.getTime() + DB_BATCH_INTERVAL_MS);
@@ -1318,23 +1264,22 @@ function getNextGeneratorBatchFlushAt(now = new Date()) {
 
 function updateGeneratorBatchStats() {
     mqttIngestStats.bufferedRecords = generatorBatchBuffer.length;
-    mqttIngestStats.bufferedFftRecords = fftBatchBuffer.length;
-    mqttIngestStats.nextFlushAt = generatorBatchBuffer.length || fftBatchBuffer.length
+    mqttIngestStats.nextFlushAt = generatorBatchBuffer.length
         ? getNextGeneratorBatchFlushAt().toISOString()
         : null;
 }
 
-function logGeneratorBatchStatus(prefix = '📦 gen/data buffer') {
+function logGeneratorBatchStatus(prefix = '📦 buffermongo buffer') {
     updateGeneratorBatchStats();
     const nextFlushText = mqttIngestStats.nextFlushAt || '-';
-    console.log(`${prefix} | buffered=${generatorBatchBuffer.length} records | fft=${fftBatchBuffer.length} records | nextFlush=${nextFlushText} | sentToMongo=${mqttIngestStats.insertedRecords} records`);
+    console.log(`${prefix} | buffered=${generatorBatchBuffer.length}/${DB_BATCH_RECORDS} records | nextFlush=${nextFlushText} | sentToMongo=${mqttIngestStats.insertedRecords} records`);
 }
 function scheduleGeneratorBatchFlush() {
     if (!generatorBatchTimerStartedAt || generatorBatchFlushTimer) return;
 
     generatorBatchFlushTimer = setTimeout(() => {
         generatorBatchFlushTimer = null;
-        flushGeneratorBatch('interval-10min').catch((err) => {
+        flushGeneratorBatch('retry-10min').catch((err) => {
             console.error('❌ Scheduled batch flush error:', err.message);
         });
     }, DB_BATCH_INTERVAL_MS);
@@ -1360,36 +1305,36 @@ function addGeneratorDataToBatch(snapshot) {
     mqttIngestStats.lastBufferedAt = now;
     updateGeneratorBatchStats();
 
-}
-
-function addFftDataToBatch(fftDoc) {
-    if (!fftDoc || typeof fftDoc !== 'object') return;
-
-    if (!generatorBatchTimerStartedAt) {
-        generatorBatchTimerStartedAt = new Date();
-        scheduleGeneratorBatchFlush();
+    if (generatorBatchBuffer.length >= DB_BATCH_RECORDS) {
+        setImmediate(() => {
+            flushGeneratorBatch('buffer-full-600').catch((err) => {
+                console.error('❌ Full buffer flush error:', err.message);
+            });
+        });
     }
-    fftBatchBuffer.push(fftDoc);
-    updateGeneratorBatchStats();
 }
+
 
 async function flushGeneratorBatch(reason = 'interval') {
     if (isFlushingGeneratorBatch) return;
-    if (!generatorBatchBuffer.length && !fftBatchBuffer.length) return;
+    if (generatorBatchBuffer.length < DB_BATCH_RECORDS) {
+        if (generatorBatchBuffer.length && !generatorBatchFlushTimer) scheduleGeneratorBatchFlush();
+        updateGeneratorBatchStats();
+        return;
+    }
 
     if (!isDbReady()) {
-        console.warn(`⚠️ MongoDB not ready, batch retained | generator=${generatorBatchBuffer.length} fft=${fftBatchBuffer.length}`);
+        console.warn(`⚠️ MongoDB not ready, batch retained | generator=${generatorBatchBuffer.length}`);
         if (!generatorBatchTimerStartedAt) generatorBatchTimerStartedAt = new Date();
         scheduleGeneratorBatchFlush();
-        logGeneratorBatchStatus('📦 gen/data buffer retained');
+        logGeneratorBatchStatus('📦 buffermongo buffer retained');
         return;
     }
 
     isFlushingGeneratorBatch = true;
 
-    const generatorBatch = generatorBatchBuffer.splice(0, generatorBatchBuffer.length);
-    const fftBatch = fftBatchBuffer.splice(0, fftBatchBuffer.length);
-    const activeTimeBatch = activeTimeBatchBuffer.splice(0, activeTimeBatchBuffer.length);
+    const generatorBatch = generatorBatchBuffer.splice(0, DB_BATCH_RECORDS);
+    const activeTimeBatch = activeTimeBatchBuffer.splice(0, DB_BATCH_RECORDS);
 
     try {
         if (generatorBatch.length > 0) {
@@ -1417,9 +1362,6 @@ async function flushGeneratorBatch(reason = 'interval') {
             mqttIngestStats.lastDuplicateRecords = matchedGenerator;
         }
 
-        if (fftBatch.length > 0) {
-            await FFTData.insertMany(fftBatch, { ordered: false });
-        }
 
         for (const snapshot of activeTimeBatch) {
             await syncActiveTimeHistory(snapshot);
@@ -1428,26 +1370,28 @@ async function flushGeneratorBatch(reason = 'interval') {
         mqttIngestStats.lastFlushAt = new Date();
         mqttIngestStats.lastFlushReason = reason;
         mqttIngestStats.lastFlushedRecords = generatorBatch.length;
-        mqttIngestStats.lastFlushedFftRecords = fftBatch.length;
         mqttIngestStats.lastError = null;
         mqttIngestStats.lastErrorAt = null;
         if (generatorBatchFlushTimer) {
             clearTimeout(generatorBatchFlushTimer);
             generatorBatchFlushTimer = null;
         }
-        generatorBatchTimerStartedAt = (generatorBatchBuffer.length || fftBatchBuffer.length) ? new Date() : null;
-        if (generatorBatchTimerStartedAt) scheduleGeneratorBatchFlush();
+        generatorBatchTimerStartedAt = generatorBatchBuffer.length ? new Date() : null;
+        if (generatorBatchBuffer.length >= DB_BATCH_RECORDS) {
+            setImmediate(() => flushGeneratorBatch('buffer-full-600-continued').catch((err) => console.error('❌ Continued buffer flush error:', err.message)));
+        } else if (generatorBatchTimerStartedAt) {
+            scheduleGeneratorBatchFlush();
+        }
         updateGeneratorBatchStats();
 
         console.log(
-            `💾 MongoDB batch saved | reason=${reason} | generator=${generatorBatch.length} records | fft=${fftBatch.length} records | buffer=${generatorBatchBuffer.length} records | sentToMongo=${mqttIngestStats.insertedRecords} records`
+            `💾 MongoDB batch saved | reason=${reason} | generator=${generatorBatch.length}/${DB_BATCH_RECORDS} records | buffer=${generatorBatchBuffer.length} records | sentToMongo=${mqttIngestStats.insertedRecords} records`
         );
     } catch (err) {
         console.error('❌ MongoDB batch save error:', err.message);
 
         // Jika gagal, masukkan kembali ke depan buffer agar tidak hilang.
         generatorBatchBuffer = generatorBatch.concat(generatorBatchBuffer);
-        fftBatchBuffer = fftBatch.concat(fftBatchBuffer);
         activeTimeBatchBuffer = activeTimeBatch.concat(activeTimeBatchBuffer);
         if (!generatorBatchTimerStartedAt) generatorBatchTimerStartedAt = new Date();
         if (!generatorBatchFlushTimer) scheduleGeneratorBatchFlush();
@@ -1751,7 +1695,6 @@ function pickEffectivePayload(rawPayload) {
         ...payload,
         ...latestRecord,
         deviceId: latestRecord.deviceId || payload.deviceId,
-        fft: latestRecord.fft ?? payload.fft
     };
 }
 
@@ -1811,32 +1754,6 @@ function normalizeGeneratorPayload(rawPayload) {
     return snapshot;
 }
 
-function normalizeFftPayload(rawPayload, fallbackDeviceId) {
-    const payload = pickEffectivePayload(rawPayload);
-    const fft = payload.fft && typeof payload.fft === 'object' ? payload.fft : null;
-    if (!fft || fft.valid !== true) return null;
-
-    const freqBins = Array.isArray(fft.freqBins) ? fft.freqBins.map((v) => Number(v)).filter(Number.isFinite) : [];
-    const magBins = Array.isArray(fft.magBins) ? fft.magBins.map((v) => Number(v)).filter(Number.isFinite) : [];
-    const len = Math.min(freqBins.length, magBins.length);
-    if (!len) return null;
-
-    return {
-        timestamp: getSaneTimestamp(payload.timestamp, new Date()),
-        deviceId: payload.deviceId || fallbackDeviceId || 'ESP32_GENERATOR_01',
-        source: String(fft.source || ''),
-        sampleRateHz: toNumber(fft.sampleRateHz, 0),
-        samples: toNumber(fft.samples, len),
-        resolutionHz: toNumber(fft.resolutionHz, 0),
-        peakHz: toNumber(fft.peakHz, 0),
-        peakMagnitude: toNumber(fft.peakMagnitude, 0),
-        rms: toNumber(fft.rms, 0),
-        freqBins: freqBins.slice(0, len),
-        magBins: magBins.slice(0, len)
-    };
-}
-
-
 app.get('/api/ingest/status', (req, res) => {
     updateGeneratorBatchStats();
     res.json({
@@ -1847,144 +1764,41 @@ app.get('/api/ingest/status', (req, res) => {
         nextFlushAt: mqttIngestStats.nextFlushAt,
         dataSendMode: DATA_SEND_MODE,
         realtimeBufferBackendToMongo: REALTIME_BUFFER_BACKEND_TO_MONGO,
+        dbBatchRecords: DB_BATCH_RECORDS,
         bufferedGeneratorRecords: generatorBatchBuffer.length,
-        bufferedFftRecords: fftBatchBuffer.length,
         isFlushingGeneratorBatch
     });
 });
 
 app.get('/api/ingest/batch', (req, res) => {
-    res.json({
-        success: true,
-        message: 'Endpoint aktif. Browser GET hanya untuk cek status; ESP32 mengirim data backup dengan POST JSON.',
+    res.status(410).json({
+        success: false,
+        message: 'Endpoint batch backup dinonaktifkan. Server hanya menerima buffermongo dari MQTT gen/realtime.',
         method: 'POST',
         path: '/api/ingest/batch',
         dbReady: isDbReady(),
-        mqttHistoryTopic: 'gen/data',
         realtimeTopic: 'gen/realtime',
-        dbBatchIntervalMs: DB_BATCH_INTERVAL_MS,
-        dbBatchIntervalMinutes: DB_BATCH_INTERVAL_MS / 60000,
-        nextFlushAt: mqttIngestStats.nextFlushAt,
-        acceptedBody: {
-            deviceId: 'ESP32_GENERATOR_01',
-            source: 'esp32_sd_backup_10min',
-            records: [
-                {
-                    recordId: 'ESP32_GENERATOR_01-1-123456',
-                    localSeq: 1,
-                    timestamp: new Date().toISOString(),
-                    rpm: 1500,
-                    tps: 25,
-                    map: 80,
-                    iat: 35,
-                    clt: 75,
-                    afr: 14.7,
-                    batt: 12.8,
-                    fuel: 70,
-                    freq: 50,
-                    volt: 220,
-                    currentA: 10,
-                    powerKW: 2.2,
-                    phase_diff: 0,
-                    powerSource: 'GENSET'
-                }
-            ]
-        }
+        dataSendMode: DATA_SEND_MODE,
+        dbBatchRecords: DB_BATCH_RECORDS,
+        bufferedGeneratorRecords: generatorBatchBuffer.length
     });
 });
 
 // ============================================================
-// BACKUP INGEST ENDPOINT
-// Data dari SD card ESP32 dikirim ke endpoint ini sebagai batch/chunk.
-// Endpoint ini hanya menyimpan data historis ke MongoDB, tidak menjalankan alert,
-// karena alert realtime diproses dari MQTT gen/realtime.
+// BACKUP INGEST ENDPOINT DINONAKTIFKAN
+// Server hanya memakai mode buffermongo dari MQTT gen/realtime.
 // ============================================================
 app.post('/api/ingest/batch', async (req, res) => {
-    try {
-        if (!isDbReady()) {
-            await ensureDbReady();
-        }
-
-        const payload = req.body || {};
-        const records = Array.isArray(payload.records) ? payload.records : [];
-
-        if (!records.length) {
-            return res.status(400).json({
-                success: false,
-                error: 'records[] is required'
-            });
-        }
-
-        const docs = records
-            .filter((row) => row && typeof row === 'object')
-            .map((row) => {
-                const normalized = normalizeGeneratorPayload({
-                    ...row,
-                    deviceId: row.deviceId || payload.deviceId || latestData.deviceId,
-                    recordId: row.recordId,
-                    localSeq: row.localSeq
-                });
-
-                return buildGeneratorDbDocument({
-                    ...normalized,
-                    recordId: row.recordId,
-                    localSeq: row.localSeq
-                });
-            })
-            .filter((doc) => doc.recordId);
-
-        if (!docs.length) {
-            return res.status(400).json({
-                success: false,
-                error: 'No valid records with recordId'
-            });
-        }
-
-        const operations = docs.map((doc) => ({
-            updateOne: {
-                filter: { recordId: doc.recordId },
-                update: { $setOnInsert: doc },
-                upsert: true
-            }
-        }));
-
-        const result = await GeneratorData.bulkWrite(operations, { ordered: false });
-
-        const seqList = docs
-            .map((doc) => Number(doc.localSeq))
-            .filter(Number.isFinite);
-        const lastAcceptedSeq = seqList.length ? Math.max(...seqList) : null;
-
-        console.log(
-            `💾 SD backup ingest | device=${payload.deviceId || 'unknown'} | received=${records.length} | accepted=${docs.length} | inserted=${result.upsertedCount || 0} | duplicate=${result.matchedCount || 0} | lastSeq=${lastAcceptedSeq}`
-        );
-
-        return res.json({
-            success: true,
-            batchId: payload.batchId || null,
-            source: payload.source || 'esp32_sd_backup',
-            received: records.length,
-            accepted: docs.length,
-            ackedRecords: docs.length,
-            processedRecords: docs.length,
-            inserted: result.upsertedCount || 0,
-            matchedExisting: result.matchedCount || 0,
-            duplicate: result.matchedCount || 0,
-            lastAcceptedSeq
-        });
-
-    } catch (error) {
-        console.error('Batch ingest error:', error);
-        return res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
+    return res.status(410).json({
+        success: false,
+        error: 'Batch backup ingest is disabled. Use buffermongo via MQTT gen/realtime only.',
+        dataSendMode: DATA_SEND_MODE
+    });
 });
 
 mqttClient.on('message', async (topic, message) => {
     try {
-        if (topic !== 'gen/realtime' && topic !== 'gen/data') return;
+        if (topic !== 'gen/realtime') return;
 
         const raw = message.toString();
         mqttIngestStats.receivedMessages++;
@@ -2050,16 +1864,7 @@ mqttClient.on('message', async (topic, message) => {
         }
 
         // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.
-        // Untuk payload batch gen/data, pakai record terakhir agar dashboard tidak tertimpa
-        // wrapper { records: [...] } yang tidak berisi nilai sensor langsung.
-        const realtimeSourcePayload = (topic === 'gen/data' && Array.isArray(parsed.records) && parsed.records.length)
-            ? {
-                ...parsed.records[parsed.records.length - 1],
-                deviceId: parsed.records[parsed.records.length - 1].deviceId || parsed.deviceId,
-                source: parsed.records[parsed.records.length - 1].source || parsed.source,
-                timestamp: parsed.records[parsed.records.length - 1].timestamp || parsed.timestamp
-            }
-            : parsed;
+        const realtimeSourcePayload = parsed;
         latestData = normalizeGeneratorPayload(realtimeSourcePayload);
         latestRealtimeReceivedAt = new Date();
         latestData.lastMqttUpdate = latestRealtimeReceivedAt;
@@ -2068,26 +1873,6 @@ mqttClient.on('message', async (topic, message) => {
         const espTimestamp = getValidDate(latestData.timestamp);
         latestData.transportLatencyMs = espTimestamp ? Math.max(0, latestRealtimeReceivedAt.getTime() - espTimestamp.getTime()) : latestData.transportLatencyMs;
         broadcastEngineRealtimeUpdate();
-
-        const fftDoc = normalizeFftPayload(parsed, latestData.deviceId);
-        if (fftDoc) {
-            latestData.fft = {
-                valid: true,
-                source: fftDoc.source,
-                sampleRateHz: fftDoc.sampleRateHz,
-                samples: fftDoc.samples,
-                resolutionHz: fftDoc.resolutionHz,
-                peakHz: fftDoc.peakHz,
-                peakMagnitude: fftDoc.peakMagnitude,
-                rms: fftDoc.rms,
-                freqBins: fftDoc.freqBins,
-                magBins: fftDoc.magBins
-            };
-        }
-
-        // Active time history diproses dari data historis/database (gen/data),
-        // bukan dari heartbeat dashboard gen/realtime, agar mengikuti timestamp
-        // data baru yang benar-benar masuk ke database.
 
         // gen/realtime adalah jalur live untuk LCD/web dashboard. Jangan menunggu pekerjaan
         // database, alert, atau batch MongoDB di handler MQTT karena delay di sini dapat
@@ -2104,10 +1889,7 @@ mqttClient.on('message', async (topic, message) => {
                 try {
                     await checkAndSaveAlerts(realtimeSnapshotForBackend);
 
-                    const shouldBufferRealtimeToMongo = REALTIME_BUFFER_BACKEND_TO_MONGO
-                        && payloadMode !== 'bufferesp'
-                        && payloadMode !== 'esp'
-                        && payloadMode !== 'esp32';
+                    const shouldBufferRealtimeToMongo = REALTIME_BUFFER_BACKEND_TO_MONGO && payloadMode === DATA_SEND_MODE;
 
                     if (shouldBufferRealtimeToMongo) {
                         addGeneratorDataToBatch(realtimeSnapshotForBackend);
@@ -2122,65 +1904,7 @@ mqttClient.on('message', async (topic, message) => {
             return;
         }
 
-        // gen/data: jalur bufferesp. ESP32 mengirim CSV batch ±10 menit,
-        // lalu server menyimpan batch tersebut langsung ke MongoDB.
-        // Bentuk lama { records: [...] } tetap diterima untuk kompatibilitas.
-        if (topic === 'gen/data') {
-            const records = Array.isArray(parsed.records) ? parsed.records : [parsed];
-            mqttIngestStats.lastRecordCount = records.length;
-            console.log(`📥 MQTT gen/data received | bytes=${mqttIngestStats.lastPayloadBytes} | records=${records.length}`);
 
-            if (!records.length) {
-                mqttIngestStats.ignoredMessages++;
-                console.warn('⚠️ gen/data ignored: empty payload');
-                return;
-            }
-
-            const directGeneratorDocs = [];
-            const directActiveTimeSnapshots = [];
-            let bufferedGenerator = 0;
-            let bufferedFft = 0;
-
-            for (const record of records) {
-                if (!record || typeof record !== 'object') continue;
-
-                const snapshot = normalizeGeneratorPayload({
-                    ...record,
-                    deviceId: record.deviceId || parsed.deviceId,
-                    source: record.source || parsed.source,
-                    timestamp: record.timestamp || parsed.timestamp
-                });
-
-                const directSnapshot = {
-                    ...snapshot,
-                    recordId: record.recordId,
-                    localSeq: record.localSeq
-                };
-                directGeneratorDocs.push(buildGeneratorDbDocument(directSnapshot));
-                directActiveTimeSnapshots.push(directSnapshot);
-                bufferedGenerator++;
-
-                const recordFftDoc = normalizeFftPayload(record, snapshot.deviceId);
-                if (recordFftDoc) {
-                    addFftDataToBatch(recordFftDoc);
-                    bufferedFft++;
-                }
-            }
-
-            if (!bufferedGenerator && !bufferedFft) {
-                mqttIngestStats.ignoredMessages++;
-                console.warn(`⚠️ gen/data ignored: no valid records in payload.records[] | received=${records.length}`);
-                return;
-            }
-
-            if (directGeneratorDocs.length) {
-                await persistGeneratorDocumentsDirect(directGeneratorDocs, `esp-buffer-csv-${directGeneratorDocs.length}`);
-                for (const snapshot of directActiveTimeSnapshots) await syncActiveTimeHistory(snapshot);
-            }
-
-            if (bufferedFft) logGeneratorBatchStatus(`📦 gen/data FFT buffered | received=${records.length} | generatorDirect=${bufferedGenerator} | fftAdded=${bufferedFft}`);
-            else console.log(`💾 gen/data ESP buffer stored direct | received=${records.length} | stored=${bufferedGenerator}`);
-        }
 
     } catch (error) {
         updateMqttIngestError(error);
@@ -2199,7 +1923,7 @@ app.get('/api/mqtt-ingest/status', (req, res) => {
         mqttAvailable: Boolean(mqtt),
         mqttConnected: typeof mqttClient.connected === 'boolean' ? mqttClient.connected : false,
         broker: MQTT_BROKER_URL,
-        subscribedTopics: ['gen/realtime', 'gen/data'],
+        subscribedTopics: ['gen/realtime'],
         dbReady: isDbReady(),
         stats: mqttIngestStats
     });
@@ -2513,58 +2237,6 @@ app.get('/api/engine-data/history', async (req, res) => {
         res.json({ success: true, count: data.length, data, source: 'database' });
     } catch (error) {
         res.json({ success: true, count: 0, data: [], source: 'memory', warning: error.message });
-    }
-});
-
-function normalizeFftApiDoc(doc) {
-    if (!doc) return null;
-    const freqBins = Array.isArray(doc.freqBins) ? doc.freqBins.map(Number).filter(Number.isFinite) : [];
-    const magBins = Array.isArray(doc.magBins) ? doc.magBins.map(Number).filter(Number.isFinite) : [];
-    const len = Math.min(freqBins.length, magBins.length);
-    return {
-        ...doc,
-        valid: len > 0,
-        freqBins: freqBins.slice(0, len),
-        magBins: magBins.slice(0, len),
-        samples: Number(doc.samples) || len,
-        sampleRateHz: Number(doc.sampleRateHz) || 0,
-        resolutionHz: Number(doc.resolutionHz) || 0,
-        peakHz: Number(doc.peakHz) || 0,
-        peakMagnitude: Number(doc.peakMagnitude) || 0,
-        rms: Number(doc.rms) || 0
-    };
-}
-
-function buildFftSourceAliases(source) {
-    const key = String(source || '').toLowerCase();
-    const aliases = {
-        rpm: ['rpm', 'rpm_fft', 'speed', 'rotation'],
-        freq: ['freq', 'freq_fft', 'frequency', 'hz'],
-        volt: ['volt', 'volt_fft', 'voltage', 'v']
-    };
-    return aliases[key] || (key ? [key] : []);
-}
-
-app.get('/api/fft/latest', async (req, res) => {
-    try {
-        const { deviceId, startDate, endDate, source } = req.query;
-        const query = {};
-        if (deviceId) query.deviceId = deviceId;
-        if (startDate || endDate) {
-            query.timestamp = {};
-            if (startDate) query.timestamp.$gte = new Date(startDate);
-            if (endDate) query.timestamp.$lte = new Date(endDate);
-        }
-
-        const aliases = buildFftSourceAliases(source);
-        const sourcePatterns = aliases.map((alias) => new RegExp(`^${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-        const sourceQuery = sourcePatterns.length ? { ...query, source: { $in: sourcePatterns } } : query;
-        let latest = await FFTData.findOne(sourceQuery).sort({ timestamp: -1 }).lean();
-        if (!latest && aliases.length) latest = await FFTData.findOne(query).sort({ timestamp: -1 }).lean();
-
-        res.json({ success: true, data: normalizeFftApiDoc(latest) });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -3455,9 +3127,7 @@ async function createCbmAnalysisPayload(options = {}) {
     }
 
     const totalOperatingHours = await getTotalOperatingHours(deviceId);
-    const fftPeaks = Array.isArray(options.fftPeaks) ? options.fftPeaks : [];
-    const rpmMean = normalizeCbmNumber(options.rpmMean, 0);
-    return analyzeCBM(rows, ACTIVE_THRESHOLDS, totalOperatingHours, fftPeaks, rpmMean);
+    return analyzeCBM(rows, ACTIVE_THRESHOLDS, totalOperatingHours);
 }
 
 async function runCbmAnalysisOnce() {
