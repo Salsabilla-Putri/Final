@@ -706,6 +706,7 @@ if (isVercelRuntime && !enableServerlessMqtt) {
 }
 
 const mqttIngestStats = {
+    serverStartTime: Date.now(),
     connectedAt: null,
     lastMessageAt: null,
     lastTopic: null,
@@ -730,7 +731,8 @@ const mqttIngestStats = {
     lastFlushReason: null,
     lastFlushedRecords: 0,
     lastErrorAt: null,
-    lastError: null
+    lastError: null, 
+    failedBatches: 0
 };
 
 function updateMqttIngestError(error) {
@@ -1347,6 +1349,44 @@ function addGeneratorDataToBatch(snapshot) {
     }
 }
 
+function printMongoReliabilityReport() {
+    const uptimeSec = Math.max(1, (Date.now() - mqttIngestStats.serverStartTime) / 1000);
+    const sent = mqttIngestStats.insertedRecords || 0;
+    const rateSec = sent / uptimeSec; // Rata-rata record per detik sejak server nyala
+    
+    const batches = mqttIngestStats.savedMessages || 0;
+    const avgBatch = batches > 0 ? (sent / batches).toFixed(1) : 0;
+    
+    const recordSizeEst = 350; // Estimasi ukuran 1 dokumen BSON (Bytes)
+    const est10YearsBytes = rateSec * 60 * 60 * 24 * 365.25 * 10 * recordSizeEst;
+    
+    // Fungsi format Bytes ke KB/MB/GB/TB
+    const formatBytes = (bytes) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    const mqttState = (mqttClient && mqttClient.connected) ? 'CONNECTED ✅' : 'DISCONNECTED ❌';
+    const intervalMin = (DB_BATCH_INTERVAL_MS / 60000).toFixed(1);
+
+    // Fungsi helper untuk padding spasi di terminal
+    const fill = (text, width = 57) => String(text).padEnd(width) + '║';
+
+    console.log('\n╔═══════════════════════════════════════════════════════════╗');
+    console.log('║               DATABASE RELIABILITY METRICS                ║');
+    console.log('╠═══════════════════════════════════════════════════════════╣');
+    console.log('║ ' + fill(`MongoDB batch interval   : ${DB_BATCH_INTERVAL_MS} ms (${intervalMin} min)`));
+    console.log('║ ' + fill(`MongoDB sent records     : ${sent} records`));
+    console.log('║ ' + fill(`MongoDB failed batch     : ${mqttIngestStats.failedBatches || 0} batches`));
+    console.log('║ ' + fill(`Last MQTT state          : ${mqttState}`));
+    console.log('║ ' + fill(`MongoDB record size (est): ~${recordSizeEst} Bytes / record`));
+    console.log('║ ' + fill(`MongoDB avg sent record  : ${avgBatch} records / batch`));
+    console.log('║ ' + fill(`MongoDB records rate     : ${rateSec.toFixed(2)} records / second`));
+    console.log('║ ' + fill(`Est. Payload (10 years)  : ${formatBytes(est10YearsBytes)}`));
+    console.log('╚═══════════════════════════════════════════════════════════╝\n');
+}
 
 async function flushGeneratorBatch(reason = 'interval') {
     if (isFlushingGeneratorBatch) return;
@@ -1420,7 +1460,9 @@ async function flushGeneratorBatch(reason = 'interval') {
         console.log(
             `💾 MongoDB batch saved | reason=${reason} | generator=${generatorBatch.length}/${DB_BATCH_RECORDS} records | buffer=${generatorBatchBuffer.length} records | sentToMongo=${mqttIngestStats.insertedRecords} records`
         );
+        printMongoReliabilityReport();
     } catch (err) {
+        mqttIngestStats.failedBatches = (mqttIngestStats.failedBatches || 0) + 1;
         console.error('❌ MongoDB batch save error:', err.message);
 
         // Jika gagal, masukkan kembali ke depan buffer agar tidak hilang.
