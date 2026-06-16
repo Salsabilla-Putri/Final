@@ -711,6 +711,10 @@ const mqttIngestStats = {
     lastTopic: null,
     lastPayloadBytes: 0,
     lastRecordCount: 0,
+    esp32SentRecords: 0,
+    lastEsp32SentRecords: 0,
+    lastEsp32RecordId: null,
+    lastEsp32LocalSeq: null,
     receivedMessages: 0,
     invalidJsonMessages: 0,
     ignoredMessages: 0,
@@ -733,6 +737,35 @@ function updateMqttIngestError(error) {
     mqttIngestStats.lastErrorAt = new Date();
     mqttIngestStats.lastError = error?.message || String(error);
 }
+
+function getMqttPayloadRecordCount(payload) {
+    if (Array.isArray(payload)) return payload.length;
+    if (Array.isArray(payload?.records)) return payload.records.length;
+    if (payload && typeof payload === 'object') return 1;
+    return 0;
+}
+
+function getLatestMqttPayloadRecord(payload) {
+    if (Array.isArray(payload) && payload.length) return payload[payload.length - 1];
+    if (Array.isArray(payload?.records) && payload.records.length) return payload.records[payload.records.length - 1];
+    return payload && typeof payload === 'object' ? payload : null;
+}
+
+function logEsp32SentRecordCount(topic, payload, payloadBytes) {
+    const recordCount = getMqttPayloadRecordCount(payload);
+    const latestRecord = getLatestMqttPayloadRecord(payload) || {};
+
+    mqttIngestStats.lastRecordCount = recordCount;
+    mqttIngestStats.lastEsp32SentRecords = recordCount;
+    mqttIngestStats.esp32SentRecords += recordCount;
+    mqttIngestStats.lastEsp32RecordId = latestRecord.recordId || null;
+    mqttIngestStats.lastEsp32LocalSeq = latestRecord.localSeq ?? null;
+
+    console.log(
+        `📥 ESP32 sent record(s) received | topic=${topic} | records=${recordCount} | totalFromEsp32=${mqttIngestStats.esp32SentRecords} | bytes=${payloadBytes} | recordId=${mqttIngestStats.lastEsp32RecordId || '-'} | localSeq=${mqttIngestStats.lastEsp32LocalSeq ?? '-'}`
+    );
+}
+
 
 function shouldSkipApiDbWarmup(req) {
     if (req.method !== 'GET') return false;
@@ -1862,6 +1895,8 @@ mqttClient.on('message', async (topic, message) => {
                 return;
             }
         }
+
+        logEsp32SentRecordCount(topic, parsed, mqttIngestStats.lastPayloadBytes);
 
         // Semua pesan MQTT tetap memperbarui latestData agar dashboard memory selalu aktual.
         const realtimeSourcePayload = parsed;

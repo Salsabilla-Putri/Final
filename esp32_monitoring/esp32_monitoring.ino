@@ -52,14 +52,6 @@
 #include <math.h>
 #include "gensys_logo_200x200_rgb565.h"
 
-#if __has_include(<PNGdec.h>)
-  #include <PNGdec.h>
-  #define GENSYS_HAS_PNGDEC 1
-#else
-  #define GENSYS_HAS_PNGDEC 0
-#endif
-
-
 // ============================================================
 // USER CONFIG
 // ============================================================
@@ -335,7 +327,6 @@ SemaphoreHandle_t dataMutex = NULL;
 
 const char* DB_FILE = "/sdDatabase.csv";
 const char* DB_LEGACY_FILE = "/database.csv";  // File lama tidak dipakai lagi agar mulai bersih dengan sdDatabase.csv.
-const char* BOOT_LOGO_PNG_FILE = "/logo.png";
 
 // Header CSV lokal. sdDatabase.csv hanya berisi parameter agregasi utama.
 const char* DB_CSV_HEADER =
@@ -2022,10 +2013,6 @@ String buildJsonParameterBatchPayload() {
 }
 
 
-String buildJsonRecord(const StorageRecord &r) {
-  return buildJsonRecordParametersOnly(r);
-}
-
 String buildMqttRealtimeFlatPayload() {
   // Payload khusus MQTT realtime ke dashboard.
   // Format dibuat flat: timestamp + parameter langsung di root JSON.
@@ -2079,37 +2066,6 @@ String buildMqttRealtimeFlatPayload() {
 
   perfJsonBuildUs = micros() - buildStart;
   return json;
-}
-
-String buildMqttHistoryWrapperPayload() {
-  // Payload wrapper lama dipertahankan hanya untuk kompatibilitas command/debug.
-  // Pengiriman utama ke MongoDB memakai record tunggal realtime tiap 1 detik.
-  uint32_t buildStart = micros();
-
-  String json = "{";
-  json += "\"deviceId\":\"" + String(DEVICE_ID) + "\",";
-  json += "\"type\":\"record_1s\",";
-  json += "\"publishedAt\":\"" + getIsoTimestampWIBms() + "\",";
-  json += "\"records\":[";
-
-  bool first = true;
-  for (uint8_t i = 0; i < STORAGE_BATCH_SIZE; i++) {
-    if (!storageBatch[i].valid) continue;
-    if (!first) json += ",";
-    json += buildJsonRecord(storageBatch[i]);
-    first = false;
-  }
-
-  json += "]}";
-
-  perfJsonBuildUs = micros() - buildStart;
-  return json;
-}
-
-String buildJsonBatchPayload() {
-  // Backward compatibility untuk command/fungsi lama.
-  // Setelah implementasi split payload, fungsi ini mengembalikan payload realtime flat.
-  return buildMqttRealtimeFlatPayload();
 }
 
 void printMqttPayloadReport(const String &payload,
@@ -2196,7 +2152,7 @@ void printCurrentMqttPayloadBuild() {
   }
 
   String payload = buildMqttRealtimeFlatPayload();
-  String parameterOnlyPayload = buildMqttHistoryWrapperPayload();
+  String parameterOnlyPayload = buildJsonParameterBatchPayload();
 
   printMqttPayloadReport(
     payload,
@@ -2314,7 +2270,7 @@ void printSerialMonitoringOverview() {
   Serial.println(F("║ 2) HASIL AGREGASI 1 DETIK / DATA DATABASE                 ║"));
   Serial.printf("║ samples=%u rpm=%.1f tps=%.1f map=%.1f freq=%.3f volt=%.2f\n",
                 a.samples, a.rpmAvg, a.tpsAvg, a.mapAvg, a.freqAvg, a.voltAvg);
-  Serial.printf("║ current=%.2fA power=%.3fkW phase=%.2fdeg synced=%d\n",
+  Serial.printf("║ current=%.2fA power=%.3fkW phase=%.2f° synced=%d\n",
                 a.currentAvg, a.powerAvg, a.phaseAngleAvg, a.synced ? 1 : 0);
   if (hasLastDatabasePayloadCache) {
     Serial.print(F("║ last CSV bytes : ")); Serial.print(lastDatabaseCsvBytesCache);
@@ -2431,6 +2387,15 @@ void publishRealtimeData() {
   Serial.print(F(" publishUs="));
   Serial.println(perfMqttPublishUs);
 
+  Serial.print(F("[MONGODB-RECORD] status="));
+  Serial.print(historyOk ? F("SENT_TO_SERVER_BUFFER") : F("NOT_SENT"));
+  Serial.print(F(" topic="));
+  Serial.print(MQTT_REALTIME_TOPIC);
+  Serial.print(F(" records="));
+  Serial.print(recordsInPayload);
+  Serial.print(F(" latestLocalSeq="));
+  Serial.println(latestPayloadSeq);
+
   if (serialMqttPayloadEnabled || serialRealtimePayloadEnabled) {
     printMqttPayloadReport(
       realtimePayload,
@@ -2457,7 +2422,7 @@ void publishRealtimeData() {
                     MQTT_REALTIME_TOPIC,
                     (unsigned long)mqttLastPayloadBytes,
                     (unsigned long)mqttLastRecordsSent);
-      Serial.println(F("[TEST] Realtime terkirim; MongoDB/history menunggu buffer batch 10 menit."));
+      Serial.println(F("[TEST] Record terkirim ke topic buffermongo; server akan menyimpan ke MongoDB saat buffer 600 record penuh/interval 10 menit."));
       Serial.println(F("╚══════════════════════════════════════════════════╝"));
       updateTestOnceCompletion();
     }
@@ -3410,224 +3375,6 @@ void drawWiFiPortalInfo(const char* statusText) {
 }
 
 
-void drawWiFiLcdSelectionPage(const char* statusText) {
-  tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
-  tft.setTextColor(C_WHITE, C_PRIMARY);
-  tft.setTextSize(2);
-  tft.setCursor(12, 11);
-  tft.print("PILIH WIFI");
-
-  tft.setTextColor(C_MUTED, C_BG);
-  tft.setTextSize(1);
-  tft.setCursor(220, 15);
-  tft.print(statusText);
-
-  for (uint8_t i = 0; i < wifiLcdNetworkCount; i++) {
-    int y = 48 + i * 34;
-    bool openNetwork = wifiLcdEncryptions[i] == WIFI_AUTH_OPEN;
-    tft.fillRoundRect(14, y, 452, 28, 6, C_WHITE);
-    tft.drawRoundRect(14, y, 452, 28, 6, C_BORDER);
-    tft.setTextColor(C_DARK, C_WHITE);
-    tft.setTextSize(1);
-    tft.setCursor(26, y + 10);
-    String name = wifiLcdSsids[i];
-    if (name.length() > 28) name = name.substring(0, 28);
-    tft.print(i + 1);
-    tft.print(". ");
-    tft.print(name);
-    tft.setCursor(315, y + 10);
-    tft.print(wifiLcdRssis[i]);
-    tft.print(" dBm");
-    tft.setCursor(402, y + 10);
-    tft.print(openNetwork ? "OPEN" : "LOCK");
-  }
-
-  if (wifiLcdNetworkCount == 0) {
-    tft.setTextColor(C_RED, C_BG);
-    tft.setCursor(24, 92);
-    tft.print("Tidak ada SSID terdeteksi. Tekan RESCAN atau OFFLINE.");
-  }
-
-  tft.fillRoundRect(14, 262, 140, 40, 8, C_WHITE);
-  tft.drawRoundRect(14, 262, 140, 40, 8, C_PRIMARY);
-  tft.setTextColor(C_PRIMARY, C_WHITE);
-  tft.setCursor(55, 277);
-  tft.print("RESCAN");
-
-  tft.fillRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
-  tft.drawRoundRect(170, 262, 140, 40, 8, C_PRIMARY);
-  tft.setTextColor(C_WHITE, C_PRIMARY);
-  tft.setCursor(210, 277);
-  tft.print("OFFLINE");
-
-  tft.fillRoundRect(326, 262, 140, 40, 8, C_WHITE);
-  tft.drawRoundRect(326, 262, 140, 40, 8, C_PRIMARY);
-  tft.setTextColor(C_PRIMARY, C_WHITE);
-  tft.setCursor(370, 277);
-  tft.print("OFFLINE");
-}
-
-uint8_t scanWiFiForLcdSelection() {
-  wifiLcdNetworkCount = 0;
-  for (uint8_t i = 0; i < WIFI_LCD_MAX_NETWORKS; i++) {
-    wifiLcdSsids[i] = "";
-    wifiLcdRssis[i] = -127;
-    wifiLcdEncryptions[i] = WIFI_AUTH_OPEN;
-  }
-
-  drawWiFiLcdSelectionPage("Scanning...");
-  WiFi.mode(WIFI_STA);
-  applyWiFiCountryConfig();
-  delay(200);
-
-  int n = WiFi.scanNetworks(false, true);
-  if (n <= 0) {
-    WiFi.scanDelete();
-    drawWiFiLcdSelectionPage("No SSID found");
-    return 0;
-  }
-
-  for (int i = 0; i < n; i++) {
-    String ssid = WiFi.SSID(i);
-    if (!ssid.length()) continue;
-
-    bool duplicate = false;
-    for (uint8_t j = 0; j < wifiLcdNetworkCount; j++) {
-      if (wifiLcdSsids[j] == ssid) {
-        duplicate = true;
-        if (WiFi.RSSI(i) > wifiLcdRssis[j]) {
-          wifiLcdRssis[j] = WiFi.RSSI(i);
-          wifiLcdEncryptions[j] = WiFi.encryptionType(i);
-        }
-        break;
-      }
-    }
-    if (duplicate) continue;
-
-    if (wifiLcdNetworkCount < WIFI_LCD_MAX_NETWORKS) {
-      wifiLcdSsids[wifiLcdNetworkCount] = ssid;
-      wifiLcdRssis[wifiLcdNetworkCount] = WiFi.RSSI(i);
-      wifiLcdEncryptions[wifiLcdNetworkCount] = WiFi.encryptionType(i);
-      wifiLcdNetworkCount++;
-    }
-  }
-
-  WiFi.scanDelete();
-  drawWiFiLcdSelectionPage("Tap SSID / OFFLINE");
-  return wifiLcdNetworkCount;
-}
-
-int waitForWiFiLcdSelection() {
-  unsigned long startedAt = millis();
-  static unsigned long lastTouchMs = 0;
-
-  while (millis() - startedAt < WIFI_LCD_SELECT_TIMEOUT_MS) {
-    if (touchDetected && ts.touched() && millis() - lastTouchMs > 220UL) {
-      int x, y, rawX, rawY;
-      readTouchMapped(x, y, rawX, rawY);
-      lastTouchMs = millis();
-
-      for (uint8_t i = 0; i < wifiLcdNetworkCount; i++) {
-        int rowY = 48 + i * 34;
-        if (x >= 14 && x <= 466 && y >= rowY && y <= rowY + 28) {
-          return i;
-        }
-      }
-
-      if (y >= 262 && y <= 310) {
-        if (x >= 14 && x <= 154) return -2;   // rescan
-        if (x >= 170 && x <= 310) return -4;  // offline
-        if (x >= 326 && x <= 466) return -4;  // offline
-      }
-    }
-
-    delay(20);
-    yield();
-  }
-
-  return -4; // timeout: stay offline; WiFiManager is handled by setupWiFiManager(), not the LCD page.
-}
-
-bool connectSelectedWiFiFromLcd(uint8_t index) {
-  if (index >= wifiLcdNetworkCount) return false;
-
-  const String ssid = wifiLcdSsids[index];
-  bool openNetwork = wifiLcdEncryptions[index] == WIFI_AUTH_OPEN;
-
-  tft.fillRect(0, 0, SW, 38, C_PRIMARY);
-  tft.setTextColor(C_WHITE, C_PRIMARY);
-  tft.setTextSize(2);
-  tft.setCursor(12, 11);
-  tft.print("CONNECT WIFI");
-  tft.fillRect(14, 210, 452, 36, C_BG);
-  tft.setTextColor(C_DARK, C_BG);
-  tft.setTextSize(1);
-  tft.setCursor(24, 218);
-  tft.print("Mencoba SSID: ");
-  tft.print(ssid);
-  tft.setCursor(24, 236);
-  tft.print(openNetwork ? "Jaringan open." : "Jaringan terkunci: mencoba credential tersimpan.");
-
-  Serial.print(F("[WIFI LCD] Selected SSID: "));
-  Serial.println(ssid);
-  Serial.println(openNetwork ? F("[WIFI LCD] Open network, direct connect.") : F("[WIFI LCD] Locked network, trying saved credential first."));
-
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  applyWiFiStabilityConfig();
-
-  if (openNetwork) {
-    WiFi.begin(ssid.c_str());
-  } else {
-    // ESP32 can reconnect here only if this SSID/password was already saved in NVS.
-    // If it fails, fallback WiFiManager portal is shown for password entry.
-    WiFi.begin(ssid.c_str());
-  }
-
-  if (waitForWiFiConnection(F("[WIFI LCD]"), WIFI_LCD_CONNECT_TIMEOUT_MS)) {
-    wifiOK = true;
-    wifiConnectionMode = WIFI_MODE_MANAGER;
-    printWiFiConnectedInfo(F("[WIFI LCD]"));
-    return true;
-  }
-
-  WiFi.disconnect(false, false);
-  wifiOK = false;
-  Serial.println(F("[WIFI LCD] Connect failed. Password mungkin belum tersimpan; fallback ke portal."));
-  drawWiFiPortalInfo("SSID terkunci/gagal. Lanjutkan lewat Configure WiFi.");
-  delay(1200);
-  return false;
-}
-
-bool connectWiFiFromLcdSelection() {
-  if (!touchDetected) {
-    Serial.println(F("[WIFI LCD] Touch tidak terdeteksi, skip pilihan LCD."));
-    return false;
-  }
-
-  while (true) {
-    scanWiFiForLcdSelection();
-    int choice = waitForWiFiLcdSelection();
-
-    if (choice >= 0) {
-      if (connectSelectedWiFiFromLcd((uint8_t)choice)) return true;
-      return false;
-    }
-
-    if (choice == -2) continue;
-    if (choice == -4) {
-      Serial.println(F("[WIFI LCD] User chose OFFLINE."));
-      return false;
-    }
-
-    Serial.println(F("[WIFI LCD] Selection timeout; no portal page is drawn on LCD."));
-    drawWiFiPortalInfo("WiFiManager berjalan tanpa halaman portal di LCD.");
-    delay(700);
-    return false;
-  }
-}
-
 bool connectWiFiManagerFallback() {
   Serial.println();
   Serial.println(F("╔════════════ WIFI MANAGER PORTAL FALLBACK SAFE ════════════╗"));
@@ -3971,15 +3718,6 @@ void checkWiFiStatus() {
 // ============================================================
 // BOOT SPLASH + UI COMPONENT
 // ============================================================
-void drawThickArc(int cx, int cy, int r, int thick, int startDeg, int endDeg, uint16_t color) {
-  for (int a = startDeg; a <= endDeg; a += 4) {
-    float rad = a * PI / 180.0f;
-    int x = cx + (int)(cos(rad) * r);
-    int y = cy + (int)(sin(rad) * r);
-    tft.fillCircle(x, y, thick / 2, color);
-  }
-}
-
 void drawFilledRingSegment(int cx, int cy, int outerR, int innerR, int startDeg, int endDeg, uint16_t color) {
   if (endDeg < startDeg) endDeg += 360;
   for (int a = startDeg; a <= endDeg; a += 2) {
@@ -3999,27 +3737,10 @@ void drawThickLine(int x1, int y1, int x2, int y2, uint16_t color, int width) {
   }
 }
 
-void drawPulseLine(int cx, int cy, uint16_t color) {
-  const int points[][2] = {
-    {-70, 0}, {-32, 0}, {-22, -18}, {-8, 24}, {10, -82},
-    {32, 78}, {52, -42}, {68, 0}, {104, 0}
-  };
-
-  for (uint8_t i = 0; i < 8; i++) {
-    drawThickLine(cx + points[i][0], cy + points[i][1],
-                  cx + points[i + 1][0], cy + points[i + 1][1],
-                  color, 7);
-  }
-  tft.fillCircle(cx + points[0][0], cy + points[0][1], 4, color);
-  tft.fillCircle(cx + points[8][0], cy + points[8][1], 4, color);
-}
-
 uint16_t bootLogoColor(uint16_t rgb565) {
-  // Modul TFT ini menampilkan warna boot logo tertukar byte untuk primitive
-  // drawing (biru menjadi kuning/hijau dan oranye menjadi cyan). Fallback logo
-  // memakai warna referensi yang dibalik byte-nya agar hasil fisik LCD kembali
-  // navy/biru/oranye seperti gambar GENSYS yang diberikan.
-  return (uint16_t)((rgb565 << 8) | (rgb565 >> 8));
+  // Warna boot logo dipertahankan dalam RGB565 normal agar logo flash/fallback
+  // konsisten dengan warna sumber /logo.png (navy, biru, dan oranye).
+  return rgb565;
 }
 
 void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
@@ -4070,119 +3791,6 @@ void drawGensysLogoMark(int cx, int cy, int r, uint16_t fg, uint16_t bg) {
   }
   tft.fillCircle(cx + p[0][0], cy + p[0][1], 3, orange);
   tft.fillCircle(cx + p[8][0], cy + p[8][1], 3, orange);
-}
-
-
-#if GENSYS_HAS_PNGDEC
-PNG bootLogoPng;
-File bootLogoFile;
-int bootLogoX = 0;
-int bootLogoY = 0;
-int bootLogoScale = 1;
-int bootLogoDrawW = 0;
-int bootLogoDrawH = 0;
-uint16_t bootLogoSrcLine[SW];
-uint16_t bootLogoDrawLine[SW];
-
-void *pngSdOpen(const char *filename, int32_t *size) {
-  bootLogoFile = SD.open(filename, FILE_READ);
-  if (!bootLogoFile) return NULL;
-  *size = bootLogoFile.size();
-  return &bootLogoFile;
-}
-
-void pngSdClose(void *handle) {
-  File *f = static_cast<File*>(handle);
-  if (f && *f) f->close();
-}
-
-int32_t pngSdRead(PNGFILE *page, uint8_t *buffer, int32_t length) {
-  File *f = static_cast<File*>(page->fHandle);
-  if (!f || !*f) return 0;
-  return f->read(buffer, length);
-}
-
-int32_t pngSdSeek(PNGFILE *page, int32_t position) {
-  File *f = static_cast<File*>(page->fHandle);
-  if (!f || !*f) return 0;
-  return f->seek(position) ? position : 0;
-}
-
-void pngDrawToTft(PNGDRAW *pDraw) {
-  uint16_t srcW = pDraw->iWidth;
-  if (srcW > SW) srcW = SW;
-
-  bootLogoPng.getLineAsRGB565(pDraw, bootLogoSrcLine, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
-
-  if (bootLogoScale <= 1) {
-    tft.pushImage(bootLogoX, bootLogoY + pDraw->y, srcW, 1, bootLogoSrcLine);
-    return;
-  }
-
-  if ((pDraw->y % bootLogoScale) != 0) return;
-
-  int outY = bootLogoY + (pDraw->y / bootLogoScale);
-  if (outY < bootLogoY || outY >= bootLogoY + bootLogoDrawH) return;
-
-  int outW = min(bootLogoDrawW, SW);
-  for (int x = 0; x < outW; x++) {
-    int srcX = x * bootLogoScale;
-    if (srcX >= srcW) srcX = srcW - 1;
-    bootLogoDrawLine[x] = bootLogoSrcLine[srcX];
-  }
-  tft.pushImage(bootLogoX, outY, outW, 1, bootLogoDrawLine);
-}
-#endif
-
-bool drawBootLogoFromSd(int cx, int cy, int maxW, int maxH) {
-  if (!sdOK) return false;
-
-#if GENSYS_HAS_PNGDEC
-  if (!SD.exists(BOOT_LOGO_PNG_FILE)) return false;
-  if (sdMutex != NULL && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
-
-  bool ok = false;
-  deselectAllSPI();
-  int rc = bootLogoPng.open(BOOT_LOGO_PNG_FILE, pngSdOpen, pngSdClose, pngSdRead, pngSdSeek, pngDrawToTft);
-  if (rc == PNG_SUCCESS) {
-    int pngW = bootLogoPng.getWidth();
-    int pngH = bootLogoPng.getHeight();
-
-    if (pngW > 0 && pngH > 0 && pngW <= SW) {
-      bootLogoScale = max(1, max((pngW + maxW - 1) / maxW, (pngH + maxH - 1) / maxH));
-      bootLogoDrawW = max(1, pngW / bootLogoScale);
-      bootLogoDrawH = max(1, pngH / bootLogoScale);
-      bootLogoX = cx - (bootLogoDrawW / 2);
-      bootLogoY = cy - (bootLogoDrawH / 2);
-
-      tft.fillRect(cx - maxW / 2, cy - maxH / 2, maxW, maxH, C_WHITE);
-      ok = bootLogoPng.decode(NULL, 0) == PNG_SUCCESS;
-
-      Serial.print(F("[BOOT LOGO] /logo.png drawn from SD: "));
-      Serial.print(pngW);
-      Serial.print('x');
-      Serial.print(pngH);
-      Serial.print(F(" -> "));
-      Serial.print(bootLogoDrawW);
-      Serial.print('x');
-      Serial.println(bootLogoDrawH);
-    }
-    bootLogoPng.close();
-  }
-
-  if (sdMutex != NULL) xSemaphoreGive(sdMutex);
-  if (!ok) {
-    Serial.println(F("[BOOT LOGO] /logo.png tidak bisa digambar. Pakai PNG RGB/RGBA dengan lebar <=480 px; gambar akan diskalakan ke area boot."));
-  }
-  return ok;
-#else
-  static bool warned = false;
-  if (!warned) {
-    Serial.println(F("[BOOT LOGO] PNGdec tidak tersedia saat compile; /logo.png tidak bisa dibaca dan memakai logo vektor fallback."));
-    warned = true;
-  }
-  return false;
-#endif
 }
 
 
@@ -4352,13 +3960,13 @@ void drawValueCard(int x, int y, int w, int h, const char* label, const char* va
 
   tft.setTextColor(color, C_WHITE);
   tft.setTextSize(2);
-  tft.setCursor(x + 8, y + 28);
-  tft.print(value);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString(value, x + (w / 2), y + 33);
 
   tft.setTextColor(C_MUTED, C_WHITE);
   tft.setTextSize(1);
-  tft.setCursor(x + w - 34, y + 35);
-  tft.print(unit);
+  tft.drawString(unit, x + (w / 2), y + h - 9);
+  tft.setTextDatum(TL_DATUM);
 }
 
 void drawValueBox(int x, int y, int w, int h, const char* label, const char* value, const char* unit, uint16_t color) {
@@ -4573,7 +4181,7 @@ void drawGeneratorPage(bool full) {
   // Right-side cards: PHASE, POWER, CURRENT, SYNC STATUS.
   // Semua card hanya di-render ulang jika nilainya berubah atau saat ganti page.
   if (forceValueUpdate || changedFloat(lastPhase, d.phaseAngleAvg, 0.1f)) {
-    drawValueBox(326, 50, 140, 50, "PHASE", fmtF(d.phaseAngleAvg, 1), "deg",
+    drawValueBox(326, 50, 140, 50, "PHASE", fmtF(d.phaseAngleAvg, 1), "°",
                  abs(d.phaseAngleAvg) < THRESH_PHASE_WARN_ABS ? C_GREEN : abs(d.phaseAngleAvg) < THRESH_PHASE_CRIT_ABS ? C_YELLOW : C_RED);
     lastPhase = d.phaseAngleAvg;
   }
@@ -5039,6 +4647,7 @@ void printSerialHelp() {
   Serial.println(F("LOG CMD   : log acq on | log performance on | log aggregation on | log latest on | log off"));
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | rx monitor on/off | db reset | db reset confirm"));
   Serial.println(F("MQTT JSON : mqtt payload | mqtt payload now | mqtt payload on | mqtt payload off"));
+  Serial.println(F("DISPLAY   : page generator | page engine | page next | calibrate | touch calibrate"));
   Serial.println(F("ALIAS     : json mqtt | json mqtt now | json mqtt on | json mqtt off"));
   Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 2-5 menit, lalu ketik 'perf' atau 'db'."));
 }
@@ -5271,7 +4880,7 @@ void printAcquisitionSpecReport() {
   Serial.print  (F(" V | I=")); Serial.print(r.currentA, 2);
   Serial.print  (F(" A | P=")); Serial.print(r.powerKW, 3);
   Serial.print  (F(" kW | f=")); Serial.print(r.freq, 3);
-  Serial.print  (F(" Hz | phase=")); Serial.print(r.phaseAngle, 2); Serial.println(F(" deg"));
+  Serial.print  (F(" Hz | phase=")); Serial.print(r.phaseAngle, 2); Serial.println(F(" °"));
   Serial.print  (F("║ Mesin       : RPM=")); Serial.print(r.rpm);
   Serial.print  (F(" | CLT=")); Serial.print(r.clt);
   Serial.print  (F(" C | IAT=")); Serial.print(r.iat);
@@ -5438,7 +5047,7 @@ void printLatestDataReport() {
   Serial.println(F("================ LATEST DATA ================"));
   Serial.printf("RAW seq=%lu valid=%d rpm=%d tps=%d map=%d iat=%d clt=%d afr=%.2f batt=%.2f fuel=%.1f\n",
                 (unsigned long)r.seq, r.valid ? 1 : 0, r.rpm, r.tps, r.map, r.iat, r.clt, r.afr, r.batt, r.fuel);
-  Serial.printf("RAW freq=%.3f freqGrid=%.3f volt=%.2f voltGrid=%.2f phase=%.2f sync=%d\n",
+  Serial.printf("RAW freq=%.3f freqGrid=%.3f volt=%.2f voltGrid=%.2f phase=%.2f° sync=%d\n",
                 r.freq, r.freqGrid, r.volt, r.voltGrid, r.phaseAngle, r.gridSync ? 1 : 0);
   Serial.printf("AGG samples=%u rpm=%.1f map=%.1f freq=%.3f volt=%.2f synced=%d\n",
                 a.samples, a.rpmAvg, a.mapAvg, a.freqAvg, a.voltAvg, a.synced ? 1 : 0);
@@ -5551,8 +5160,24 @@ void handlePeriodicSerialLog() {
   if (serialMongoBufferTickerEnabled) printMongoBufferStatus();
 }
 
-void printDbSizeTicker() {
-  printDatabaseReport();
+void setDisplayPageFromSerial(uint8_t page, const __FlashStringHelper* label) {
+  if (activePage != page) {
+    activePage = page;
+    needFullRedraw = true;
+    lastDraw = 0;
+  } else {
+    displayUpdateNow = true;
+  }
+  Serial.print(F("[DISPLAY] page -> "));
+  Serial.println(label);
+}
+
+void startTouchCalibrationFromSerial() {
+  touchCalibrationMode = true;
+  serialTouchDebug = true;
+  calIndex = 0;
+  Serial.println(F("[CAL] Touch calibration ON. Tap titik target yang diminta."));
+  Serial.println(F("[CAL] Selama kalibrasi, gunakan 'page generator' / 'page engine' / 'page next' dari Serial Monitor untuk pindah halaman."));
 }
 
 void processSerialCommand(String cmd) {
@@ -5591,8 +5216,10 @@ void processSerialCommand(String cmd) {
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "aggregation" || cmd == "agg" || cmd == "aggregate") { AggregatedData a; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { a = aggData; xSemaphoreGive(dataMutex); } printAggregatedParameterReport(a); }
-  else if (cmd == "page generator") { if (activePage != PAGE_GENERATOR) { activePage = PAGE_GENERATOR; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] generator")); }
-  else if (cmd == "page engine") { if (activePage != PAGE_ENGINE) { activePage = PAGE_ENGINE; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] engine")); }
+  else if (cmd == "page generator" || cmd == "generator") setDisplayPageFromSerial(PAGE_GENERATOR, F("GENERATOR"));
+  else if (cmd == "page engine" || cmd == "engine") setDisplayPageFromSerial(PAGE_ENGINE, F("ENGINE"));
+  else if (cmd == "page next" || cmd == "next page" || cmd == "page") setDisplayPageFromSerial(activePage == PAGE_GENERATOR ? PAGE_ENGINE : PAGE_GENERATOR, activePage == PAGE_GENERATOR ? F("ENGINE") : F("GENERATOR"));
+  else if (cmd == "calibrate" || cmd == "touch calibrate" || cmd == "calibration") startTouchCalibrationFromSerial();
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
   else if (cmd == "configurewifi" || cmd == "configure wifi" || cmd == "wifi portal") { Serial.println(F("[WIFI] Manual Configure WiFi portal requested from Serial Monitor.")); prepareNormalWiFiMode(); connectWiFiManagerFallback(); needFullRedraw = true; }
   else if (cmd == "wifi eduroam" || cmd == "eduroam") { Serial.println(F("[WIFI] Manual eduroam retry requested from Serial Monitor.")); connectEduroam(false); needFullRedraw = true; }
@@ -5702,11 +5329,11 @@ void setup() {
   tft.init();
   tft.setRotation(1);
 
-  // Mount SD sebelum boot splash pertama agar /logo.png bisa langsung tampil
-  // dari kartu SD. Jika gagal, drawBootSplashStep() tetap memakai logo vektor.
+  // Mount SD sebelum boot splash pertama agar database lokal siap.
+  // Logo boot utama memakai asset RGB565 flash yang warnanya disamakan dengan logo.png.
   initSDCard();
 
-  drawBootSplashStep(sdOK ? "Local SD mounted - loading logo.png" : "SD offline - using fallback logo", 10);
+  drawBootSplashStep(sdOK ? "Local SD mounted" : "SD offline - using flash logo", 10);
 
   drawBootSplashStep("Initializing touch controller...", 25);
   Wire.begin(CTP_SDA, CTP_SCL);
@@ -5820,7 +5447,7 @@ void loop() {
   if (dbSizeTickerEnabled && millis() - lastDbSizeTickMs >= 1000UL) {
     lastDbSizeTickMs = millis();
     updateStorageCache();
-    printDbSizeTicker();
+    printDatabaseReport();
   }
 
   // ── Bersihkan pending reset jika tidak dikonfirmasi dalam 30 detik ──
