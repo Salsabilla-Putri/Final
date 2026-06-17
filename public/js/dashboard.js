@@ -154,7 +154,7 @@ function renderSensorSnapshot(data = {}, { live = false } = {}) {
     const displayVolt = getDisplayVolt(snapshot);
     const displayFreq = getDisplayFreq(snapshot);
 
-    setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm)).toLocaleString('id-ID')} RPM`);
+    setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm))} RPM`);
     setVal('val-volt', `${displayVolt.toFixed(1)} V`);
 
     updatePowerSourceIndicator('engSync', snapshot);
@@ -583,7 +583,7 @@ async function initChart() {
                 y: {
                     beginAtZero : true,
                     suggestedMax: 8,
-                    title       : { display: true, text: 'Jam ECU Connected' },
+                    title       : { display: true, text: 'Hours' },
                     ticks       : { callback: v => v + 'h' },
                     grid        : { color: 'rgba(0,0,0,0.05)' }
                 },

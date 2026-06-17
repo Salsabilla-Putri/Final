@@ -11,8 +11,8 @@
 // ESP32-1 GND        ---> ESP32-2 GND
 //
 // TFT/Touch:
-// ILI9488/ILI9486 via TFT_eSPI
-// FT6206/FT6236 I2C SDA=21, SCL=22
+// ILI9488 via TFT_eSPI
+// XPT2046 SPI: T_CS=22, T_CLK=21, T_DIN=32, T_DO=33
 //
 // SD Card pada TFT:
 // SD_CS   GPIO26
@@ -42,13 +42,13 @@
 #endif
 
 #include <PubSubClient.h>
-#include <Wire.h>
+#include <XPT2046_Touchscreen.h>
 #include <SPI.h>
 #include <FS.h>
 #include <SD.h>
 #include <TFT_eSPI.h>
 #include <time.h>
-#include <Adafruit_FT6206.h>
+// Touch XPT2046 menggunakan TFT_eSPI built-in touch driver
 #include <math.h>
 #include "gensys_logo_200x200_rgb565.h"
 
@@ -176,7 +176,7 @@
 // PubSubClient membutuhkan host polos tanpa skema; jika build flag memberi URI
 // seperti mqtt://generatorta20.cloud.shiftr.io, kode akan menormalisasi saat runtime.
 #ifndef MQTT_HOST
-#define MQTT_HOST  "mqtt://generatorta20.cloud.shiftr.io"
+#define MQTT_HOST  "rmq230.smartsystem.id"
 #endif
 
 #ifndef MQTT_PORT
@@ -184,21 +184,21 @@
 #endif
 
 #ifndef MQTT_USER
-#define MQTT_USER  "generatorta20"
+#define MQTT_USER  "smartgen_sec8AePh"
 #endif
 
 #ifndef MQTT_PASS
-#define MQTT_PASS  "TA252601020"
+#define MQTT_PASS  "rai2Oi1U"
 #endif
 
 #ifndef MQTT_VHOST
-#define MQTT_VHOST ""
+#define MQTT_VHOST "/smartgen"
 #endif
 
 // Shiftr.io memakai username langsung. MQTT_AUTH_USERNAME/build flag tetap bisa override
 // jika suatu saat broker membutuhkan format lain.
 #ifndef MQTT_AUTH_USERNAME
-#define MQTT_AUTH_USERNAME MQTT_USER
+#define MQTT_AUTH_USERNAME "/smartgen:smartgen_sec8AePh"
 #endif
 
 #ifndef MQTT_LOGIN_USER
@@ -286,7 +286,14 @@ String linkRxBuffer = "";
 // TFT + TOUCH
 // ============================================================
 TFT_eSPI tft = TFT_eSPI();
-Adafruit_FT6206 ts = Adafruit_FT6206();
+
+// Touch XPT2046 via software SPI (pin terpisah dari LCD/SD)
+#define T_CS   22
+#define T_CLK  21
+#define T_DIN  32
+#define T_DO   33
+SPIClass touchSPI(VSPI);
+XPT2046_Touchscreen ts(T_CS, 255);
 
 #define SW 480
 #define SH 320
@@ -313,10 +320,6 @@ Adafruit_FT6206 ts = Adafruit_FT6206();
 #define C_GRID     0xC618
 #define C_BLUE2    0x2D7F
 
-#define CTP_SDA 21
-#define CTP_SCL 22
-#define CTP_RST 33
-#define CTP_INT 32
 
 #ifndef TFT_CS
 #define TFT_CS 15
@@ -689,6 +692,20 @@ TouchCalPoint calPoints[] = {
 };
 
 uint8_t calIndex = 0;
+bool navCalibrationMode = false;
+
+uint16_t genTouchX = 0;
+uint16_t genTouchY = 0;
+uint16_t genRawX   = 0;
+uint16_t genRawY   = 0;
+
+uint16_t engTouchX = 0;
+uint16_t engTouchY = 0;
+uint16_t engRawX   = 0;
+uint16_t engRawY   = 0;
+
+uint8_t navCalStep     = 0;
+bool    navCalibrated  = false;   // true setelah kalibrasi GEN+ENG selesai
 
 unsigned long lastPublish = 0;
 unsigned long lastDraw = 0;
@@ -1138,11 +1155,30 @@ String getClockWIBms() {
   return String(buf);
 }
 
+void startNavCalibration() {
+  navCalibrationMode = true;
+  navCalStep         = 0;
+  navCalibrated      = false;
+
+  genTouchX = genTouchY = genRawX = genRawY = 0;
+  engTouchX = engTouchY = engRawX = engRawY = 0;
+
+  Serial.println();
+  Serial.println(F("╔══════════════════════════════════════════╗"));
+  Serial.println(F("║   TOUCH NAVIGATION CALIBRATION           ║"));
+  Serial.println(F("╠══════════════════════════════════════════╣"));
+  Serial.println(F("║ STEP 1/2 : Sentuh tombol GENERATOR       ║"));
+  Serial.println(F("║           (tombol kiri bawah layar)      ║"));
+  Serial.println(F("╚══════════════════════════════════════════╝"));
+}
+
 void deselectAllSPI() {
   pinMode(TFT_CS, OUTPUT);
   pinMode(SD_CS, OUTPUT);
+  pinMode(T_CS, OUTPUT);
   digitalWrite(TFT_CS, HIGH);
   digitalWrite(SD_CS, HIGH);
+  digitalWrite(T_CS, HIGH);
   delayMicroseconds(50);
 }
 
@@ -1984,6 +2020,19 @@ void SensorTask50Hz(void *pvParameters) {
   }
 }
 
+bool isNearPoint(
+    uint16_t x,
+    uint16_t y,
+    uint16_t refX,
+    uint16_t refY,
+    uint16_t tol = 40)
+{
+    return (
+        abs((int)x - (int)refX) < tol &&
+        abs((int)y - (int)refY) < tol
+    );
+}
+
 // ============================================================
 // JSON + MQTT
 // ============================================================
@@ -2743,7 +2792,7 @@ void initSDCard() {
 
   if (!begun) {
     sdOK = false;
-    Serial.println("[SD] GAGAL FINAL. Cek CS=26, MOSI=13, MISO=19, SCK=14, FAT32.");
+    Serial.println("[SD] GAGAL FINAL. Cek CS=26, MOSI=13, MISO=12, SCK=14, FAT32.");
     Serial.println("══════════════════════════════════════");
     return;
   }
@@ -4732,16 +4781,13 @@ void readTouchMapped(int &x, int &y, int &rawX, int &rawY) {
   rawX = p.x;
   rawY = p.y;
 
-  // Mapping umum untuk FT6206 480x320 rotation landscape.
-  // Jika hasil terbalik, gunakan command "calibrate" untuk melihat raw X/Y,
-  // lalu sesuaikan rumus di bawah.
-  x = map(rawY, 0, 480, 0, 480);
-  y = map(rawX, 0, 320, 320, 0);
+  // Mapping XPT2046 raw (0-4095) ke piksel layar 480x320 landscape.
+  // Sesuaikan nilai min/max jika koordinat meleset setelah kalibrasi.
+  x = map(p.x, 200, 3900, 0, SW);
+  y = map(p.y, 200, 3900, 0, SH);
 
-  if (x < 0) x = 0;
-  if (x > SW) x = SW;
-  if (y < 0) y = 0;
-  if (y > SH) y = SH;
+  x = constrain(x, 0, SW);
+  y = constrain(y, 0, SH);
 }
 
 void handleTouchNavigation() {
@@ -4757,37 +4803,88 @@ void handleTouchNavigation() {
   int x, y, rawX, rawY;
   readTouchMapped(x, y, rawX, rawY);
 
-  if (serialTouchDebug || touchCalibrationMode) {
+  if (serialTouchDebug || touchCalibrationMode || navCalibrationMode) {
     Serial.println();
-    Serial.println("════════════ TOUCH POINT ════════════");
-    Serial.print("Raw X : "); Serial.println(rawX);
-    Serial.print("Raw Y : "); Serial.println(rawY);
-    Serial.print("Map X : "); Serial.println(x);
-    Serial.print("Map Y : "); Serial.println(y);
-    Serial.println("═════════════════════════════════════");
+    Serial.println(F("════════════ TOUCH POINT ════════════"));
+    Serial.print(F("Raw X : ")); Serial.println(rawX);
+    Serial.print(F("Raw Y : ")); Serial.println(rawY);
+    Serial.print(F("Map X : ")); Serial.println(x);
+    Serial.print(F("Map Y : ")); Serial.println(y);
+    Serial.println(F("═════════════════════════════════════"));
   }
 
+  // ── Mode kalibrasi navigasi (via command "calibrate nav") ──────────────────
+  // Step 0 : tangkap tombol GENERATOR, lalu minta tap ENGINE.
+  // Step 1 : tangkap tombol ENGINE, lalu kalibrasi selesai.
+  // Koordinat mapped (x,y) DAN raw (rawX,rawY) disimpan keduanya
+  // agar fallback berbasis raw juga bekerja setelah kalibrasi.
+  if (navCalibrationMode) {
+    if (navCalStep == 0) {
+      genTouchX = (uint16_t)x;
+      genTouchY = (uint16_t)y;
+      genRawX   = (uint16_t)rawX;
+      genRawY   = (uint16_t)rawY;
+      navCalStep = 1;
+
+      Serial.println();
+      Serial.println(F("╔══════════════════════════════════════════╗"));
+      Serial.print  (F("║ [CALIB] GENERATOR tercapture             ║\n"));
+      Serial.printf (   "║   mapped=(%d,%d) raw=(%d,%d)\n", x, y, rawX, rawY);
+      Serial.println(F("╠══════════════════════════════════════════╣"));
+      Serial.println(F("║ STEP 2/2 : Sentuh tombol ENGINE          ║"));
+      Serial.println(F("║           (tombol kanan bawah layar)     ║"));
+      Serial.println(F("╚══════════════════════════════════════════╝"));
+
+    } else if (navCalStep == 1) {
+      engTouchX = (uint16_t)x;
+      engTouchY = (uint16_t)y;
+      engRawX   = (uint16_t)rawX;
+      engRawY   = (uint16_t)rawY;
+      navCalibrationMode = false;
+      navCalibrated      = true;
+      navCalStep         = 0;
+
+      Serial.println();
+      Serial.println(F("╔══════════════════════════════════════════════════╗"));
+      Serial.println(F("║   KALIBRASI NAVIGASI SELESAI                     ║"));
+      Serial.println(F("╠══════════════════════════════════════════════════╣"));
+      Serial.printf (   "║ GENERATOR : mapped=(%d,%d) raw=(%d,%d)\n",
+                        genTouchX, genTouchY, genRawX, genRawY);
+      Serial.printf (   "║ ENGINE    : mapped=(%d,%d) raw=(%d,%d)\n",
+                        engTouchX, engTouchY, engRawX, engRawY);
+      Serial.println(F("╠══════════════════════════════════════════════════╣"));
+      Serial.println(F("║ Navigasi sekarang menggunakan titik kalibrasi.   ║"));
+      Serial.println(F("║ Tap tombol GENERATOR atau ENGINE untuk pindah.   ║"));
+      Serial.println(F("║ Ulangi command 'calibrate nav' untuk recalibrate.║"));
+      Serial.println(F("╚══════════════════════════════════════════════════╝"));
+    }
+
+    lastTouchMs = millis();
+    return;
+  }
+
+  // ── Mode kalibrasi titik layar lama (touchCalibrationMode) ────────────────
   if (touchCalibrationMode) {
-    Serial.print("[CAL] ");
+    Serial.print(F("[CAL] "));
     Serial.print(calPoints[calIndex].name);
-    Serial.print(" target=(");
+    Serial.print(F(" target=("));
     Serial.print(calPoints[calIndex].sx);
-    Serial.print(",");
+    Serial.print(F(","));
     Serial.print(calPoints[calIndex].sy);
-    Serial.print(") raw=(");
+    Serial.print(F(") raw=("));
     Serial.print(rawX);
-    Serial.print(",");
+    Serial.print(F(","));
     Serial.print(rawY);
-    Serial.print(") map=(");
+    Serial.print(F(") map=("));
     Serial.print(x);
-    Serial.print(",");
+    Serial.print(F(","));
     Serial.print(y);
-    Serial.println(")");
+    Serial.println(F(")"));
 
     calIndex++;
     if (calIndex >= sizeof(calPoints) / sizeof(calPoints[0])) {
-      Serial.println("[CAL] Calibration sampling selesai.");
-      Serial.println("[CAL] Sesuaikan fungsi readTouchMapped() jika koordinat ikon belum akurat.");
+      Serial.println(F("[CAL] Calibration sampling selesai."));
+      Serial.println(F("[CAL] Sesuaikan fungsi readTouchMapped() jika koordinat ikon belum akurat."));
       touchCalibrationMode = false;
       calIndex = 0;
     }
@@ -4796,21 +4893,34 @@ void handleTouchNavigation() {
     return;
   }
 
+  // ── Deteksi navigasi ───────────────────────────────────────────────────────
   int targetPage = -1;
 
+  // Jika sudah dikalibrasi: cek apakah tap mendekati titik kalibrasi GEN/ENG.
+  // Toleransi 70 px (mapped) cukup untuk layar 480×320 dengan jari.
+  if (navCalibrated && targetPage < 0) {
+    if (isNearPoint((uint16_t)x, (uint16_t)y, genTouchX, genTouchY, 70)) targetPage = PAGE_GENERATOR;
+    else if (isNearPoint((uint16_t)x, (uint16_t)y, engTouchX, engTouchY, 70)) targetPage = PAGE_ENGINE;
+  }
+  // Juga coba raw coords dengan toleransi lebih besar (XPT2046 raw bisa ±200).
+  if (navCalibrated && targetPage < 0) {
+    if (isNearPoint((uint16_t)rawX, (uint16_t)rawY, genRawX, genRawY, 300)) targetPage = PAGE_GENERATOR;
+    else if (isNearPoint((uint16_t)rawX, (uint16_t)rawY, engRawX, engRawY, 300)) targetPage = PAGE_ENGINE;
+  }
+
+  // Fallback area navbar default (tetap aktif walaupun sudah kalibrasi,
+  // agar tidak bisa berpindah jika kalibrasi menyimpang jauh).
   auto navHit = [](int tx, int ty) -> int {
     // Area navbar bawah layar dibuat sedikit lebih tinggi agar tap tetap masuk
-    // walaupun mapping touch FT6206 bergeser beberapa piksel.
+    // walaupun mapping touch XPT2046 bergeser beberapa piksel.
     if (ty < 270 || ty > 320) return -1;
     if (tx >= 0 && tx <= 240) return PAGE_GENERATOR;
     if (tx >= 240 && tx <= 480) return PAGE_ENGINE;
     return -1;
   };
 
-  targetPage = navHit(x, y);
-
-  // Fallback untuk modul FT6206 yang orientasi raw-nya berbeda setelah TFT rotation(1).
-  // Ini membuat tombol bawah tetap bisa pindah page tanpa harus reflash hanya untuk kalibrasi.
+  if (targetPage < 0) targetPage = navHit(x, y);
+  // Fallback orientasi raw XPT2046 jika rotation berbeda dari TFT rotation(1).
   if (targetPage < 0) targetPage = navHit(rawY, rawX);
   if (targetPage < 0) targetPage = navHit(rawY, 320 - rawX);
   if (targetPage < 0) targetPage = navHit(480 - rawY, rawX);
@@ -5049,6 +5159,8 @@ void printSerialHelp() {
   Serial.println(F("DEBUG     : rx raw on/off | rx ok on/off | rx monitor on/off | db reset | db reset confirm"));
   Serial.println(F("MQTT JSON : mqtt payload | mqtt payload now | mqtt payload on | mqtt payload off"));
   Serial.println(F("ALIAS     : json mqtt | json mqtt now | json mqtt on | json mqtt off"));
+  Serial.println(F("NAV TOUCH : calibrate nav          -> mulai kalibrasi tombol GENERATOR lalu ENGINE"));
+  Serial.println(F("            calibrate nav status   -> tampilkan hasil kalibrasi saat ini"));
   Serial.println(F("REKOMENDASI UJI: ketik 'perf reset', tunggu 2-5 menit, lalu ketik 'perf' atau 'db'."));
 }
 
@@ -5600,6 +5712,32 @@ void processSerialCommand(String cmd) {
   else if (cmd == "perf reset" || cmd == "acq reset") { resetAcquisitionMonitorStats(); sensorMissedDeadlines = 0; parseOKCount = 0; parseFailCount = 0; rxBufferResetCount = 0; fastAggCompleted = 0; fastAggUnderfilled = 0; Serial.println(F("[PERF] acquisition statistics reset.")); }
   else if (cmd == "latest" || cmd == "data" || cmd == "sample") printLatestDataReport();
   else if (cmd == "aggregation" || cmd == "agg" || cmd == "aggregate") { AggregatedData a; if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) { a = aggData; xSemaphoreGive(dataMutex); } printAggregatedParameterReport(a); }
+  else if (cmd == "calibrate nav")
+{
+  startNavCalibration();
+}
+  else if (cmd == "calibrate nav status" || cmd == "nav cal status" || cmd == "touch nav status") {
+    Serial.println();
+    Serial.println(F("╔══════════════════════════════════════════════════╗"));
+    Serial.println(F("║   STATUS KALIBRASI NAVIGASI TOUCH                ║"));
+    Serial.println(F("╠══════════════════════════════════════════════════╣"));
+    Serial.print  (F("║ Calibrated        : ")); Serial.println(navCalibrated ? F("YES") : F("NO"));
+    Serial.print  (F("║ Cal mode active   : ")); Serial.println(navCalibrationMode ? F("YES - menunggu tap") : F("NO"));
+    if (navCalibrationMode) {
+      Serial.print(F("║ Waiting for step  : "));
+      Serial.println(navCalStep == 0 ? F("GENERATOR") : F("ENGINE"));
+    }
+    if (navCalibrated) {
+      Serial.printf( "║ GENERATOR mapped  : (%d,%d)\n", genTouchX, genTouchY);
+      Serial.printf( "║ GENERATOR raw     : (%d,%d)\n", genRawX, genRawY);
+      Serial.printf( "║ ENGINE mapped     : (%d,%d)\n", engTouchX, engTouchY);
+      Serial.printf( "║ ENGINE raw        : (%d,%d)\n", engRawX, engRawY);
+    } else {
+      Serial.println(F("║ Belum dikalibrasi - navigasi pakai area default  ║"));
+      Serial.println(F("║ Ketik 'calibrate nav' untuk kalibrasi            ║"));
+    }
+    Serial.println(F("╚══════════════════════════════════════════════════╝"));
+  }
   else if (cmd == "page generator") { if (activePage != PAGE_GENERATOR) { activePage = PAGE_GENERATOR; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] generator")); }
   else if (cmd == "page engine") { if (activePage != PAGE_ENGINE) { activePage = PAGE_ENGINE; needFullRedraw = true; } else { displayUpdateNow = true; } Serial.println(F("[DISPLAY] engine")); }
   else if (cmd == "redraw") { needFullRedraw = true; Serial.println(F("[DISPLAY] redraw")); }
@@ -5704,10 +5842,6 @@ void setup() {
   LinkSerial.setTimeout(20);
 
   // TFT init dulu seperti versi yang terbukti bisa mount SD onboard TFT.
-  pinMode(CTP_RST, OUTPUT);
-  digitalWrite(CTP_RST, LOW); delay(10);
-  digitalWrite(CTP_RST, HIGH); delay(100);
-
   tft.init();
   tft.setRotation(1);
   tft.setSwapBytes(true);
@@ -5720,14 +5854,11 @@ void setup() {
   drawBootSplashStep(sdOK ? "SD Card Mounted - Database Ready" : "SD Card Offline - Skipping Logging", 35);
 
   drawBootSplashStep("Initializing touch controller...", 25);
-  Wire.begin(CTP_SDA, CTP_SCL);
-  if (!ts.begin(40)) {
-    touchDetected = false;
-    Serial.println("[TOUCH] Tidak terdeteksi.");
-  } else {
-    touchDetected = true;
-    Serial.println("[TOUCH] OK.");
-  }
+  touchSPI.begin(T_CLK, T_DO, T_DIN, T_CS);
+  ts.begin(touchSPI);
+  ts.setRotation(1);
+  touchDetected = true;
+  Serial.println("[TOUCH] XPT2046 OK.");
 
   drawBootSplashStep(sdOK ? "Local SD database ready" : "SD offline - continuing", 50);
 

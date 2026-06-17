@@ -187,7 +187,6 @@ function formatLastUpdatedTimestamp(input) {
         timeZone: 'Asia/Jakarta',
         day: '2-digit', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit', second: '2-digit',
-        fractionalSecondDigits: 3,
         hour12: false
     }) + ' WIB';
 }
@@ -198,7 +197,7 @@ function updateLastUpdatedInfo(data = {}, isFresh = false) {
     const wrapper = el.closest('.timestamp-pill');
     if (wrapper) wrapper.style.display = '';
     const formatted = formatLastUpdatedTimestamp(getLastDataTimestamp(data));
-    el.innerText = `Data terakhir • ${formatted}`;
+    el.innerText = `Last Updated • ${formatted}`;
 }
 
 function isEcuFresh(data = {}, explicitFresh = null) {

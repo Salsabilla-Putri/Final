@@ -862,7 +862,7 @@ function updateActiveTimeChartFromDaily(dailyRows = []) {
                 y: {
                     beginAtZero: true,
                     suggestedMax: 8,
-                    title: { display: true, text: 'Jam ECU Connected' },
+                    title: { display: true, text: 'Hours' },
                     ticks: { callback: v => `${v}h` },
                     grid: { color: 'rgba(0,0,0,0.05)' }
                 },
@@ -926,7 +926,7 @@ function updateActiveTimeChart(historyRows, options = {}) {
                 y: {
                     beginAtZero: true,
                     suggestedMax: 8,
-                    title: { display: true, text: 'Jam ECU Connected' },
+                    title: { display: true, text: 'Hours' },
                     ticks: { callback: v => `${v}h` },
                     grid: { color: 'rgba(0,0,0,0.05)' }
                 },

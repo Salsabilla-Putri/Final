@@ -81,6 +81,8 @@ function createDisabledMqttClient(message = 'MQTT disabled; running without live
 const { analyzeReportRows } = require('./lib_report_analysis');
 const { generateMaintenanceDecision, toSuggestionDocument } = require('./maintenance_decision');
 const { analyzeCBM } = require('./lib_cbm_analysis');
+const { estimateComponentLife } = require('./lib_component_life');
+const FF = require('./feature-flags');
 
 const app = express();
 const isVercelRuntime = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -206,6 +208,18 @@ async function ensureDbReady() {
     await dbConnectPromise;
     return isDbReady();
 }
+
+setInterval(async () => {
+    if (isDbReady()) {
+        try {
+            // Mengirim query super ringan agar koneksi tidak dianggap "Idle" oleh Firewall
+            await mongoose.connection.db.admin().ping();
+            // console.log('💓 Database ping OK'); // Aktifkan baris ini jika ingin melihat log ping di terminal
+        } catch (err) {
+            console.error('⚠️ Database ping gagal (Koneksi mungkin terputus):', err.message);
+        }
+    }
+}, 3 * 60 * 1000); // Lakukan ping setiap 3 Menit
 
 // --- SCHEMAS ---
 const generatorDataSchema = new mongoose.Schema({
@@ -732,6 +746,7 @@ const mqttIngestStats = {
     lastFlushedRecords: 0,
     lastErrorAt: null,
     lastError: null, 
+    totalBatchAttempts: 0,
     failedBatches: 0
 };
 
@@ -1306,9 +1321,30 @@ function updateGeneratorBatchStats() {
 
 function logGeneratorBatchStatus(prefix = '📦 buffermongo buffer') {
     updateGeneratorBatchStats();
-    const nextFlushText = mqttIngestStats.nextFlushAt || '-';
-    console.log(`${prefix} | buffered=${generatorBatchBuffer.length}/${DB_BATCH_RECORDS} records | nextFlush=${nextFlushText} | sentToMongo=${mqttIngestStats.insertedRecords} records`);
+    
+    let timerInfo = '';
+    // Menghitung target interval (misal 10:00)
+    const targetMins = Math.floor(DB_BATCH_INTERVAL_MS / 60000);
+    const targetSecs = Math.floor((DB_BATCH_INTERVAL_MS % 60000) / 1000);
+    const targetStr = `${String(targetMins).padStart(2, '0')}:${String(targetSecs).padStart(2, '0')}`;
+
+    // Menghitung waktu yang sudah berjalan sejak buffer dimulai
+    if (generatorBatchTimerStartedAt) {
+        const elapsedMs = Math.max(0, Date.now() - generatorBatchTimerStartedAt.getTime());
+        const elapsedSec = Math.floor(elapsedMs / 1000);
+        const m = Math.floor(elapsedSec / 60);
+        const s = elapsedSec % 60;
+        const elapsedStr = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        
+        timerInfo = `${elapsedStr} / ${targetStr}`;
+    } else {
+        timerInfo = `00:00 / ${targetStr}`;
+    }
+
+    // Menampilkan log ke terminal
+    console.log(`${prefix} | buffered=${generatorBatchBuffer.length} records | timer=[${timerInfo}] | sentToMongo=${mqttIngestStats.insertedRecords} records`);
 }
+
 function scheduleGeneratorBatchFlush() {
     if (!generatorBatchTimerStartedAt || generatorBatchFlushTimer) return;
 
@@ -1331,7 +1367,7 @@ function addGeneratorDataToBatch(snapshot) {
     const now = new Date();
     if (!generatorBatchTimerStartedAt) {
         generatorBatchTimerStartedAt = now;
-        scheduleGeneratorBatchFlush();
+        // scheduleGeneratorBatchFlush();
     }
 
     const doc = buildGeneratorDbDocument(snapshot);
@@ -1374,28 +1410,36 @@ function printMongoReliabilityReport() {
     // Fungsi helper untuk padding spasi di terminal
     const fill = (text, width = 57) => String(text).padEnd(width) + '║';
 
-    console.log('\n╔═══════════════════════════════════════════════════════════╗');
-    console.log('║               DATABASE RELIABILITY METRICS                ║');
-    console.log('╠═══════════════════════════════════════════════════════════╣');
-    console.log('║ ' + fill(`MongoDB batch interval   : ${DB_BATCH_INTERVAL_MS} ms (${intervalMin} min)`));
-    console.log('║ ' + fill(`MongoDB sent records     : ${sent} records`));
-    console.log('║ ' + fill(`MongoDB failed batch     : ${mqttIngestStats.failedBatches || 0} batches`));
-    console.log('║ ' + fill(`Last MQTT state          : ${mqttState}`));
-    console.log('║ ' + fill(`MongoDB record size (est): ~${recordSizeEst} Bytes / record`));
-    console.log('║ ' + fill(`MongoDB avg sent record  : ${avgBatch} records / batch`));
-    console.log('║ ' + fill(`MongoDB records rate     : ${rateSec.toFixed(2)} records / second`));
-    console.log('║ ' + fill(`Est. Payload (10 years)  : ${formatBytes(est10YearsBytes)}`));
-    console.log('╚═══════════════════════════════════════════════════════════╝\n');
+  
+    console.log('             DATABASE RELIABILITY METRICS                ');
+    console.log('═════════════════════════════════════════════════════════');
+    console.log(`MongoDB batch interval   : ${DB_BATCH_INTERVAL_MS} ms (${intervalMin} min)`);
+    console.log(`MongoDB sent records     : ${sent} records`);
+    console.log(`MongoDB failed batch     : ${mqttIngestStats.failedBatches || 0} batches`);
+    console.log(`Last MQTT state          : ${mqttState}`);
+    console.log(`MongoDB success rate     : ${successRate}% (${total - failed}/${total} batches)`);
+    console.log(`MongoDB record size (est): ~${recordSizeEst} Bytes / record`);
+    console.log(`MongoDB avg sent record  : ${avgBatch} records / batch`);
+    console.log(`MongoDB records rate     : ${rateSec.toFixed(2)} records / second`);
+    console.log(`Est. Payload (10 years)  : ${formatBytes(est10YearsBytes)}`);
 }
 
 async function flushGeneratorBatch(reason = 'interval') {
     if (isFlushingGeneratorBatch) return;
-    if (generatorBatchBuffer.length < DB_BATCH_RECORDS) {
-        if (generatorBatchBuffer.length && !generatorBatchFlushTimer) scheduleGeneratorBatchFlush();
-        updateGeneratorBatchStats();
-        return;
+    mqttIngestStats.totalBatchAttempts++;
+    // --- PERBAIKAN RECONNECT MONGODB ---
+    // Jika koneksi terputus saat mau mengirim data, paksa untuk menyambung ulang
+    if (!isDbReady()) {
+        mqttIngestStats.failedBatches++;
+        console.log('🔄 Koneksi terputus. Mencoba menyambung kembali ke MongoDB sebelum mengirim batch...');
+        try {
+            await ensureDbReady(); 
+        } catch (err) {
+            console.error('❌ Gagal menyambung ulang ke MongoDB:', err.message);
+        }
     }
 
+    // Cek lagi setelah dicoba reconnect. Jika memang benar-benar mati, baru tahan datanya.
     if (!isDbReady()) {
         console.warn(`⚠️ MongoDB not ready, batch retained | generator=${generatorBatchBuffer.length}`);
         if (!generatorBatchTimerStartedAt) generatorBatchTimerStartedAt = new Date();
@@ -1403,6 +1447,7 @@ async function flushGeneratorBatch(reason = 'interval') {
         logGeneratorBatchStatus('📦 buffermongo buffer retained');
         return;
     }
+    // ------------------------------------
 
     isFlushingGeneratorBatch = true;
 
@@ -1449,7 +1494,9 @@ async function flushGeneratorBatch(reason = 'interval') {
             clearTimeout(generatorBatchFlushTimer);
             generatorBatchFlushTimer = null;
         }
-        generatorBatchTimerStartedAt = generatorBatchBuffer.length ? new Date() : null;
+        generatorBatchTimerStartedAt = new Date();
+        isFlushingGeneratorBatch = false;
+        
         if (generatorBatchBuffer.length >= DB_BATCH_RECORDS) {
             setImmediate(() => flushGeneratorBatch('buffer-full-600-continued').catch((err) => console.error('❌ Continued buffer flush error:', err.message)));
         } else if (generatorBatchTimerStartedAt) {
@@ -1462,6 +1509,7 @@ async function flushGeneratorBatch(reason = 'interval') {
         );
         printMongoReliabilityReport();
     } catch (err) {
+        mqttIngestStats.failedBatches++;
         mqttIngestStats.failedBatches = (mqttIngestStats.failedBatches || 0) + 1;
         console.error('❌ MongoDB batch save error:', err.message);
 
@@ -1573,7 +1621,7 @@ async function checkAndSaveAlerts(data) {
 
         const criticalAlerts = alertsToSave.filter((a) => a.severity === 'critical');
         const now = Date.now();
-        if (criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
+        if (FF.isEnabled('alert_email') && criticalAlerts.length > 0 && (now - lastCriticalEmailAt) > ALERT_EMAIL_COOLDOWN_MS) {
             try {
                 await sendCriticalAlertEmail(criticalAlerts, data);
                 lastCriticalEmailAt = now;
@@ -2210,18 +2258,20 @@ app.get('/api/public/dashboard', async (req, res) => {
             return res.status(404).json({ success: false, error: 'No data' });
         }
 
-        // Hitung health index (sederhana: 0-100%)
+        // Hitung health index (sederhana: 0-100%) — gated oleh ENABLE_HEALTH_SCORE
         let health = 100;
-        const temp = latest.temp || latest.coolant || 0;
-        const fuel = latest.fuel || 0;
-        const volt = latest.volt || 0;
-        const rpm = latest.rpm || 0;
-        if (temp > 95) health -= 30;
-        else if (temp > 85) health -= 10;
-        if (fuel < 15) health -= 30;
-        else if (fuel < 25) health -= 15;
-        if (rpm > 0 && volt < 190) health -= 20;
-        health = Math.max(0, Math.min(100, health));
+        if (FF.isEnabled('health_score')) {
+            const temp = latest.temp || latest.coolant || 0;
+            const fuel = latest.fuel || 0;
+            const volt = latest.volt || 0;
+            const rpm  = latest.rpm  || 0;
+            if (temp > 95) health -= 30;
+            else if (temp > 85) health -= 10;
+            if (fuel < 15) health -= 30;
+            else if (fuel < 25) health -= 15;
+            if (rpm > 0 && volt < 190) health -= 20;
+            health = Math.max(0, Math.min(100, health));
+        }
 
         // Maintenance prediction (berdasarkan jam operasi total & suhu)
         const totalHours = await ActiveTimeHistory.aggregate([
@@ -3073,6 +3123,10 @@ const workerStateSchema = new mongoose.Schema({
 const WorkerState = mongoose.models.WorkerState || mongoose.model('WorkerState', workerStateSchema, 'workerstates');
 
 function startMaintenanceSuggestionWorker() {
+    if (!FF.isEnabled('maintenance_worker')) {
+        console.log('⏭️  Maintenance Suggestion Worker disabled (ENABLE_MAINTENANCE_WORKER=false)');
+        return;
+    }
     const intervalMs = parseInt(process.env.MAINTENANCE_WORKER_INTERVAL_MS || '3600000', 10);
     const staleMs = parseInt(process.env.MAINTENANCE_SUGGESTION_STALE_MS || String(24 * 60 * 60 * 1000), 10);
 
@@ -3101,6 +3155,10 @@ function startMaintenanceSuggestionWorker() {
 }
 
 function startMonthlyReportWorker() {
+    if (!FF.isEnabled('report_worker')) {
+        console.log('⏭️  Monthly Report Worker disabled (ENABLE_REPORT_WORKER=false)');
+        return;
+    }
     const intervalMs = parseInt(process.env.REPORT_WORKER_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
     async function runOnce() {
         try {
@@ -3204,7 +3262,12 @@ async function createCbmAnalysisPayload(options = {}) {
     }
 
     const totalOperatingHours = await getTotalOperatingHours(deviceId);
-    return analyzeCBM(rows, ACTIVE_THRESHOLDS, totalOperatingHours);
+    return FF.isEnabled('cbm')
+        ? analyzeCBM(rows, ACTIVE_THRESHOLDS, totalOperatingHours)
+        : { healthScore: null, overallStatus: 'DISABLED', findings: [], componentHealth: {},
+            preventiveSchedule: [], summary: 'CBM analysis disabled (ENABLE_CBM=false)',
+            analyzedAt: new Date().toISOString(), dataPoints: rows.length,
+            totalOperatingHours, _disabled: true };
 }
 
 async function runCbmAnalysisOnce() {
@@ -3230,6 +3293,10 @@ async function runCbmAnalysisOnce() {
 }
 
 function startCbmWorker() {
+    if (!FF.isEnabled('cbm_worker')) {
+        console.log('⏭️  CBM Worker disabled (ENABLE_CBM_WORKER=false)');
+        return;
+    }
     const intervalMs = parseInt(process.env.CBM_WORKER_INTERVAL_MS || '3600000', 10);
     async function run() {
         try {
@@ -3311,10 +3378,179 @@ app.post('/api/cbm/run', async (req, res) => {
 // =========================
 // START SERVER
 // =========================
+
+// ================================================================
+// COMPONENT LIFESPAN ESTIMATION
+// [FT4] Estimasi umur komponen berbasis tren historis
+// [SS6] Notifikasi dini kebutuhan perawatan
+// Ref: Miner's Rule (1945), Arrhenius, MIL-HDBK-217F, NFPA 110
+// ================================================================
+const componentServiceSchema = new mongoose.Schema({
+    deviceId:      { type: String, default: 'default' },
+    componentName: { type: String, required: true },
+    serviceHours:  { type: Number, required: true },
+    servicedAt:    { type: Date, default: Date.now },
+    notes:         String
+});
+componentServiceSchema.index({ deviceId: 1, componentName: 1 });
+const ComponentService = mongoose.models.ComponentService
+    || mongoose.model('ComponentService', componentServiceSchema, 'componentservices');
+
+app.get('/api/component-life', async (req, res) => {
+    if (!FF.isEnabled('component_life')) {
+        return res.json({ success: true, data: { _disabled: true,
+            message: 'Component life estimation disabled (ENABLE_COMPONENT_LIFE=false)' } });
+    }
+    try {
+        await ensureDbReady();
+        const deviceId = req.query.deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || null;
+        const hours    = Math.max(1, Math.min(Number(req.query.hours) || 720, 8760));
+        const query    = {};
+        if (deviceId) query.deviceId = deviceId;
+        if (req.query.startDate || req.query.endDate) {
+            query.timestamp = {};
+            if (req.query.startDate) query.timestamp.$gte = new Date(req.query.startDate);
+            if (req.query.endDate) {
+                const end = new Date(req.query.endDate);
+                end.setHours(23, 59, 59, 999);
+                query.timestamp.$lte = end;
+            }
+        } else {
+            query.timestamp = { $gte: new Date(Date.now() - hours * 3600000) };
+        }
+        let rows = await GeneratorData.find(query).sort({ timestamp: 1 }).limit(15000).lean();
+        if (rows.length < 10) {
+            const fbq = deviceId ? { deviceId } : {};
+            rows = await GeneratorData.find(fbq).sort({ timestamp: -1 }).limit(1000).lean();
+            rows.reverse();
+        }
+        const totalOpHours = await getTotalOperatingHours(deviceId);
+        const serviceRecords = await ComponentService.find(deviceId ? { deviceId } : {}).lean();
+        const lastMaintenance = {};
+        for (const rec of serviceRecords) {
+            if (!lastMaintenance[rec.componentName] ||
+                rec.serviceHours > lastMaintenance[rec.componentName]) {
+                lastMaintenance[rec.componentName] = rec.serviceHours;
+            }
+        }
+        const result = estimateComponentLife(rows, totalOpHours, lastMaintenance);
+        res.json({ success: true, data: result });
+    } catch (error) {
+        console.error('Component life error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/component-life/service', async (req, res) => {
+    try {
+        await ensureDbReady();
+        const { componentName, deviceId, notes } = req.body || {};
+        if (!componentName) return res.status(400).json({ success: false, error: 'componentName required' });
+        const resolvedDeviceId = deviceId || process.env.DEFAULT_REPORT_DEVICE_ID || 'default';
+        const totalOpHours = await getTotalOperatingHours(resolvedDeviceId);
+        const record = await ComponentService.create({
+            deviceId: resolvedDeviceId, componentName,
+            serviceHours: totalOpHours, servicedAt: new Date(), notes: notes || ''
+        });
+        console.log(`🔧 Component serviced: ${componentName} @ ${totalOpHours.toFixed(1)} hrs`);
+        res.json({ success: true, data: record });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/component-life/history', async (req, res) => {
+    try {
+        await ensureDbReady();
+        const query = req.query.deviceId ? { deviceId: req.query.deviceId } : {};
+        const records = await ComponentService.find(query).sort({ servicedAt: -1 }).limit(100).lean();
+        res.json({ success: true, data: records });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+async function runComponentLifeNotifyOnce() {
+    if (!isDbReady() || !FF.isEnabled('component_life_worker')) return;
+    try {
+        const deviceId = process.env.DEFAULT_REPORT_DEVICE_ID || null;
+        const query = deviceId ? { deviceId } : {};
+        const rows = await GeneratorData.find(query).sort({ timestamp: -1 }).limit(5000).lean();
+        if (!rows.length) return;
+        const totalOpHours = await getTotalOperatingHours(deviceId);
+        const serviceRecords = await ComponentService.find(deviceId ? { deviceId } : {}).lean();
+        const lastMaintenance = {};
+        for (const rec of serviceRecords) {
+            if (!lastMaintenance[rec.componentName] ||
+                rec.serviceHours > lastMaintenance[rec.componentName]) {
+                lastMaintenance[rec.componentName] = rec.serviceHours;
+            }
+        }
+        const result = estimateComponentLife(rows.reverse(), totalOpHours, lastMaintenance);
+        for (const comp of result.earlyWarnings) {
+            if (comp.urgency !== 'overdue' && comp.urgency !== 'due-now') continue;
+            const existing = await MaintenanceSuggestion.findOne({
+                recommendation: { $regex: comp.name, $options: 'i' },
+                status: { $in: ['pending', 'approved', 'scheduled'] },
+                createdAt: { $gte: new Date(Date.now() - 7 * 24 * 3600000) }
+            }).lean();
+            if (existing) continue;
+            const decisionStatus = comp.urgency === 'overdue' ? 'BAHAYA' : 'WASPADA';
+            const message = comp.urgency === 'overdue'
+                ? `Komponen ${comp.name} sudah melewati batas servis. Telah dipakai ${comp.effectiveHoursUsed} jam (interval ${comp.intervalHours} jam). Faktor degradasi: ${comp.degradationFactor}x.`
+                : `Komponen ${comp.name} mendekati batas servis. Sisa estimasi ${comp.remainingHours} jam operasi.`;
+            await MaintenanceSuggestion.create({
+                source: 'component-life', decisionStatus, message,
+                recommendation: comp.task,
+                priority: comp.urgency === 'overdue' ? 'high' : 'medium',
+                estimatedCost: 0,
+                suggestedDate: comp.estimatedDueDate ? new Date(comp.estimatedDueDate) : new Date(Date.now() + 7 * 86400000),
+                status: 'pending'
+            });
+            console.log(`🔔 Component life warning: ${comp.name} [${comp.urgency}]`);
+        }
+    } catch (err) {
+        console.error('Component life notify error:', err.message);
+    }
+}
+
+function startComponentLifeWorker() {
+    if (!FF.isEnabled('component_life_worker')) {
+        console.log('⏭️  Component Life Worker disabled (ENABLE_COMPONENT_LIFE_WORKER=false)');
+        return;
+    }
+    const intervalMs = parseInt(process.env.COMPONENT_LIFE_WORKER_INTERVAL_MS || '3600000', 10);
+    setInterval(runComponentLifeNotifyOnce, intervalMs);
+    setTimeout(runComponentLifeNotifyOnce, 90000);
+    console.log(`🔩 Component Life Worker started (interval: ${intervalMs / 60000} menit)`);
+}
+
+// ================================================================
+// FEATURE FLAGS API
+// GET  /api/features         — lihat semua flag dan statusnya
+// POST /api/features/:flag   — toggle flag secara runtime
+// ================================================================
+app.get('/api/features', (req, res) => {
+    res.json({ success: true, data: FF.getAllFlags() });
+});
+
+app.post('/api/features/:flag', (req, res) => {
+    const { flag } = req.params;
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ success: false,
+            error: 'Body harus berisi { "enabled": true } atau { "enabled": false }' });
+    }
+    const result = FF.setFlag(flag, enabled);
+    if (!result.ok) return res.status(404).json({ success: false, error: result.message });
+    res.json({ success: true, data: result });
+});
+
 function startBackgroundWorkers() {
     startMaintenanceSuggestionWorker();
     startMonthlyReportWorker();
     startCbmWorker();
+    startComponentLifeWorker();
 }
 
 function readHttpServerPort() {
@@ -3360,8 +3596,32 @@ if (require.main === module) {
         console.log(`🌐 Open dashboard at ${DASHBOARD_URL}`);
         console.log(`📡 MQTT Broker URL: ${MQTT_BROKER_URL || 'MQTT disabled/not configured'}`);
 
+        FF.printStartupBanner();
         startBackgroundWorkers();
     });
 }
+// GANTI LOGIKA TIMER LAMA DENGAN INI
+function startRobustFlushTimer() {
+    console.log('⏱️ Robust Flush Timer Started (Interval: 10 menit)');
+    setInterval(async () => {
+        if (generatorBatchBuffer.length > 0) {
+            console.log(`⏰ Timer 10 menit tercapai. Memproses ${generatorBatchBuffer.length} records...`);
+            await flushGeneratorBatch('timer-10min');
+        }
+    }, DB_BATCH_INTERVAL_MS); // DB_BATCH_INTERVAL_MS sudah bernilai 600000
+}
+
+// Panggil di akhir server.js saat startup
+// startBackgroundWorkers(); // fungsi lama
+startRobustFlushTimer();
+mongoose.connection.on('disconnected', () => console.log('❌ MongoDB Connection Lost! (Terputus)'));
+mongoose.connection.on('reconnected', () => console.log('🔄 MongoDB Reconnected! (Tersambung Kembali)'));
+
+setInterval(async () => {
+    if (generatorBatchBuffer.length > 0) {
+        console.log(`⏰ Timer 10 menit tercapai. Melakukan flush batch...`);
+        await flushGeneratorBatch('interval-10min');
+    }
+}, 600000); // 600.000 ms = 10 menit
 
 module.exports = app;

@@ -2409,3 +2409,234 @@ window.updateDateFromHours = updateDateFromHours;
     };
 
 })();
+
+// ================================================================
+// COMPONENT LIFESPAN ESTIMATION PANEL
+// [FT4] Estimasi umur komponen dari tren historis sensor
+// [SS6] Notifikasi dini kebutuhan perawatan
+// ================================================================
+(function () {
+    'use strict';
+
+    const COMP_LIFE_API = '/api/component-life';
+    const COMP_SERVICE_API = '/api/component-life/service';
+
+    // Warna & label per urgency
+    const URGENCY_MAP = {
+        'overdue':  { color: '#dc2626', bg: '#fef2f2', border: '#fca5a5', label: 'LEWAT BATAS', icon: '🔴' },
+        'due-now':  { color: '#ea580c', bg: '#fff7ed', border: '#fdba74', label: 'SEGERA',      icon: '🟠' },
+        'due-soon': { color: '#ca8a04', bg: '#fefce8', border: '#fde047', label: 'AKAN TIBA',   icon: '🟡' },
+        'ok':       { color: '#16a34a', bg: '#f0fdf4', border: '#86efac', label: 'BAIK',        icon: '🟢' }
+    };
+
+    // ── RENDER KARTU KOMPONEN ─────────────────────────────────────────────────
+    function renderComponentCard(comp) {
+        const u     = URGENCY_MAP[comp.urgency] || URGENCY_MAP.ok;
+        const pct   = Math.min(100, comp.percentUsed);
+        const barW  = pct + '%';
+        const barColor = u.color;
+
+        const dueDateStr = comp.estimatedDueDate
+            ? new Date(comp.estimatedDueDate).toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' })
+            : '—';
+
+        const hoursText = comp.remainingHours <= 0
+            ? `<span style="color:${u.color};font-weight:700;">⚠ OVERDUE</span>`
+            : `<span style="font-weight:700;color:#0f172a;">${comp.remainingHours} jam</span>`;
+
+        const degradBadge = comp.degradationFactor > 1.3
+            ? `<span title="Kondisi operasi mempercepat degradasi ${comp.degradationFactor}x"
+                    style="font-size:10px;padding:2px 7px;border-radius:99px;
+                           background:#fef3c7;color:#92400e;font-weight:700;margin-left:6px;">
+                    ×${comp.degradationFactor} degradasi
+               </span>`
+            : '';
+
+        return `
+        <div style="background:#fff;border-radius:12px;border:1px solid ${u.border};
+                    padding:16px;transition:box-shadow .2s;"
+             onmouseover="this.style.boxShadow='0 4px 16px #0001'"
+             onmouseout="this.style.boxShadow=''">
+
+            <!-- Header -->
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:22px;">${comp.icon}</span>
+                    <div>
+                        <div style="font-weight:700;font-size:14px;color:#0f172a;">${comp.name}</div>
+                        <div style="font-size:11px;color:#64748b;margin-top:1px;">${comp.task}</div>
+                    </div>
+                </div>
+                <span style="padding:3px 10px;border-radius:99px;font-size:10.5px;font-weight:700;
+                             background:${u.bg};color:${u.color};white-space:nowrap;">
+                    ${u.icon} ${u.label}
+                </span>
+            </div>
+
+            <!-- Progress Bar -->
+            <div style="margin-bottom:10px;">
+                <div style="display:flex;justify-content:space-between;
+                            font-size:11px;color:#64748b;margin-bottom:4px;">
+                    <span>${comp.percentUsed}% terpakai</span>
+                    <span>Interval: ${comp.intervalHours} jam</span>
+                </div>
+                <div style="background:#e2e8f0;border-radius:6px;height:8px;overflow:hidden;">
+                    <div style="background:${barColor};height:8px;border-radius:6px;
+                                width:${barW};transition:width .5s;"></div>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+                <div style="background:#f8fafc;border-radius:8px;padding:8px 10px;">
+                    <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">Sisa Umur</div>
+                    <div style="font-size:14px;">${hoursText}${degradBadge}</div>
+                </div>
+                <div style="background:#f8fafc;border-radius:8px;padding:8px 10px;">
+                    <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">Est. Jatuh Tempo</div>
+                    <div style="font-size:13px;font-weight:600;color:#334155;">${dueDateStr}</div>
+                </div>
+                <div style="background:#f8fafc;border-radius:8px;padding:8px 10px;">
+                    <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">Sudah Dipakai</div>
+                    <div style="font-size:13px;font-weight:600;color:#334155;">${comp.hoursSinceService} jam</div>
+                </div>
+                <div style="background:#f8fafc;border-radius:8px;padding:8px 10px;">
+                    <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">Suhu Avg</div>
+                    <div style="font-size:13px;font-weight:600;color:#334155;">${comp.conditionContext.avgTemp}°C</div>
+                </div>
+            </div>
+
+            <!-- Tombol Catat Service -->
+            <button class="comp-service-btn"
+                    data-comp="${encodeURIComponent(comp.name)}"
+                    style="width:100%;padding:7px 0;border-radius:8px;border:1px solid #cbd5e1;
+                           background:#f8fafc;color:#334155;font-size:12px;font-weight:600;
+                           cursor:pointer;transition:background .18s;"
+                    onmouseover="this.style.background='#e2e8f0'"
+                    onmouseout="this.style.background='#f8fafc'">
+                <i class="fas fa-wrench"></i> Catat Servis Selesai
+            </button>
+        </div>`;
+    }
+
+    // ── RENDER WARNING BANNER ─────────────────────────────────────────────────
+    function renderWarningBanner(earlyWarnings) {
+        const banner = document.getElementById('compLifeWarningBanner');
+        const list   = document.getElementById('compLifeWarningList');
+        if (!banner || !list) return;
+
+        const critical = earlyWarnings.filter(c => c.urgency === 'overdue' || c.urgency === 'due-now');
+        if (!critical.length) { banner.style.display = 'none'; return; }
+
+        banner.style.display = 'block';
+        list.innerHTML = critical.map(c => {
+            const u = URGENCY_MAP[c.urgency];
+            return `<div style="margin-top:4px;">
+                ${u.icon} <b>${c.name}</b> — ${c.urgency === 'overdue'
+                    ? `Sudah melewati batas servis ${Math.abs(c.remainingHours)} jam`
+                    : `Sisa ${c.remainingHours} jam operasi, est. jatuh tempo ${
+                        c.estimatedDueDate
+                            ? new Date(c.estimatedDueDate).toLocaleDateString('id-ID')
+                            : 'segera'}`}
+            </div>`;
+        }).join('');
+    }
+
+    // ── MAIN LOAD ─────────────────────────────────────────────────────────────
+    async function loadComponentLife() {
+        const grid    = document.getElementById('compLifeGrid');
+        const loading = document.getElementById('compLifeLoading');
+        const empty   = document.getElementById('compLifeEmpty');
+        const tag     = document.getElementById('compLifeHoursTag');
+
+        if (!grid) return;
+
+        if (loading) loading.style.display = 'block';
+        grid.style.display = 'none';
+        if (empty) empty.style.display = 'none';
+
+        try {
+            // Gunakan filter waktu yang sama dengan panel lain jika ada
+            const deviceId = typeof getReportDeviceId === 'function' ? getReportDeviceId() : null;
+            const params = new URLSearchParams({ hours: 720 });
+            if (deviceId) params.set('deviceId', deviceId);
+
+            const res  = await fetch(`${COMP_LIFE_API}?${params}`);
+            const json = await res.json();
+
+            if (loading) loading.style.display = 'none';
+
+            if (!json.success || !json.data) {
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+
+            const data = json.data;
+
+            // Update jam operasi tag
+            if (tag) tag.textContent = `${(data.totalOperatingHours ?? 0).toFixed(1)} jam operasi`;
+
+            // Warning banner
+            renderWarningBanner(data.earlyWarnings ?? []);
+
+            const comps = Object.values(data.components ?? {});
+            if (!comps.length) {
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+
+            // Urutkan: overdue → due-now → due-soon → ok
+            const order = { overdue: 0, 'due-now': 1, 'due-soon': 2, ok: 3 };
+            comps.sort((a, b) => (order[a.urgency] ?? 4) - (order[b.urgency] ?? 4));
+
+            grid.innerHTML = comps.map(renderComponentCard).join('');
+            grid.style.display = 'grid';
+
+            // Pasang event listener tombol "Catat Servis"
+            grid.querySelectorAll('.comp-service-btn').forEach(btn => {
+                btn.addEventListener('click', async function () {
+                    const compName = decodeURIComponent(this.dataset.comp);
+                    if (!confirm(`Tandai "${compName}" sudah diservis? Jam servis akan direset ke sekarang.`)) return;
+
+                    this.disabled = true;
+                    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+                    try {
+                        const r = await fetch(COMP_SERVICE_API, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ componentName: compName, deviceId })
+                        });
+                        const j = await r.json();
+                        if (!j.success) throw new Error(j.error);
+                        this.innerHTML = '✅ Tersimpan';
+                        setTimeout(() => loadComponentLife(), 1500);
+                    } catch (err) {
+                        console.error('Service record error:', err);
+                        this.innerHTML = '❌ Gagal';
+                        this.disabled = false;
+                    }
+                });
+            });
+
+        } catch (err) {
+            console.error('Component life load error:', err);
+            if (loading) loading.style.display = 'none';
+            if (empty) {
+                empty.textContent = 'Gagal memuat data estimasi komponen.';
+                empty.style.display = 'block';
+            }
+        }
+    }
+
+    // Auto-load saat halaman siap
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadComponentLife);
+    } else {
+        loadComponentLife();
+    }
+
+    // Expose ke global
+    window.ComponentLifePanel = { reload: loadComponentLife };
+
+})();

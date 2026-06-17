@@ -40,6 +40,22 @@ async function fetchMaintenanceSuggestion() {
         const json = await res.json();
         const suggestion = json?.data?.suggestion || json?.suggestion;
         pendingSuggestion = suggestion && suggestion.status === 'pending' ? suggestion : null;
+
+        // Jika tidak ada suggestion biasa, cek apakah ada dari component-life worker
+        if (!pendingSuggestion) {
+            const clRes  = await fetch('/api/maintenance?filter=source:component-life&limit=1');
+            const clJson = await clRes.json().catch(() => null);
+            // Tampilkan jika ada saran dari component-life yang masih pending
+            const clSuggestion = clJson?.data?.find?.(t => t.source === 'component-life' && t.status === 'scheduled');
+            if (!clSuggestion) {
+                // Cek MaintenanceSuggestion collection langsung
+                const msRes  = await fetch('/api/maintenance/suggestion');
+                const msJson = await msRes.json().catch(() => null);
+                const ms = msJson?.data?.suggestion;
+                pendingSuggestion = ms && ms.status === 'pending' ? ms : null;
+            }
+        }
+
         renderSuggestionBanner();
     } catch (error) {
         console.error('Suggestion fetch error:', error);
