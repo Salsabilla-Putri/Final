@@ -1139,11 +1139,10 @@ String getClockWIBms() {
   char buf[20];
 
   if (getLocalTime(&timeinfo, 5)) {
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d:%03lu",
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d",
              timeinfo.tm_hour,
              timeinfo.tm_min,
-             timeinfo.tm_sec,
-             msPart);
+             timeinfo.tm_sec);
     return String(buf);
   }
 
@@ -1151,7 +1150,7 @@ String getClockWIBms() {
   unsigned int hh = (totalSeconds / 3600UL) % 24UL;
   unsigned int mm = (totalSeconds / 60UL) % 60UL;
   unsigned int ss = totalSeconds % 60UL;
-  snprintf(buf, sizeof(buf), "%02u:%02u:%02u:%03lu", hh, mm, ss, msPart);
+  snprintf(buf, sizeof(buf), "%02u:%02u:%02u", hh, mm, ss);
   return String(buf);
 }
 
@@ -4350,7 +4349,7 @@ void drawBootSplashStep(const char* statusText, int progress) {
 }
 
 void drawHeaderClock(bool force) {
-  static String lastClock = "";
+  static String lastClock = "WIB";
   String clockText = getClockWIBms();
 
   if (force || clockText != lastClock) {
@@ -4783,8 +4782,15 @@ void readTouchMapped(int &x, int &y, int &rawX, int &rawY) {
 
   // Mapping XPT2046 raw (0-4095) ke piksel layar 480x320 landscape.
   // Sesuaikan nilai min/max jika koordinat meleset setelah kalibrasi.
-  x = map(p.x, 200, 3900, 0, SW);
-  y = map(p.y, 200, 3900, 0, SH);
+  //
+  // PENTING: axis raw XPT2046 berlawanan arah dengan piksel TFT pada
+  // rotation(1) yang dipakai saat ini (terbukti dari hasil "calibrate nav":
+  // tombol GENERATOR yang ditekan di kiri-bawah malah mapped ke kanan-atas,
+  // dan ENGINE di kanan-bawah malah mapped ke kiri-atas). Karena itu output
+  // map() dibalik (SW->0 dan SH->0) agar mapped X/Y sesuai posisi sentuhan
+  // fisik di layar, dan navigasi pindah halaman GENERATOR/ENGINE benar.
+  x = map(p.x, 200, 3900, SW, 0);
+  y = map(p.y, 200, 3900, SH, 0);
 
   x = constrain(x, 0, SW);
   y = constrain(y, 0, SH);
@@ -5795,7 +5801,10 @@ void handleSerialCommandConsole() {
 // ============================================================
 void setup() {
   Serial.begin(115200);
-  delay(500);
+  // Settle time diperbesar (mendekati sdCard.ino yang terbukti SD selalu
+  // berhasil init) agar tegangan/power rail modul SD lebih stabil sebelum
+  // SD.begin() pertama kali dipanggil di initSDCard() di bawah.
+  delay(1500);
 
   Serial.println();
   Serial.println("BOOTING GENSYS ESP32-2 INDUSTRIAL HMI - SD STABLE ORDER");
@@ -5837,20 +5846,34 @@ void setup() {
 
   deselectAllSPI();
 
+  // ── SD CARD INIT PALING AWAL, SEBELUM TFT/SPI LAIN DISENTUH ──────────────
+  // Mengikuti urutan pada test sketch SD (sdCard.ino) yang terbukti selalu
+  // berhasil init: tidak ada transaksi SPI/TFT apapun sebelum SD.begin()
+  // dipanggil pertama kali. Pada board ini TFT dan SD berbagi jalur
+  // MOSI/MISO/SCK yang sama (hanya CS yang berbeda: TFT_CS=15, SD_CS=26),
+  // jadi kalau TFT sudah memakai bus itu duluan (misalnya untuk boot logo)
+  // sebelum SD diinisialisasi, negosiasi SD.begin() jadi tidak konsisten dan
+  // sering gagal di percobaan pertama. Dengan SD diinisialisasi duluan saat
+  // bus masih "bersih" (persis seperti sdCard.ino), init SD jauh lebih
+  // konsisten berhasil di awal boot.
+  Serial.println("[BOOT] Initializing Local SD Card Database...");
+  initSDCard();
+  Serial.println(sdOK ? "[BOOT] SD Card Mounted - Database Ready" : "[BOOT] SD Card Offline - Skipping Logging");
+
   LinkSerial.setRxBufferSize(LINK_SERIAL_RX_BUFFER_BYTES);
   LinkSerial.begin(LINK_BAUD, SERIAL_8N1, LINK_RX_PIN, LINK_TX_PIN);
   LinkSerial.setTimeout(20);
 
-  // TFT init dulu seperti versi yang terbukti bisa mount SD onboard TFT.
+  // TFT baru diinisialisasi SETELAH SD selesai, supaya proses init SD di atas
+  // tidak terganggu aktivitas SPI dari TFT (boot logo, dsb).
   tft.init();
   tft.setRotation(1);
-  tft.setSwapBytes(true);
+  // tft.setSwapBytes(true);
 
-  // Mount SD sebelum boot splash pertama agar /logo.png bisa langsung tampil
-  // dari kartu SD. Jika gagal, drawBootSplashStep() tetap memakai logo vektor.
+  // SD sudah selesai diproses di atas; dua baris splash di bawah ini hanya
+  // menampilkan status yang sudah diketahui (sdOK) ke layar, BUKAN memicu
+  // initSDCard() lagi.
   drawBootSplashStep("Initializing Local SD Card Database...", 10);
-  delay(100); 
-  initSDCard();
   drawBootSplashStep(sdOK ? "SD Card Mounted - Database Ready" : "SD Card Offline - Skipping Logging", 35);
 
   drawBootSplashStep("Initializing touch controller...", 25);

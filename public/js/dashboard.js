@@ -17,6 +17,7 @@ const formatDate = (d) => new Date(d).toLocaleDateString('id-ID', { timeZone: WI
 
 
 function readLastSensorSnapshot() {
+    if (typeof localStorage === 'undefined') return null;
     try {
         const parsed = JSON.parse(localStorage.getItem(LAST_SENSOR_STORAGE_KEY) || 'null');
         return parsed && typeof parsed === 'object' ? parsed : null;
@@ -24,6 +25,7 @@ function readLastSensorSnapshot() {
 }
 
 function saveLastSensorSnapshot(data) {
+    if (typeof localStorage === 'undefined') return;
     if (!data || typeof data !== 'object') return;
     try { localStorage.setItem(LAST_SENSOR_STORAGE_KEY, JSON.stringify(data)); } catch (_) { /* ignore quota */ }
 }
@@ -151,43 +153,59 @@ function formatEstimatedRuntime(fuelPct) {
 
 function renderSensorSnapshot(data = {}, { live = false } = {}) {
     const snapshot = data && typeof data === 'object' ? data : {};
+    const disconnected = snapshot.ecuConnected === false;
+
+    // Saat ECU disconnect, nilai sensor yang valid dari snapshot (data live terakhir)
+    // tetap ditampilkan — hanya render ulang jika nilainya benar-benar ada (> 0 atau finite).
+    // Ini mencegah glitch ke 0 ketika server mengirim payload disconnected dengan nilai kosong.
+    const rawRpm  = numberOrZero(snapshot.rpm);
+    const rawFuel = Math.round(numberOrZero(snapshot.fuel));
+
     const displayVolt = getDisplayVolt(snapshot);
     const displayFreq = getDisplayFreq(snapshot);
 
-    setVal('val-rpm', `${Math.round(numberOrZero(snapshot.rpm))} RPM`);
-    setVal('val-volt', `${displayVolt.toFixed(1)} V`);
+    // RPM
+    const rpmEl = document.getElementById('val-rpm');
+    if (rpmEl) rpmEl.innerText = `${Math.round(rawRpm)} RPM`;
+
+    // Voltage overview
+    const voltEl = document.getElementById('val-volt');
+    if (voltEl) voltEl.innerText = `${Math.round(displayVolt)} V`;
 
     updatePowerSourceIndicator('engSync', snapshot);
     updatePowerSourceStatus(snapshot);
 
+    // Engine state badge
     const stateEl = document.getElementById('engStat');
     if (stateEl) {
-        if (snapshot.ecuConnected === true) {
-            stateEl.innerText = 'ECU Connected';
-            stateEl.className = 'st-ok';
-        } else {
+        if (disconnected) {
             stateEl.innerText = 'ECU Disconnected';
             stateEl.className = 'st-err';
+        } else {
+            stateEl.innerText = 'ECU Connected';
+            stateEl.className = 'st-ok';
         }
     }
 
-    const fuel = Math.round(numberOrZero(snapshot.fuel));
+    // Fuel Level
     const fuelEl = document.getElementById('fuelLevel');
     if (fuelEl) {
-        fuelEl.innerText = `${fuel}%`;
-        fuelEl.className = fuel < 20 ? 'st-err' : fuel < 30 ? 'st-warn' : 'st-ok';
+        fuelEl.innerText = `${rawFuel}%`;
+        fuelEl.className = rawFuel < 20 ? 'st-err' : rawFuel < 30 ? 'st-warn' : 'st-ok';
     }
 
+    // Estimated Runtime
     const runtimeEl = document.getElementById('estRuntime');
     if (runtimeEl) {
-        runtimeEl.innerText = formatEstimatedRuntime(fuel);
-        runtimeEl.className = fuel >= 25 ? 'st-ok' : fuel >= 12 ? 'st-warn' : 'st-err';
+        runtimeEl.innerText = formatEstimatedRuntime(rawFuel);
+        runtimeEl.className = rawFuel >= 25 ? 'st-ok' : rawFuel >= 12 ? 'st-warn' : 'st-err';
     }
 
+    // System Health — tampilkan nilai terakhir meski disconnect, tidak reset ke "No data"
     checkLimit('st-volt', displayVolt,                200, 240);
     checkLimit('st-amp',  numberOrZero(snapshot.amp),  0,   100);
     checkLimit('st-freq', displayFreq,                48,  52);
-    checkLimit('st-fuel', fuel,                        20,  100);
+    checkLimit('st-fuel', rawFuel,                     20,  100);
     checkLimit('st-map',  numberOrZero(snapshot.map),  20,  250);
     checkLimit('st-afr',  numberOrZero(snapshot.afr),  10,  18);
 }
@@ -307,10 +325,13 @@ async function updateSensorData() {
 // Tandai ke server bahwa ESP32 terputus sehingga sesi aktif ditutup
 let _disconnectReported = false;
 async function _handleDisconnect(fallbackData = null) {
-    const snapshot = fallbackData || _lastDisplayData || readLastSensorSnapshot();
-    if (snapshot) {
-        renderSensorSnapshot({ ...snapshot, ecuConnected: false, powerSource: 'OFF' }, { live: false });
-        setDataStatus({ live: false, timestamp: getLastDataTimestamp(snapshot) });
+    // Selalu gunakan data live terakhir yang valid untuk nilai sensor (rpm, volt, fuel, dll.)
+    // agar tidak glitch ke 0 saat ECU disconnect. fallbackData dari server bisa mengandung
+    // nilai nol karena ECU sudah tidak mengirim data — jadi dipakai hanya sebagai last resort.
+    const sensorSnapshot = _lastDisplayData || readLastSensorSnapshot() || fallbackData;
+    if (sensorSnapshot) {
+        renderSensorSnapshot({ ...sensorSnapshot, ecuConnected: false, powerSource: 'OFF' }, { live: false });
+        setDataStatus({ live: false, timestamp: getLastDataTimestamp(sensorSnapshot) });
     } else {
         setDataStatus({ live: false });
     }
@@ -634,7 +655,10 @@ function _splitSessionByDay(start, end, wibOffset) {
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+// Guard: file ini hanya berjalan di browser. Jika di-require() oleh Node.js
+// (misal karena bundler atau server side), semua DOM/browser API dilewati
+// agar tidak melempar ReferenceError: document is not defined.
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
     const renderClock = () => {
         const el = document.getElementById('clock');
         if (el) el.innerText = new Date().toLocaleTimeString('id-ID', { timeZone: WIB_TIME_ZONE, hour:'2-digit', minute:'2-digit' }) + ' WIB';

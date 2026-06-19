@@ -1417,7 +1417,7 @@ function printMongoReliabilityReport() {
     console.log(`MongoDB sent records     : ${sent} records`);
     console.log(`MongoDB failed batch     : ${mqttIngestStats.failedBatches || 0} batches`);
     console.log(`Last MQTT state          : ${mqttState}`);
-    console.log(`MongoDB success rate     : ${successRate}% (${total - failed}/${total} batches)`);
+    console.log(`MongoDB success rate     : ${(mqttIngestStats.savedMessages / sent * 100).toFixed(2)}%`);
     console.log(`MongoDB record size (est): ~${recordSizeEst} Bytes / record`);
     console.log(`MongoDB avg sent record  : ${avgBatch} records / batch`);
     console.log(`MongoDB records rate     : ${rateSec.toFixed(2)} records / second`);
