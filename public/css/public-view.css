@@ -721,13 +721,7 @@ body {
     overflow: hidden;
 }
 
-.help-contact-card::before {
-    content: '';
-    position: absolute;
-    inset: 0 0 auto 0;
-    height: 4px;
-    background: linear-gradient(90deg, var(--primary), var(--secondary), var(--warning));
-}
+
 
 .help-contact-body {
     padding-top: 14px;
